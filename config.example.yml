@@ -1,0 +1,20 @@
+# Example conclave config. Copy to ~/.conclave/config.yml and edit.
+# This file references providers by NAME only and contains NO API keys.
+# Keys always come from environment variables (see README).
+
+# Friendly name -> LiteLLM model id. Overrides/extends the built-in defaults.
+models:
+  grok: xai/grok-4.3
+  gemini: gemini/gemini-2.5-pro
+  claude: anthropic/claude-sonnet-4-6
+  perplexity: perplexity/sonar-pro
+  openai: openai/gpt-4.1
+
+# Named councils you can pass to `--council <name>`.
+councils:
+  default: [grok, gemini, claude, perplexity]
+  fast: [grok, perplexity]
+  frontier: [claude, gemini, openai]
+
+# Default synthesizer (friendly name). Overridable with `--synthesizer`.
+synthesizer: claude
