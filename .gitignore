@@ -1,0 +1,26 @@
+# Secrets — never commit
+.env
+.env.*
+*.key
+**/config.local.yml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
