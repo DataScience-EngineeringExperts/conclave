@@ -1,6 +1,6 @@
 """Tests for the Council fan-out, partial-failure, skip, and synthesis paths.
 
-All tests run offline via the ``patch_acompletion`` fixture; no real keys are
+All tests run offline via the ``patch_call_model`` fixture; no real keys are
 required. Provider env vars are set/cleared explicitly per test.
 """
 
@@ -41,7 +41,7 @@ def _config() -> ConclaveConfig:
     )
 
 
-async def test_fan_out_collects_all_members(monkeypatch, patch_acompletion):
+async def test_fan_out_collects_all_members(monkeypatch, patch_call_model):
     """All members run concurrently and each raw answer is captured."""
     _all_keys(monkeypatch)
 
@@ -51,7 +51,7 @@ async def test_fan_out_collects_all_members(monkeypatch, patch_acompletion):
             return make_response("MERGED")
         return make_response(f"answer from {model}")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(
         models=["grok", "gemini", "perplexity"],
@@ -68,24 +68,21 @@ async def test_fan_out_collects_all_members(monkeypatch, patch_acompletion):
     assert result.synthesizer == "claude"
 
 
-async def test_concurrency_is_real(monkeypatch, patch_acompletion):
+async def test_concurrency_is_real(monkeypatch):
     """Members run concurrently: total time ~= slowest call, not the sum."""
     _all_keys(monkeypatch)
 
-    async def slow_handler_wrapper():
-        pass
+    from conclave.models import ModelAnswer
+    import conclave.council as council_mod
 
-    def handler(model, messages, **kwargs):
-        return make_response(f"ok {model}")
-
-    # Replace acompletion with one that sleeps, to prove gather concurrency.
-    import litellm
-
-    async def sleepy_acompletion(*, model, messages, **kwargs):
+    # Replace call_model with a coroutine that sleeps, to prove gather concurrency.
+    async def sleepy_call_model(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0
+    ):
         await asyncio.sleep(0.2)
-        return handler(model, messages, **kwargs)
+        return ModelAnswer(name=name, model_id=model_id, answer=f"ok {model_id}")
 
-    monkeypatch.setattr(litellm, "acompletion", sleepy_acompletion)
+    monkeypatch.setattr(council_mod, "call_model", sleepy_call_model)
 
     council = Council(
         models=["grok", "gemini", "perplexity"], config=_config()
@@ -99,7 +96,7 @@ async def test_concurrency_is_real(monkeypatch, patch_acompletion):
     assert elapsed < 0.45, f"expected concurrent execution, took {elapsed:.2f}s"
 
 
-async def test_partial_failure_one_provider_raises(monkeypatch, patch_acompletion):
+async def test_partial_failure_one_provider_raises(monkeypatch, patch_call_model):
     """One member raising does not kill the run; others still return."""
     _all_keys(monkeypatch)
 
@@ -110,7 +107,7 @@ async def test_partial_failure_one_provider_raises(monkeypatch, patch_acompletio
             return make_response("MERGED FROM SURVIVORS")
         return make_response(f"answer from {model}")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(
         models=["grok", "gemini", "perplexity"],
@@ -129,7 +126,7 @@ async def test_partial_failure_one_provider_raises(monkeypatch, patch_acompletio
     assert result.synthesis == "MERGED FROM SURVIVORS"
 
 
-async def test_missing_key_is_skipped(monkeypatch, patch_acompletion, clear_keys):
+async def test_missing_key_is_skipped(monkeypatch, patch_call_model, clear_keys):
     """Members without a key are skipped with a warning, run proceeds."""
     # Only grok + perplexity have keys.
     monkeypatch.setenv("XAI_API_KEY", "dummy")
@@ -140,7 +137,7 @@ async def test_missing_key_is_skipped(monkeypatch, patch_acompletion, clear_keys
             return make_response("MERGED")  # perplexity as synthesizer here
         return make_response(f"answer from {model}")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(
         models=["grok", "gemini", "claude", "perplexity"],
@@ -154,14 +151,14 @@ async def test_missing_key_is_skipped(monkeypatch, patch_acompletion, clear_keys
     assert result.synthesis == "MERGED"
 
 
-async def test_synthesizer_without_key_returns_raw(monkeypatch, patch_acompletion, clear_keys):
+async def test_synthesizer_without_key_returns_raw(monkeypatch, patch_call_model, clear_keys):
     """If the synthesizer's key is absent, raw answers return with an error note."""
     monkeypatch.setenv("XAI_API_KEY", "dummy")  # only grok has a key
 
     def handler(model, messages, **kwargs):
         return make_response(f"answer from {model}")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(
         models=["grok"], synthesizer="claude", config=_config()
@@ -174,12 +171,12 @@ async def test_synthesizer_without_key_returns_raw(monkeypatch, patch_acompletio
     assert "no API key" in result.synthesis_error
 
 
-async def test_no_members_available(monkeypatch, patch_acompletion, clear_keys):
+async def test_no_members_available(monkeypatch, patch_call_model, clear_keys):
     """Zero available members yields an empty result, not an exception."""
     def handler(model, messages, **kwargs):  # pragma: no cover - never called
         return make_response("unused")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(models=["grok", "claude"], config=_config())
     result = await council.ask("q")
@@ -189,14 +186,14 @@ async def test_no_members_available(monkeypatch, patch_acompletion, clear_keys):
     assert result.synthesis is None
 
 
-async def test_synthesis_over_no_survivors(monkeypatch, patch_acompletion):
+async def test_synthesis_over_no_survivors(monkeypatch, patch_call_model):
     """When every member fails, synthesis reports it has nothing to merge."""
     _all_keys(monkeypatch)
 
     def handler(model, messages, **kwargs):
         raise RuntimeError("everything is down")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(
         models=["grok", "gemini"], synthesizer="claude", config=_config()
@@ -208,7 +205,7 @@ async def test_synthesis_over_no_survivors(monkeypatch, patch_acompletion):
     assert "no successful member answers" in result.synthesis_error
 
 
-def test_ask_sync_wrapper(monkeypatch, patch_acompletion):
+def test_ask_sync_wrapper(monkeypatch, patch_call_model):
     """The sync entry point works from non-async code."""
     monkeypatch.setenv("XAI_API_KEY", "dummy")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
@@ -218,7 +215,7 @@ def test_ask_sync_wrapper(monkeypatch, patch_acompletion):
             return make_response("SYNC MERGE")
         return make_response(f"answer from {model}")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(models=["grok"], synthesizer="claude", config=_config())
     result = council.ask_sync("hello")

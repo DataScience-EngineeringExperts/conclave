@@ -1,8 +1,19 @@
-"""Shared pytest fixtures and a LiteLLM mock harness.
+"""Shared pytest fixtures and the offline call-model mock harness.
 
-The whole suite runs offline: ``litellm.acompletion`` is patched so no real
-network or API keys are needed. A small fake response object mimics the parts of
-the LiteLLM response that conclave reads (choices/message/content + usage).
+The whole suite runs offline. Since conclave now owns its provider highway (no
+LiteLLM), the single choke point is :func:`conclave.providers.call_model`, which
+``conclave.council`` imports as ``call_model``. The ``patch_call_model`` fixture
+replaces the name that ``Council.fan_out`` resolves -- ``conclave.council.call_model``
+-- with a fake that runs a user-supplied handler and wraps its result in a real
+:class:`conclave.models.ModelAnswer`.
+
+A handler has signature ``(model_id, messages) -> _FakeResult`` (via
+:func:`make_response`) or it may ``raise`` to simulate a provider failure; the
+fixture turns a raise into a ``ModelAnswer.error`` exactly as the real call path
+does, and a sleep inside the handler genuinely exercises gather concurrency.
+
+Transport-level tests (in ``test_providers.py``) instead patch
+``conclave.transport.post_json`` to exercise the real ``call_model`` end to end.
 """
 
 from __future__ import annotations
@@ -13,60 +24,64 @@ from typing import Callable
 
 import pytest
 
-
-@dataclass
-class _FakeUsage:
-    prompt_tokens: int = 5
-    completion_tokens: int = 7
-    total_tokens: int = 12
+from conclave.models import ModelAnswer, TokenUsage
 
 
 @dataclass
-class _FakeMessage:
-    content: str
+class _FakeResult:
+    """What a test handler returns: the text and its token usage."""
+
+    text: str
+    usage: TokenUsage
 
 
-@dataclass
-class _FakeChoice:
-    message: _FakeMessage
-
-
-@dataclass
-class _FakeResponse:
-    choices: list[_FakeChoice]
-    usage: _FakeUsage
-
-
-def make_response(text: str) -> _FakeResponse:
-    """Build a fake LiteLLM-shaped response carrying ``text``."""
-    return _FakeResponse(
-        choices=[_FakeChoice(message=_FakeMessage(content=text))],
-        usage=_FakeUsage(),
+def make_response(text: str) -> _FakeResult:
+    """Build a fake successful result carrying ``text`` and stock token usage."""
+    return _FakeResult(
+        text=text,
+        usage=TokenUsage(prompt_tokens=5, completion_tokens=7, total_tokens=12),
     )
 
 
 @pytest.fixture
-def patch_acompletion(monkeypatch) -> Callable:
-    """Return an installer that patches ``litellm.acompletion`` with a handler.
+def patch_call_model(monkeypatch) -> Callable:
+    """Return an installer that patches ``conclave.council.call_model``.
 
     Usage::
 
-        def handler(model, messages, **kwargs):
+        def handler(model_id, messages, **kwargs):
             return make_response("hi")  # or raise to simulate failure
-        patch_acompletion(handler)
+        patch_call_model(handler)
 
-    The handler may be sync (returning a response or raising); the patch wraps it
-    in a coroutine so ``await litellm.acompletion(...)`` works.
+    The handler is sync (returns a ``_FakeResult`` or raises). The patch wraps it
+    so ``await call_model(...)`` works, builds a real ``ModelAnswer`` carrying the
+    correct ``name``/``model_id``, and converts a raise into ``ModelAnswer.error``
+    -- mirroring the production contract.
     """
-    import litellm
+    import conclave.council as council_mod
 
     def install(handler: Callable):
-        async def fake_acompletion(*, model, messages, **kwargs):
-            # Allow a tiny await so concurrency is genuinely exercised.
+        async def fake_call_model(
+            name, model_id, messages, *, temperature=0.7, timeout=120.0
+        ):
+            # A tiny await so concurrency is genuinely exercised by gather.
             await asyncio.sleep(0)
-            return handler(model, messages, **kwargs)
+            try:
+                result = handler(model_id, messages)
+            except Exception as exc:  # noqa: BLE001 -- mirror call_model's contract
+                return ModelAnswer(
+                    name=name,
+                    model_id=model_id,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            return ModelAnswer(
+                name=name,
+                model_id=model_id,
+                answer=result.text,
+                usage=result.usage,
+            )
 
-        monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+        monkeypatch.setattr(council_mod, "call_model", fake_call_model)
 
     return install
 

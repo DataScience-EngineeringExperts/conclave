@@ -1,6 +1,8 @@
 # conclave — Product Design Document
 
-> **Status:** v0.1.0 shipped; v0.2 (`debate` + `adversarial` modes) built. This is the **canonical authority document** for
+> **Status:** v0.1.0 shipped; v0.2 (`debate` + `adversarial` modes) built; v0.3 dependency
+> refactor landed — **LiteLLM removed**, replaced by conclave's own httpx-based provider
+> highway (see §6). This is the **canonical authority document** for
 > conclave's product scope, design, and roadmap. When this document and any other doc
 > disagree, this document wins. Code is the source of truth for *current behavior*; this
 > document marks anything not yet in code as **Roadmap**.
@@ -8,7 +10,7 @@
 - **Repo:** `/Users/ernestprovo/dev/conclave/`
 - **License:** MIT
 - **Author:** Data Science & Engineering Experts, Inc. (DSE)
-- **Last updated:** 2026-06-06
+- **Last updated:** 2026-06-07
 
 ---
 
@@ -68,16 +70,22 @@ markup, no middleman) and a security property.
 **Key-handling invariants (enforced in code today):**
 
 1. **Keys are referenced by env-var NAME only, never by value.** The provider registry
-   (`registry.py`) maps each LiteLLM provider prefix to the env var(s) that satisfy it
+   (`registry.py`) maps each provider prefix to the env var(s) that satisfy it
    (e.g. `xai → ["XAI_API_KEY"]`, `gemini → ["GEMINI_API_KEY", "GOOGLE_API_KEY"]`). The
    functions `key_present()` and `key_source()` answer *"is a key set?"* and *"which
    variable name holds it?"* — they **never read, return, or log the value.**
 2. **conclave never stores keys.** Config (`~/.conclave/config.yml`) references providers
    by friendly name and model id only. There is no field in `ConclaveConfig` that can hold
    a secret. The example config in `config.py` is keys-free by construction.
-3. **LiteLLM resolves the actual key from the environment at call time** (`providers.py`).
-   conclave hands LiteLLM a model id and messages; LiteLLM reads the relevant env var
-   itself. The key value never transits a conclave data structure.
+3. **The key value is read by name, at call time, and is transient in-process**
+   (`providers.py`). `call_model` reads the relevant env var *by name* at call time, passes
+   the value to the resolved adapter to build the auth header, and the httpx transport sends
+   it. The value is **never stored on any object** (not config, not the registry, not
+   `ModelAnswer`, not `CouncilResult`), **never logged, never serialized, and scrubbed from
+   error strings** via `redact()` (`adapters/base.py`). It never transits a conclave data
+   structure. (Honest framing: the value *is* read in-process to authenticate — conclave
+   does not magically avoid touching it — but its lifetime is a single request and it leaves
+   no trace on any persisted or returned object.)
 4. **Secrets never reach serialized output.** `CouncilResult.model_dump()` (used by
    `--json`) contains prompts, answers, model ids, latency, token usage, and error strings
    — no key material. The `providers` CLI command shows a check/cross and the env-var
@@ -88,10 +96,12 @@ markup, no middleman) and a security property.
    attempted and any auth error is captured as a `ModelAnswer.error`.
 
 **Residual considerations (worth a user's awareness):** error strings captured from a
-provider are surfaced verbatim. In the unlikely event a provider SDK echoes a key fragment
-into an exception message, that string would appear in `ModelAnswer.error`. We consider
-this low risk (LiteLLM/provider SDKs do not echo full keys) but it is the one path where
-provider-originated text is passed through unfiltered. Tracked as a hardening item in §9.
+provider could in principle echo a key fragment. As of the v0.3 refactor this path is
+**hardened**: every provider/transport error is passed through `redact()` (`adapters/base.py`)
+before it lands in `ModelAnswer.error`, scrubbing known key material from the string. The
+residual risk is now limited to a provider emitting a secret in a shape `redact()` does not
+recognize; the verbatim-passthrough gap that previously existed is closed. (Was §9 hardening
+item 7 — now landed; see §9.)
 
 ---
 
@@ -109,7 +119,7 @@ useful output. v0.1 ships one true mode plus a pass-through.
 | **vote** | **ROADMAP (v0.3+)** | Structured majority. Each model answers a constrained question; conclave tallies a structured vote and reports the majority plus the split. |
 
 ### Synthesize algorithm (as built)
-1. Resolve requested friendly names to LiteLLM model ids via config.
+1. Resolve requested friendly names to model ids via config.
 2. Partition members into *available* (key present) and *skipped* (no key).
 3. Fan out the prompt to all available members concurrently (`asyncio.gather`,
    `return_exceptions=True` as a belt-and-suspenders guard).
@@ -164,7 +174,7 @@ The deliberation modes extend `CouncilResult` **without breaking** synthesize/ra
 
 ## 5. Provider Support Matrix
 
-Friendly names, default LiteLLM model ids, and the env var(s) that satisfy each. Defaults
+Friendly names, default model ids, and the env var(s) that satisfy each. Defaults
 live in `registry.DEFAULT_MODELS` / `registry.PROVIDER_ENV_VARS` and are overridable via
 `~/.conclave/config.yml`.
 
@@ -175,12 +185,16 @@ live in `registry.DEFAULT_MODELS` / `registry.PROVIDER_ENV_VARS` and are overrid
 | Anthropic | `claude` | `anthropic/claude-sonnet-4-6` | `ANTHROPIC_API_KEY` | BUILT |
 | Perplexity | `perplexity` | `perplexity/sonar-pro` | `PERPLEXITY_API_KEY` | BUILT |
 | OpenAI | `openai` | `openai/gpt-4.1` | `OPENAI_API_KEY` | BUILT |
-| *(any LiteLLM-supported provider)* | *raw id as name* | *passed through verbatim* | *LiteLLM's own env handling* | SUPPORTED (untyped) |
+| *(any provider known to an adapter)* | *raw id as name* | *passed through verbatim* | *adapter's provider env var* | SUPPORTED (untyped) |
+| *(any OpenAI-compatible endpoint)* | *config `endpoints:` entry* | *your model id* | *the endpoint's `api_key_env`* | SUPPORTED (config-only) |
 
 **Default synthesizer:** `claude`. **Default council** (when none is configured): all five
 known providers. Because `resolve_model_id()` passes unknown names through verbatim, a user
-can already add a council member by raw LiteLLM id (e.g. `openai/gpt-4o`) without a code
-change; it just won't have a static key-presence check (treated as "attempt and catch").
+can already add a council member by raw id whose prefix an adapter recognizes (e.g.
+`openai/gpt-4o`) without a code change; it just won't have a static key-presence check
+(treated as "attempt and catch"). A wholly new OpenAI-compatible vendor needs no code at all
+— a `config.yml` `endpoints:` entry (base URL + `api_key_env`) makes it a first-class member
+via `OpenAICompatAdapter` (see §6).
 
 Expanding the *first-class* provider list (more friendly-name defaults) is Roadmap, §9.
 
@@ -188,8 +202,10 @@ Expanding the *first-class* provider list (more friendly-name defaults) is Roadm
 
 ## 6. Architecture
 
-conclave is a thin, layered orchestrator over LiteLLM. Each module has one job; the data
-models are the stable contract between layers and downstream consumers.
+conclave is a thin, layered orchestrator over its **own provider highway** — an httpx
+transport behind a per-provider adapter registry, with **no LLM-SDK dependency**. Each
+module has one job; the data models are the stable contract between layers and downstream
+consumers.
 
 ```
 CLI (cli.py, typer+rich)   Library (from conclave import Council)
@@ -201,11 +217,17 @@ CLI (cli.py, typer+rich)   Library (from conclave import Council)
    modes.py (debate · adversarial)      prompts.py (role templates)
                  |
               call_model (providers.py)
-        one async path · latency · token usage · error capture
+   resolve adapter · read key by name at call time · latency · usage · redacted error
                           |
-                  LiteLLM acompletion
+              resolve_adapter (adapters/__init__.py)
+        OpenAICompatAdapter   AnthropicAdapter   GeminiAdapter
+         (openai·xai·         (/v1/messages)     (generateContent)
+          perplexity·custom)         |                |
+                          \          |               /
+                           v         v              v
+                        transport.post_json (single httpx async boundary)
                           |
-        xai · gemini · anthropic · perplexity · openai · (any LiteLLM provider)
+        xai · gemini · anthropic · perplexity · openai · (custom OpenAI-compatible)
 ```
 
 **Module responsibilities (ground truth):**
@@ -215,9 +237,15 @@ CLI (cli.py, typer+rich)   Library (from conclave import Council)
 | `council.py` | `Council` — primary importable entry point. Resolves names, partitions members, and exposes two reusable primitives: `fan_out` (the single concurrent + partial-failure call loop) and `synthesize_blocks` (the single synthesizer/judge call path). Hosts the public mode API: `ask`/`ask_sync` (synthesize/raw), `debate`/`debate_sync`, `adversarial`/`adversarial_sync`. Sync wrappers guard against being called inside a running event loop. |
 | `modes.py` | Deliberation orchestration: `run_debate` (multi-round, anonymized peers, drop-out) and `run_adversarial` (propose → refute → verdict). Built entirely on `Council.fan_out` + `synthesize_blocks` — no duplicated concurrency or synthesizer code. |
 | `prompts.py` | Role/template strings for debate and adversarial (member, critic, judge, debate-final system prompts) and the anonymized peer-block builder. Separates *what each role is told* from *when to call whom*. |
-| `providers.py` | `call_model` — the single async call path over `litellm.acompletion`. Captures latency, token usage, and any error into a `ModelAnswer`; never raises for provider-side failures. Sets `litellm.drop_params = True` and `litellm.telemetry = False`. |
+| `providers.py` | `call_model` — the single async call path. Resolves the adapter for a model id, reads the key value *by name at call time*, calls the adapter+transport, parses the reply, and captures latency, token usage, and any (redacted) error into a `ModelAnswer`; never raises for provider-side failures. Signature and never-raises contract unchanged from v0.1/v0.2. |
+| `transport.py` | The single async network boundary: `post_json` — one httpx call site for the whole highway. Nothing else in conclave touches the network. |
+| `adapters/__init__.py` | `resolve_adapter(model_id, config)` — the provider registry and **extension seam**. Maps a model-id prefix (or a config `endpoints:` entry) to the adapter that serves it. Adding a provider family = one registration here; adding an OpenAI-compatible endpoint = config-only. |
+| `adapters/base.py` | The `ProviderAdapter` protocol, `ProviderError`, and `redact()` — the secret-scrubber applied to every error string before it reaches `ModelAnswer.error`. |
+| `adapters/openai_compat.py` | `OpenAICompatAdapter` — serves openai / xai / perplexity and any custom OpenAI-compatible endpoint. Per-provider full completions URL (note: Perplexity has no `/v1` segment). |
+| `adapters/anthropic.py` | `AnthropicAdapter` — native `POST /v1/messages` (`x-api-key` + `anthropic-version`); system prompt hoisted to the top-level `system` field; `max_tokens` required (default 4096); parses `content[].text` and `input_tokens`/`output_tokens`. |
+| `adapters/gemini.py` | `GeminiAdapter` — native `generateContent` (`x-goog-api-key`); OpenAI roles mapped (assistant→model), `systemInstruction` hoisted, `generationConfig.{temperature,maxOutputTokens}`; parses `usageMetadata`. |
 | `registry.py` | Single source of truth for friendly-name → model-id defaults and provider → env-var mapping. Key *presence* logic only — never key values. |
-| `config.py` | Loads/merges `~/.conclave/config.yml` over built-in defaults (`CONCLAVE_CONFIG` env var overrides path). Resolves model ids and named/CSV councils. Keys-free by construction. |
+| `config.py` | Loads/merges `~/.conclave/config.yml` over built-in defaults (`CONCLAVE_CONFIG` env var overrides path). Resolves model ids and named/CSV councils, and parses the `endpoints:` section (custom OpenAI-compatible providers). Keys-free by construction (endpoints carry a URL + key-env-var *name*, never a value). |
 | `models.py` | Pydantic contract: `TokenUsage`, `ModelAnswer`, `CouncilResult` (+ `successful_answers`/`failed_answers`/`ok` helpers). The stable importable surface for downstream consumers. |
 | `cli.py` | `conclave ask` and `conclave providers`. Rich panels for humans, `--json` for machines. Never prints key values. |
 | `logging.py` | One logger factory, stderr, verbosity via `CONCLAVE_LOG_LEVEL` (default `WARNING`). |
@@ -231,9 +259,24 @@ CLI (cli.py, typer+rich)   Library (from conclave import Council)
 - **Stable contract.** `models.py` field names are intentionally stable for downstream
   consumers (e.g. mcp-warden) to depend on.
 
-**Stack:** Python 3.11+, LiteLLM (provider abstraction), `asyncio` (concurrency),
-Pydantic v2 (config + results), Typer + Rich (CLI), PyYAML (config). Packaged with
-hatchling; console script `conclave = conclave.cli:app`.
+**Provider highway & extension model (v0.3):** conclave owns its provider layer instead of
+depending on an LLM SDK. `resolve_adapter` (`adapters/__init__.py`) maps each model id to a
+`ProviderAdapter`; every adapter serializes its provider's request shape and hands it to the
+**one** network call site, `transport.post_json` (`transport.py`). Three adapters cover the
+five first-class providers: `OpenAICompatAdapter` (openai/xai/perplexity, OpenAI-style
+`/chat/completions`), `AnthropicAdapter` (native `/v1/messages`, system-prompt hoist,
+required `max_tokens`), and `GeminiAdapter` (native `generateContent`, role mapping,
+`usageMetadata`). Extension is deliberately cheap: a **new provider family** is one
+registration in `adapters/__init__.py`; a **new OpenAI-compatible endpoint** (local server,
+gateway, another vendor) is **config-only** — a `~/.conclave/config.yml` `endpoints:` entry
+giving a base URL and the env-var *name* of its key, served by `OpenAICompatAdapter` with no
+code change. The key value is read by name at call time, passed to the adapter to build the
+auth header, and never stored, logged, or serialized (see §3); error strings are scrubbed by
+`redact()` (`adapters/base.py`).
+
+**Stack:** Python 3.11+, `httpx` (async transport — the only network dependency), `asyncio`
+(concurrency), Pydantic v2 (config + results), Typer + Rich (CLI), PyYAML (config). **No
+LLM-SDK dependency.** Packaged with hatchling; console script `conclave = conclave.cli:app`.
 
 ---
 
@@ -241,14 +284,14 @@ hatchling; console script `conclave = conclave.cli:app`.
 
 **Shipped in v0.1:**
 - `synthesize` and `raw` modes (fan-out, partial results, synthesizer merge).
-- 5 first-class providers + pass-through for any LiteLLM model id.
+- 5 first-class providers + pass-through for any model id an adapter recognizes.
 - BYO-keys via env-var name only; graceful skip of missing-key members.
 - Concurrent fan-out with per-call timeout and temperature.
 - Structured `CouncilResult` with latency, token usage, per-model error capture.
 - CLI (`ask`, `providers`) with human and `--json` output.
 - Config file: named models, named councils, default synthesizer.
 - Importable library API with sync and async entry points.
-- Test suite that mocks LiteLLM (no network, no keys required).
+- Test suite that mocks the httpx transport (no network, no keys required).
 
 **Added in v0.2:**
 - `debate` mode — multi-round (`--rounds`), anonymized peers, per-member drop-out on
@@ -259,6 +302,20 @@ hatchling; console script `conclave = conclave.cli:app`.
   `answers`/`synthesis` consumers unaffected.
 - Both modes exposed on the `Council` library API (async + sync) and the CLI, with rich
   per-round / proposal-critique-verdict rendering and `--json`.
+
+**Added in v0.3 (dependency refactor):**
+- **LiteLLM removed.** Replaced by conclave's own provider highway: an `httpx` async
+  transport (`transport.py`) behind a per-provider adapter registry (`adapters/`). `httpx`
+  is now the only network dependency; there is no LLM-SDK dependency (see §6).
+- Three adapters cover the five first-class providers (`OpenAICompatAdapter` for
+  openai/xai/perplexity, native `AnthropicAdapter`, native `GeminiAdapter`); `resolve_adapter`
+  is the extension seam.
+- **Custom OpenAI-compatible endpoints** via a config `endpoints:` section — config-only, no
+  code change.
+- **Key-leak hardening landed:** provider/transport error strings are scrubbed by `redact()`
+  before reaching `ModelAnswer.error` (was Roadmap §9 item 7).
+- `call_model`'s signature and never-raises contract are unchanged; the result contract
+  (`CouncilResult`/`ModelAnswer`) is unchanged, so existing consumers are unaffected.
 
 ---
 
@@ -291,17 +348,22 @@ Ordered roughly by strategic value to the origin use case and to mcp-warden.
 2. **Debate convergence/stop criteria** — today debate runs a fixed `--rounds`; add optional
    early-stop when answers converge (and a configurable convergence signal).
 3. **More first-class providers** — additional friendly-name defaults (e.g. more OpenAI,
-   Anthropic, Google, and open-weights endpoints LiteLLM already supports).
+   Anthropic, Google, and open-weights endpoints). New OpenAI-compatible vendors are already
+   config-only via `endpoints:`; this item is about promoting common ones to typed defaults
+   (and adding native adapters where a provider isn't OpenAI-compatible).
 4. **Caching** — optional result cache keyed on (prompt, council, mode, model ids) to make
    repeated/eval runs cheap. Must remain off by default and never persist keys.
 5. **Streaming** — stream member answers and/or the synthesis to the terminal/library.
 6. **Local HTTP/server mode (under evaluation)** — a *local* server for convenience only;
    must not become a hosted token path or violate the no-middleman non-goal.
-7. **Key-leak hardening** — scrub/limit provider-originated error strings before they land
-   in `ModelAnswer.error` (residual risk noted in §3).
+7. ~~**Key-leak hardening** — scrub/limit provider-originated error strings before they land
+   in `ModelAnswer.error`.~~ **LANDED in v0.3** via `redact()` (`adapters/base.py`), applied
+   to every provider/transport error before it reaches `ModelAnswer.error` (see §3). Kept in
+   the list, struck through, to preserve roadmap traceability rather than deleting it.
 
 **Roadmap discipline:** items are added and reprioritized freely; items are not *removed*
-on the strength of a single data point — flag for discussion first.
+on the strength of a single data point — flag for discussion first. Completed items are
+**marked done in place** (struck through with a "LANDED" note), not deleted.
 
 ---
 
@@ -342,15 +404,19 @@ small primitive others embed (starting with mcp-warden).
 | Failure model | **Partial-failure resilient by construction** (failures become data) | Plugin-dependent | App must handle |
 | Keys | **BYO, env-var name only, never stored/logged** | BYO via `llm` key store | BYO, app-managed |
 | Weight | **Intentionally lightweight** — no agent runtime | Lightweight, plugin ecosystem | Heavyweight agent frameworks |
+| Provider layer | **Owned, zero-LLM-SDK** — httpx transport + per-provider adapter registry; new OpenAI-compatible vendors via config | `llm` plugins (per-provider plugin packages) | SDK/integration-dependent |
 | Modes | synthesize/raw/**debate**/**adversarial** now; vote planned | consortium (iterate-to-consensus) | arbitrary graphs you author |
 
 **Where we are distinct:** conclave is the **library-first, structured-result,
 partial-failure-resilient** option with a **built deliberation-mode set** (synthesize, raw,
-debate, adversarial; vote planned) and a strict **name-only BYO-keys** posture. We are not
-trying to beat LangGraph/AutoGen at general agent orchestration — we are deliberately the
-small, embeddable council primitive. Where `llm-consortium` overlaps conceptually (iterate-
-to-consensus), conclave differentiates on the structured result contract, the resilience
-model, and the adversarial/debate modes rooted in the security-review origin.
+debate, adversarial; vote planned), a strict **name-only BYO-keys** posture, and an **owned,
+zero-LLM-SDK provider layer** (its own httpx transport + adapter registry, replacing the
+earlier LiteLLM dependency) that keeps the dependency footprint minimal and the provider
+seam under conclave's control. We are not trying to beat LangGraph/AutoGen at general agent
+orchestration — we are deliberately the small, embeddable council primitive. Where
+`llm-consortium` overlaps conceptually (iterate-to-consensus), conclave differentiates on
+the structured result contract, the resilience model, the owned provider layer, and the
+adversarial/debate modes rooted in the security-review origin.
 
 ---
 

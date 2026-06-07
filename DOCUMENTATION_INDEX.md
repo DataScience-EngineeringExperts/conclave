@@ -7,7 +7,7 @@ the canonical authority spec on top of those.
 
 - **Repo:** `/Users/ernestprovo/dev/conclave/`
 - **Version:** 0.1.0 · **License:** MIT
-- **Last updated:** 2026-06-06
+- **Last updated:** 2026-06-07
 
 ---
 
@@ -16,7 +16,7 @@ the canonical authority spec on top of those.
 | # | Doc | Path | Purpose |
 |---|-----|------|---------|
 | 1 | **README** (project overview) | [`README.md`](README.md) | What conclave is, install, BYO-keys, CLI + library quickstart, config, test. The fast on-ramp. |
-| 2 | **System Context Diagram** | [`SYSTEM_CONTEXT_DIAGRAM.md`](SYSTEM_CONTEXT_DIAGRAM.md) | Mermaid system-context view: user/consumer → CLI/library → Council → LiteLLM → 5 providers; config + env-var key inputs; mcp-warden as dev-time consumer. |
+| 2 | **System Context Diagram** | [`SYSTEM_CONTEXT_DIAGRAM.md`](SYSTEM_CONTEXT_DIAGRAM.md) | Mermaid system-context view: user/consumer → CLI/library → Council → provider highway (httpx transport + adapter registry) → 5 providers; config + env-var key inputs; custom OpenAI-compatible endpoints; mcp-warden as dev-time consumer. |
 | 3 | **Documentation Index** | [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md) | This file. Master map of all docs + source layout. |
 
 ## Authority spec
@@ -38,9 +38,15 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 | Council | [`src/conclave/council.py`](src/conclave/council.py) | Primary importable entry point. Reusable primitives (`fan_out`, `synthesize_blocks`) + the public mode API (`ask`/`debate`/`adversarial`, async + sync). |
 | Modes | [`src/conclave/modes.py`](src/conclave/modes.py) | `debate` (multi-round, anonymized peers, drop-out) and `adversarial` (propose → refute → verdict) orchestration, built on `Council.fan_out`/`synthesize_blocks`. |
 | Prompts | [`src/conclave/prompts.py`](src/conclave/prompts.py) | Role/template strings for debate + adversarial and the anonymized peer-block builder. |
-| Providers | [`src/conclave/providers.py`](src/conclave/providers.py) | Single async `call_model` path over LiteLLM `acompletion`; latency/usage/error capture; never raises. |
+| Providers | [`src/conclave/providers.py`](src/conclave/providers.py) | Single async `call_model` path: resolves the adapter, reads the key by name at call time, calls transport, parses; latency/usage/redacted-error capture; never raises. |
+| Transport | [`src/conclave/transport.py`](src/conclave/transport.py) | `post_json` — the single async httpx network boundary for the whole provider highway. |
+| Adapter registry | [`src/conclave/adapters/__init__.py`](src/conclave/adapters/__init__.py) | `resolve_adapter(model_id, config)` — provider registry + **extension seam** (one registration per family; config-only for OpenAI-compatible endpoints). |
+| Adapter base | [`src/conclave/adapters/base.py`](src/conclave/adapters/base.py) | `ProviderAdapter` protocol, `ProviderError`, and `redact()` (error-string secret scrubber). |
+| OpenAI-compat adapter | [`src/conclave/adapters/openai_compat.py`](src/conclave/adapters/openai_compat.py) | `OpenAICompatAdapter` — openai/xai/perplexity + custom OpenAI-compatible endpoints. |
+| Anthropic adapter | [`src/conclave/adapters/anthropic.py`](src/conclave/adapters/anthropic.py) | `AnthropicAdapter` — native `/v1/messages`, system-prompt hoist, required `max_tokens`. |
+| Gemini adapter | [`src/conclave/adapters/gemini.py`](src/conclave/adapters/gemini.py) | `GeminiAdapter` — native `generateContent`, OpenAI-role mapping, `usageMetadata`. |
 | Registry | [`src/conclave/registry.py`](src/conclave/registry.py) | Friendly-name → model-id defaults; provider → env-var mapping; key **presence** logic (never values). |
-| Config | [`src/conclave/config.py`](src/conclave/config.py) | Loads/merges `~/.conclave/config.yml` over defaults; resolves model ids and named/CSV councils. |
+| Config | [`src/conclave/config.py`](src/conclave/config.py) | Loads/merges `~/.conclave/config.yml` over defaults; resolves model ids and named/CSV councils; parses the `endpoints:` section (custom OpenAI-compatible providers). |
 | Models | [`src/conclave/models.py`](src/conclave/models.py) | Pydantic result contract: `TokenUsage`, `ModelAnswer`, `DebateRound`, `AdversarialResult`, `CouncilResult` (`mode`/`rounds`/`adversarial`). Stable downstream surface. |
 | CLI | [`src/conclave/cli.py`](src/conclave/cli.py) | `conclave ask` (synthesize/raw/debate/adversarial; `--rounds`/`--proposer`) + `conclave providers`; rich panels and `--json`; never prints key values. |
 | Logging | [`src/conclave/logging.py`](src/conclave/logging.py) | Logger factory; stderr; verbosity via `CONCLAVE_LOG_LEVEL` (default `WARNING`). |
@@ -52,7 +58,7 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 | Council tests | [`tests/test_council.py`](tests/test_council.py) | Fan-out, partial failure, synthesis behavior. |
 | Modes tests | [`tests/test_modes.py`](tests/test_modes.py) | Debate multi-round flow, mid-round drop-out, peer anonymization; adversarial proposer/critic/verdict, proposal/critic failure paths, no-key judge, sync wrappers. |
 | Registry/config tests | [`tests/test_registry_config.py`](tests/test_registry_config.py) | Name resolution, key-presence logic, config merge. |
-| Fixtures | [`tests/conftest.py`](tests/conftest.py) | Shared fixtures; mocks LiteLLM so the suite needs no network and no API keys. |
+| Fixtures | [`tests/conftest.py`](tests/conftest.py) | Shared fixtures; mocks the httpx transport so the suite needs no network and no API keys. |
 
 Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 
@@ -60,7 +66,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 
 | File | Path | Purpose |
 |------|------|---------|
-| Packaging | [`pyproject.toml`](pyproject.toml) | hatchling build, deps (litellm, pydantic, rich, typer, pyyaml), dev extras, console script, pytest config. License: MIT. |
+| Packaging | [`pyproject.toml`](pyproject.toml) | hatchling build, deps (httpx, pydantic, rich, typer, pyyaml — no LLM SDK), dev extras, console script, pytest config. License: MIT. |
 | License | [`LICENSE`](LICENSE) | MIT License. Copyright (c) 2026 Ernest Provo. Matches the `pyproject.toml` license field. |
 
 ---
