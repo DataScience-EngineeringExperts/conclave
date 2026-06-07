@@ -10,10 +10,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Data Science & Engineering Experts, Inc." }]
-keywords = ["llm", "litellm", "multi-model", "council", "synthesis", "cli"]
+keywords = ["llm", "multi-model", "council", "synthesis", "cli"]
 
 dependencies = [
-    "litellm>=1.40.0",
+    "httpx>=0.28",
     "pydantic>=2.6.0",
     "rich>=13.7.0",
     "typer>=0.12.0",

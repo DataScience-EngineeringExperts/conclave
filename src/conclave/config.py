@@ -11,6 +11,14 @@ key values. A typical config looks like::
       default: [grok, claude, perplexity]
       fast: [grok, perplexity]
     synthesizer: claude
+    endpoints:                 # optional: custom OpenAI-compatible providers
+      together:
+        completions_url: https://api.together.xyz/v1/chat/completions
+        env_var: TOGETHER_API_KEY
+
+A declared endpoint makes its prefix usable in a model id (``together/<model>``)
+with no code change: the adapter registry serves it via the generic
+OpenAI-compatible adapter. ``env_var`` still names a variable only -- never a value.
 """
 
 from __future__ import annotations
@@ -30,18 +38,36 @@ logger = get_logger("config")
 DEFAULT_CONFIG_PATH = Path.home() / ".conclave" / "config.yml"
 
 
+class CustomEndpoint(BaseModel):
+    """A user-declared OpenAI-compatible provider.
+
+    Lets a user add a provider without touching code: declare its prefix, full
+    chat-completions URL, and the env var that supplies its key. The adapter
+    registry resolves matching model ids through the generic OpenAI-compat path.
+
+    Attributes:
+        completions_url: Full POST URL of the ``/chat/completions`` endpoint.
+        env_var: NAME of the env var holding the key (never the value).
+    """
+
+    completions_url: str
+    env_var: str
+
+
 class ConclaveConfig(BaseModel):
     """Resolved configuration after merging file over defaults.
 
     Attributes:
-        models: friendly name -> LiteLLM model id.
+        models: friendly name -> provider model id.
         councils: named lists of friendly names.
         synthesizer: friendly name of the default synthesizer model.
+        endpoints: prefix -> custom OpenAI-compatible endpoint declaration.
     """
 
     models: dict[str, str] = Field(default_factory=dict)
     councils: dict[str, list[str]] = Field(default_factory=dict)
     synthesizer: str = DEFAULT_SYNTHESIZER
+    endpoints: dict[str, CustomEndpoint] = Field(default_factory=dict)
 
     def resolve_model_id(self, name: str) -> str:
         """Map a friendly name to a LiteLLM model id.
@@ -107,6 +133,15 @@ def load_config(path: Path | None = None) -> ConclaveConfig:
 
     synthesizer = raw.get("synthesizer", DEFAULT_SYNTHESIZER)
 
+    endpoints = {
+        prefix: CustomEndpoint(**spec)
+        for prefix, spec in (raw.get("endpoints", {}) or {}).items()
+        if isinstance(spec, dict)
+    }
+
     return ConclaveConfig(
-        models=merged_models, councils=councils, synthesizer=synthesizer
+        models=merged_models,
+        councils=councils,
+        synthesizer=synthesizer,
+        endpoints=endpoints,
     )

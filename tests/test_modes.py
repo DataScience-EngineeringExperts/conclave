@@ -1,6 +1,6 @@
 """Tests for the debate and adversarial deliberation modes.
 
-All tests run offline via the ``patch_acompletion`` fixture; no real keys are
+All tests run offline via the ``patch_call_model`` fixture; no real keys are
 required. Provider env vars are set/cleared explicitly per test. The handlers
 inspect the message list to tell roles apart: members get a single user message
 in round 1, the synthesizer/judge gets a 2-message system+user prompt, and
@@ -56,7 +56,7 @@ def _system_text(messages) -> str:
 # --------------------------------------------------------------------------- #
 
 
-async def test_debate_multi_round_flow(monkeypatch, patch_acompletion):
+async def test_debate_multi_round_flow(monkeypatch, patch_call_model):
     """Three members, two rounds: each round captured, final synthesis produced."""
     _all_keys(monkeypatch)
 
@@ -72,7 +72,7 @@ async def test_debate_multi_round_flow(monkeypatch, patch_acompletion):
         # round 1: bare user prompt, no system message
         return make_response(f"round1 from {model}")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(
         models=["grok", "gemini", "perplexity"],
@@ -97,7 +97,7 @@ async def test_debate_multi_round_flow(monkeypatch, patch_acompletion):
     assert result.synthesizer == "claude"
 
 
-async def test_debate_single_round_is_independent(monkeypatch, patch_acompletion):
+async def test_debate_single_round_is_independent(monkeypatch, patch_call_model):
     """rounds=1 behaves like one independent fan-out plus synthesis."""
     _all_keys(monkeypatch)
 
@@ -108,7 +108,7 @@ async def test_debate_single_round_is_independent(monkeypatch, patch_acompletion
         assert "debating a prompt" not in _system_text(messages)
         return make_response(f"answer {model}")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(models=["grok", "gemini"], synthesizer="claude", config=_config())
     result = await council.debate("q", rounds=1)
@@ -117,7 +117,7 @@ async def test_debate_single_round_is_independent(monkeypatch, patch_acompletion
     assert result.synthesis == "ONE ROUND SYNTH"
 
 
-async def test_debate_partial_failure_mid_round(monkeypatch, patch_acompletion):
+async def test_debate_partial_failure_mid_round(monkeypatch, patch_call_model):
     """A member that errors in round 1 drops out of round 2; debate continues."""
     _all_keys(monkeypatch)
 
@@ -135,7 +135,7 @@ async def test_debate_partial_failure_mid_round(monkeypatch, patch_acompletion):
             raise RuntimeError("gemini 500 in round 1")
         return make_response(f"round1 {model}")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(
         models=["grok", "gemini", "perplexity"],
@@ -156,14 +156,14 @@ async def test_debate_partial_failure_mid_round(monkeypatch, patch_acompletion):
     assert result.synthesis == "SYNTH OF SURVIVORS"
 
 
-async def test_debate_all_fail_first_round(monkeypatch, patch_acompletion):
+async def test_debate_all_fail_first_round(monkeypatch, patch_call_model):
     """If everyone fails round 1, no survivors remain and synthesis reports it."""
     _all_keys(monkeypatch)
 
     def handler(model, messages, **kwargs):
         raise RuntimeError("everything down")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(models=["grok", "gemini"], synthesizer="claude", config=_config())
     result = await council.debate("q", rounds=3)
@@ -175,7 +175,7 @@ async def test_debate_all_fail_first_round(monkeypatch, patch_acompletion):
     assert "no surviving member answers" in result.synthesis_error
 
 
-async def test_debate_peers_anonymized_in_round2(monkeypatch, patch_acompletion):
+async def test_debate_peers_anonymized_in_round2(monkeypatch, patch_call_model):
     """Round 2 prompts attribute peers as 'Model A/B/...', not by brand name.
 
     Anonymization relabels the *attribution header* on each prior answer; the
@@ -201,7 +201,7 @@ async def test_debate_peers_anonymized_in_round2(monkeypatch, patch_acompletion)
             return make_response("revised neutral body")
         return make_response(bodies[model])
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(models=["grok", "gemini"], synthesizer="claude", config=_config())
     await council.debate("q", rounds=2)
@@ -219,12 +219,12 @@ async def test_debate_peers_anonymized_in_round2(monkeypatch, patch_acompletion)
     assert "the answer is seven" in joined
 
 
-async def test_debate_no_members_available(monkeypatch, patch_acompletion, clear_keys):
+async def test_debate_no_members_available(monkeypatch, patch_call_model, clear_keys):
     """Zero available members yields an empty debate result, not an exception."""
     def handler(model, messages, **kwargs):  # pragma: no cover - never called
         return make_response("unused")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(models=["grok", "claude"], config=_config())
     result = await council.debate("q", rounds=2)
@@ -235,7 +235,7 @@ async def test_debate_no_members_available(monkeypatch, patch_acompletion, clear
     assert set(result.skipped) == {"grok", "claude"}
 
 
-def test_debate_sync_wrapper(monkeypatch, patch_acompletion):
+def test_debate_sync_wrapper(monkeypatch, patch_call_model):
     """The sync debate entry point works from non-async code."""
     monkeypatch.setenv("XAI_API_KEY", "dummy")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
@@ -245,7 +245,7 @@ def test_debate_sync_wrapper(monkeypatch, patch_acompletion):
             return make_response("SYNC DEBATE")
         return make_response(f"answer {model}")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(models=["grok"], synthesizer="claude", config=_config())
     result = council.debate_sync("hi", rounds=2)
@@ -259,7 +259,7 @@ def test_debate_sync_wrapper(monkeypatch, patch_acompletion):
 # --------------------------------------------------------------------------- #
 
 
-async def test_adversarial_proposer_critic_verdict(monkeypatch, patch_acompletion):
+async def test_adversarial_proposer_critic_verdict(monkeypatch, patch_call_model):
     """Default proposer answers, others critique, judge issues a verdict."""
     _all_keys(monkeypatch)
 
@@ -272,7 +272,7 @@ async def test_adversarial_proposer_critic_verdict(monkeypatch, patch_acompletio
         # Proposal: bare user prompt, no system message.
         return make_response(f"proposal from {model}")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(
         models=["grok", "gemini", "perplexity"],
@@ -299,7 +299,7 @@ async def test_adversarial_proposer_critic_verdict(monkeypatch, patch_acompletio
     assert {a.name for a in result.answers} == {"grok", "gemini", "perplexity"}
 
 
-async def test_adversarial_explicit_proposer(monkeypatch, patch_acompletion):
+async def test_adversarial_explicit_proposer(monkeypatch, patch_call_model):
     """--proposer selects a non-default member; the rest become critics."""
     _all_keys(monkeypatch)
 
@@ -311,7 +311,7 @@ async def test_adversarial_explicit_proposer(monkeypatch, patch_acompletion):
             return make_response(f"crit {model}")
         return make_response(f"prop {model}")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(
         models=["grok", "gemini", "perplexity"],
@@ -324,7 +324,7 @@ async def test_adversarial_explicit_proposer(monkeypatch, patch_acompletion):
     assert {c.name for c in result.adversarial.critiques} == {"grok", "gemini"}
 
 
-async def test_adversarial_critic_failure_still_verdicts(monkeypatch, patch_acompletion):
+async def test_adversarial_critic_failure_still_verdicts(monkeypatch, patch_call_model):
     """One critic failing does not abort; the judge still issues a verdict."""
     _all_keys(monkeypatch)
 
@@ -338,7 +338,7 @@ async def test_adversarial_critic_failure_still_verdicts(monkeypatch, patch_acom
             return make_response(f"crit {model}")
         return make_response(f"prop {model}")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(
         models=["grok", "gemini", "perplexity"],
@@ -354,7 +354,7 @@ async def test_adversarial_critic_failure_still_verdicts(monkeypatch, patch_acom
     assert adv.verdict == "VERDICT DESPITE FAILURE"
 
 
-async def test_adversarial_proposal_failure_skips_critics(monkeypatch, patch_acompletion):
+async def test_adversarial_proposal_failure_skips_critics(monkeypatch, patch_call_model):
     """If the proposal itself fails, critics are skipped and no verdict is made."""
     _all_keys(monkeypatch)
 
@@ -370,7 +370,7 @@ async def test_adversarial_proposal_failure_skips_critics(monkeypatch, patch_aco
         # Proposal (grok) fails.
         raise RuntimeError("proposer down")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(
         models=["grok", "gemini"], synthesizer="claude", config=_config()
@@ -387,7 +387,7 @@ async def test_adversarial_proposal_failure_skips_critics(monkeypatch, patch_aco
 
 
 async def test_adversarial_proposer_no_key_falls_back(
-    monkeypatch, patch_acompletion, clear_keys
+    monkeypatch, patch_call_model, clear_keys
 ):
     """A requested proposer without a key falls back to the first available member."""
     # Only gemini + claude have keys; requested proposer grok does not.
@@ -402,7 +402,7 @@ async def test_adversarial_proposer_no_key_falls_back(
             return make_response("crit")
         return make_response(f"prop {model}")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(
         models=["grok", "gemini", "claude"],
@@ -417,7 +417,7 @@ async def test_adversarial_proposer_no_key_falls_back(
 
 
 async def test_adversarial_judge_no_key_returns_structure(
-    monkeypatch, patch_acompletion, clear_keys
+    monkeypatch, patch_call_model, clear_keys
 ):
     """If the judge has no key, proposal + critiques return with a verdict error."""
     monkeypatch.setenv("XAI_API_KEY", "dummy")
@@ -430,7 +430,7 @@ async def test_adversarial_judge_no_key_returns_structure(
             return make_response(f"crit {model}")
         return make_response(f"prop {model}")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(
         models=["grok", "gemini"], synthesizer="claude", config=_config()
@@ -445,13 +445,13 @@ async def test_adversarial_judge_no_key_returns_structure(
 
 
 async def test_adversarial_no_members_available(
-    monkeypatch, patch_acompletion, clear_keys
+    monkeypatch, patch_call_model, clear_keys
 ):
     """Zero available members yields an empty adversarial result, not an error."""
     def handler(model, messages, **kwargs):  # pragma: no cover - never called
         return make_response("unused")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(models=["grok", "claude"], config=_config())
     result = await council.adversarial("q")
@@ -462,7 +462,7 @@ async def test_adversarial_no_members_available(
     assert set(result.skipped) == {"grok", "claude"}
 
 
-def test_adversarial_sync_wrapper(monkeypatch, patch_acompletion):
+def test_adversarial_sync_wrapper(monkeypatch, patch_call_model):
     """The sync adversarial entry point works from non-async code."""
     monkeypatch.setenv("XAI_API_KEY", "dummy")
     monkeypatch.setenv("GEMINI_API_KEY", "dummy")
@@ -476,7 +476,7 @@ def test_adversarial_sync_wrapper(monkeypatch, patch_acompletion):
             return make_response("crit")
         return make_response("prop")
 
-    patch_acompletion(handler)
+    patch_call_model(handler)
 
     council = Council(
         models=["grok", "gemini"], synthesizer="claude", config=_config()

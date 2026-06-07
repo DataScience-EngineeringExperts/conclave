@@ -4,8 +4,9 @@ A bring-your-own-keys **multi-model council** — a CLI and Python library that
 fans a prompt out to several foundation models concurrently (each via *your own*
 API keys) and merges their answers into one consolidated response.
 
-Built on [LiteLLM](https://github.com/BerriAI/litellm) for provider abstraction,
-`asyncio` for concurrent fan-out, `rich` for output, and `pydantic` for config.
+Built on conclave's own **provider highway** — an `httpx` async transport behind a
+per-provider adapter registry, so there is **no LLM-SDK dependency** — plus `asyncio` for
+concurrent fan-out, `rich` for output, and `pydantic` for config.
 
 It is **library-first** (the CLI is a thin shell over the same `Council` you import),
 returns **structured results** (per-model latency, token usage, and error capture), and is
@@ -37,7 +38,7 @@ Requires Python 3.11+.
 ## Bring your own keys
 
 `conclave` never stores or hardcodes keys. It reads them from the environment
-using LiteLLM's standard variable names:
+using each provider's standard variable name:
 
 | Provider   | Friendly name | Default model id            | Env var(s)                       |
 |------------|---------------|-----------------------------|----------------------------------|
@@ -167,4 +168,25 @@ Then: `conclave ask "..." --council fast`.
 pytest
 ```
 
-The suite mocks LiteLLM, so it needs no network and no API keys.
+The suite mocks the httpx transport, so it needs no network and no API keys.
+
+## Extending: custom OpenAI-compatible providers
+
+conclave's provider layer is an adapter registry over a single `httpx` transport
+(`resolve_adapter` in `src/conclave/adapters/`). The five first-class providers are
+adapters; adding a *new* provider family is one registration. Adding any
+**OpenAI-compatible** endpoint (a local server, a gateway, another vendor's
+`/chat/completions`) needs **no code** — just an `endpoints:` entry in your config that
+names the base URL and the env-var that holds its key:
+
+```yaml
+endpoints:
+  myllm:
+    base_url: https://my-gateway.internal/v1
+    api_key_env: MYLLM_API_KEY
+models:
+  mymodel: myllm/some-model-id
+```
+
+The endpoint is referenced by **name only**; the key value is read from `MYLLM_API_KEY`
+at call time and never stored in config or results.
