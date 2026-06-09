@@ -21,7 +21,7 @@ from rich.table import Table
 from . import __version__
 from .config import load_config
 from .council import Council
-from .models import CouncilResult
+from .models import CouncilResult, StreamEvent
 from .registry import DEFAULT_MODELS, key_present, key_source
 
 app = typer.Typer(
@@ -129,6 +129,59 @@ def _render_adversarial(result: CouncilResult) -> None:
         err_console.print(f"[yellow]No verdict: {adv.verdict_error}[/yellow]")
 
 
+def _stream_to_terminal(council: Council, prompt: str, *, synthesize: bool) -> CouncilResult:
+    """Render a live token stream to the terminal and return the final result.
+
+    Drives :meth:`Council.stream_sync`, printing each member's (and the
+    synthesizer's) tokens inline as they arrive under a header. A failed member
+    is shown in red at its ``member_done`` event. The returned
+    :class:`CouncilResult` is the same structure the buffered path produces, so
+    the caller applies the usual exit-code contract.
+
+    Headers are tracked per source so a header prints exactly once -- on the
+    first delta for a streaming source, or at the done event for a source that
+    streamed no live tokens (e.g. a cache hit emits a single delta; a failed
+    member emits none).
+    """
+    # Track which sources have had a header printed so we open each section once.
+    started: set[str] = set()
+
+    def _ensure_header(label: str, key: str, style: str) -> None:
+        if key not in started:
+            started.add(key)
+            console.print(f"\n[bold {style}]{label}[/bold {style}]")
+
+    def on_event(event: StreamEvent) -> None:
+        if event.type == "member_delta":
+            _ensure_header(f"{event.name} ({event.model_id})", f"m:{event.name}", "cyan")
+            console.print(event.text or "", end="", soft_wrap=True, highlight=False)
+        elif event.type == "member_done":
+            ans = event.answer
+            if ans is not None and not ans.ok:
+                _ensure_header(f"{event.name} (failed)", f"m:{event.name}", "red")
+                console.print(f"[red]{ans.error}[/red]")
+            else:
+                # Close the streamed block with a newline so the next header is clean.
+                console.print()
+        elif event.type == "synthesis_delta":
+            _ensure_header(f"SYNTHESIS ({event.name} · {event.model_id})", "synthesis", "green")
+            console.print(event.text or "", end="", soft_wrap=True, highlight=False)
+        elif event.type == "synthesis_done":
+            ans = event.answer
+            if ans is not None and not ans.ok:
+                err_console.print(f"\n[yellow]No synthesis: {ans.error}[/yellow]")
+            else:
+                console.print()
+
+    result = council.stream_sync(prompt, on_event, synthesize=synthesize)
+    _print_skipped(result)
+    # Surface a synthesis short-circuit reason that produced no synthesis_done
+    # event (e.g. synthesizer had no key, or no usable answers to synthesize).
+    if synthesize and result.synthesis is None and result.synthesis_error:
+        err_console.print(f"[yellow]No synthesis: {result.synthesis_error}[/yellow]")
+    return result
+
+
 # Mode name -> human renderer. JSON output bypasses this via model_dump.
 _RENDERERS = {
     "synthesize": _render_human,
@@ -234,6 +287,15 @@ def ask(
             "the providers. The cache never stores API keys."
         ),
     ),
+    stream: bool = typer.Option(
+        False,
+        "--stream",
+        help=(
+            "Stream member (and synthesizer) tokens live to the terminal as they "
+            "arrive (synthesize/raw modes only). Ignored with --json. On a cache "
+            "hit the cached text is rendered in one shot (no live token stream)."
+        ),
+    ),
 ) -> None:
     """Fan PROMPT out to a council and synthesize, debate, or adversarially review.
 
@@ -253,6 +315,12 @@ def ask(
         )
         raise typer.Exit(code=2)
 
+    if stream and mode_lower not in ("synthesize", "raw"):
+        err_console.print(
+            f"[red]--stream is only supported for synthesize/raw modes, not '{mode_lower}'.[/red]"
+        )
+        raise typer.Exit(code=2)
+
     cfg = load_config()
     members = cfg.resolve_council(council)
     if not members:
@@ -260,6 +328,19 @@ def ask(
         raise typer.Exit(code=2)
 
     c = Council(models=members, synthesizer=synthesizer, config=cfg, cache=cache)
+
+    # Streaming path: live token output (synthesize/raw only, not with --json).
+    # It produces the same final CouncilResult, so the exit-code contract below
+    # applies identically.
+    if stream and not as_json:
+        result = _stream_to_terminal(c, prompt, synthesize=(mode_lower == "synthesize"))
+        if not result.successful_answers:
+            err_console.print(
+                "[red]No usable council answers. Run 'conclave providers' to check keys.[/red]"
+            )
+            raise typer.Exit(code=1)
+        return
+
     if mode_lower == "debate":
         threshold = _resolve_converge_threshold(
             converge, converge_threshold, cfg.converge_threshold

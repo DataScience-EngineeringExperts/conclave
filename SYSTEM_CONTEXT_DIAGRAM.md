@@ -105,6 +105,15 @@ flowchart TB
   speaks native `generateContent` (OpenAI roles mapped, `systemInstruction` hoisted,
   `usageMetadata` parsed). Every adapter builds a request and hands it to the **single**
   network boundary — `transport.post_json` (`transport.py`), one async httpx call site.
+- **Streaming shares the same boundary (PDD §9 #5).** A `--stream` run (and the library
+  `Council.ask_stream` async generator) flows through a streaming sibling of the call path:
+  `call_model_stream` (`providers.py`) → `transport.stream_sse` (`transport.py`, the single
+  streaming httpx call site, `client.stream(...)`) → each adapter's `stream_request` +
+  `parse_sse_event` (OpenAI-compat `data:`/`[DONE]` deltas; Anthropic named SSE events;
+  Gemini `streamGenerateContent?alt=sse`). `streaming.py` interleaves members concurrently
+  and emits `StreamEvent`s, ending with a `done` event whose `CouncilResult` matches the
+  non-streaming shape. Streaming covers `synthesize`/`raw` only; the never-raises +
+  `redact()` invariants hold identically, with partial text preserved on mid-stream failure.
 - **`resolve_adapter` is the extension seam.** Adding a *new provider family* is one
   registration in `adapters/__init__.py`; adding an *OpenAI-compatible endpoint* is
   **config-only** — a `~/.conclave/config.yml` `endpoints:` entry, no code. That is why

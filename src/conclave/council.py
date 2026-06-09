@@ -13,13 +13,13 @@ handling is written exactly once.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 from . import cache as cache_mod
 from . import transport
 from .config import ConclaveConfig, load_config
 from .logging import get_logger
-from .models import CouncilResult, ModelAnswer
+from .models import CouncilResult, ModelAnswer, StreamEvent
 from .providers import call_model
 from .registry import key_present
 
@@ -255,6 +255,108 @@ class Council:
             await self._synthesize(result)
         return result
 
+    async def ask_stream(self, prompt: str, synthesize: bool = True) -> AsyncIterator[StreamEvent]:
+        """Stream a synthesize/raw run, yielding incremental :class:`StreamEvent`s.
+
+        The streaming counterpart of :meth:`ask` (issue #7). Members are fanned
+        out concurrently and their tokens are interleaved as ``member_delta`` /
+        ``member_done`` events; when ``synthesize`` is ``True`` the synthesizer's
+        tokens follow as ``synthesis_delta`` / ``synthesis_done``; a terminal
+        ``done`` event carries the fully-assembled :class:`CouncilResult`, whose
+        shape matches the non-streaming path exactly. Streaming applies to the
+        synthesize/raw path only -- ``debate``/``adversarial`` are not streamed.
+
+        **Cache interaction.** When the result cache is enabled and an identical
+        prior run is cached, there are no live provider tokens to stream: the
+        cached final text is rendered in **one shot** -- a single
+        ``member_delta`` per member (and a single ``synthesis_delta`` if a
+        synthesis was cached) followed by the matching ``*_done`` events and the
+        terminal ``done`` (with ``result.cached is True``). The providers are not
+        called. On a cache **miss**, the live stream runs and, on completion, the
+        assembled result is stored so a later ``--stream`` or buffered run hits.
+
+        Args:
+            prompt: The user prompt to fan out.
+            synthesize: When ``True`` (default), stream the synthesizer too.
+
+        Yields:
+            :class:`StreamEvent` objects; the last one is always ``type="done"``.
+        """
+        from .streaming import stream_ask
+
+        mode = "synthesize" if synthesize else "raw"
+
+        if self.cache_enabled:
+            key = self._cache_key(prompt, mode)
+            hit = cache_mod.load(key)
+            if hit is not None:
+                logger.info("cache hit for %s stream (%s)", mode, key[:12])
+                for event in self._replay_cached(hit):
+                    yield event
+                return
+
+            # Live miss: stream, capture the terminal result, then store it.
+            final: CouncilResult | None = None
+            async for event in stream_ask(self, prompt, synthesize=synthesize):
+                if event.type == "done" and event.result is not None:
+                    final = event.result
+                yield event
+            if final is not None:
+                cache_mod.store(key, final)
+            return
+
+        async for event in stream_ask(self, prompt, synthesize=synthesize):
+            yield event
+
+    @staticmethod
+    def _replay_cached(result: CouncilResult) -> list[StreamEvent]:
+        """Render a cached :class:`CouncilResult` as one-shot stream events.
+
+        A cache hit has no live tokens, so each member's full cached answer is
+        emitted as a single ``member_delta`` + ``member_done`` (errors emit only
+        ``member_done``), the cached synthesis as a single ``synthesis_delta`` +
+        ``synthesis_done``, and finally the terminal ``done`` carrying the cached
+        result verbatim (``cached is True``). This keeps the streaming consumer's
+        event contract intact without fabricating a fake token-by-token stream.
+        """
+        events: list[StreamEvent] = []
+        for ans in result.answers:
+            if ans.answer:
+                events.append(
+                    StreamEvent(
+                        type="member_delta",
+                        name=ans.name,
+                        model_id=ans.model_id,
+                        text=ans.answer,
+                    )
+                )
+            events.append(
+                StreamEvent(type="member_done", name=ans.name, model_id=ans.model_id, answer=ans)
+            )
+        if result.synthesis is not None:
+            events.append(
+                StreamEvent(
+                    type="synthesis_delta",
+                    name=result.synthesizer,
+                    model_id=result.synthesizer_model_id,
+                    text=result.synthesis,
+                )
+            )
+            events.append(
+                StreamEvent(
+                    type="synthesis_done",
+                    name=result.synthesizer,
+                    model_id=result.synthesizer_model_id,
+                    answer=ModelAnswer(
+                        name=result.synthesizer or "synthesizer",
+                        model_id=result.synthesizer_model_id or "",
+                        answer=result.synthesis,
+                    ),
+                )
+            )
+        events.append(StreamEvent(type="done", result=result))
+        return events
+
     async def _synthesize(self, result: CouncilResult) -> None:
         """Run the synthesizer over the successful answers, mutating ``result``."""
         usable = result.successful_answers
@@ -425,6 +527,43 @@ class Council:
         from inside a running event loop -- use :meth:`ask` there instead.
         """
         return self._run_sync(lambda: self.ask(prompt, synthesize=synthesize), "ask_sync")
+
+    def stream_sync(
+        self,
+        prompt: str,
+        on_event: Callable[[StreamEvent], None],
+        synthesize: bool = True,
+    ) -> CouncilResult:
+        """Drive :meth:`ask_stream` synchronously, invoking ``on_event`` per event.
+
+        For non-async callers (the CLI ``--stream`` path). Each
+        :class:`StreamEvent` is passed to ``on_event`` as it arrives so live
+        output can be rendered; the fully-assembled :class:`CouncilResult` (from
+        the terminal ``done`` event) is returned. Closes the pooled HTTP client
+        when the loop ends, like the other ``*_sync`` wrappers. Raises
+        ``RuntimeError`` if invoked from inside a running event loop -- iterate
+        :meth:`ask_stream` directly there instead.
+
+        Args:
+            prompt: The user prompt to fan out.
+            on_event: Callback invoked once per :class:`StreamEvent` in order.
+            synthesize: When ``True`` (default), stream the synthesizer too.
+
+        Returns:
+            The final :class:`CouncilResult` carried by the ``done`` event.
+        """
+
+        async def _consume() -> CouncilResult:
+            final: CouncilResult | None = None
+            async for event in self.ask_stream(prompt, synthesize=synthesize):
+                on_event(event)
+                if event.type == "done" and event.result is not None:
+                    final = event.result
+            # ask_stream always ends with a done event carrying a result; fall
+            # back to an empty result only as a defensive guard.
+            return final if final is not None else CouncilResult(prompt=prompt)
+
+        return self._run_sync(_consume, "stream_sync")
 
     def debate_sync(
         self, prompt: str, rounds: int = 2, converge_threshold: float | None = None

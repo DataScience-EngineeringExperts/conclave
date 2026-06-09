@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from ..models import TokenUsage
@@ -152,6 +153,32 @@ def redact(text: str) -> str:
     return cleaned
 
 
+@dataclass
+class SSEDelta:
+    """The result of interpreting one Server-Sent Event from a stream (issue #7).
+
+    An adapter's :meth:`ProviderAdapter.parse_sse_event` turns each raw
+    ``(event, data)`` pair from :func:`conclave.transport.stream_sse` into one of
+    these. All fields are optional because a single SSE frame may carry just text
+    (a content delta), just usage (a final accounting frame), the end-of-stream
+    signal, or nothing relevant (a control/ping frame the adapter skips).
+
+    Attributes:
+        text: Incremental answer text in this frame, or ``""`` when the frame
+            carries no text.
+        usage: Token usage if this frame is the provider's final usage accounting
+            (OpenAI's ``include_usage`` chunk, Anthropic's ``message_delta``,
+            Gemini's per-chunk ``usageMetadata``), else ``None``.
+        done: ``True`` when this frame signals end-of-stream (OpenAI's
+            ``[DONE]`` sentinel, Anthropic's ``message_stop``); the caller stops
+            consuming after a done frame.
+    """
+
+    text: str = ""
+    usage: TokenUsage | None = None
+    done: bool = False
+
+
 class ProviderError(Exception):
     """A provider-side failure: non-2xx status or a malformed/empty payload.
 
@@ -179,6 +206,7 @@ class ProviderAdapter(Protocol):
     prefix: str
     env_vars: tuple[str, ...]
     completions_url: str
+    supports_streaming: bool
 
     def build_request(
         self,
@@ -217,5 +245,50 @@ class ProviderAdapter(Protocol):
         Raises:
             ProviderError: On non-2xx status or a malformed/empty payload, with a
                 message already scrubbed of secrets.
+        """
+        ...
+
+    def stream_request(
+        self,
+        model_id: str,
+        messages: list[dict[str, str]],
+        temperature: float | None,
+        timeout: float,
+        api_key: str,
+    ) -> tuple[str, dict[str, str], dict]:
+        """Build ``(url, headers, json_body)`` for a STREAMING request (issue #7).
+
+        Mirrors :meth:`build_request` but sets the provider's stream-enabling
+        flag (OpenAI ``stream: true`` + ``stream_options.include_usage``,
+        Anthropic ``stream: true``, Gemini ``?alt=sse``). Adapters that cannot
+        stream do not implement this and report ``supports_streaming = False``;
+        the provider call path then falls back to a buffered request and emits
+        the text in one chunk.
+
+        Args and return mirror :meth:`build_request`.
+        """
+        ...
+
+    def parse_sse_event(self, event: str, data: str) -> SSEDelta:
+        """Interpret one raw SSE ``(event, data)`` pair into an :class:`SSEDelta`.
+
+        Called once per frame yielded by :func:`conclave.transport.stream_sse`.
+        Returns the incremental text, a final usage accounting if this frame
+        carries it, and/or the end-of-stream signal. A frame the adapter does
+        not care about (a control/ping/role frame) yields an empty
+        :class:`SSEDelta`.
+
+        Args:
+            event: The SSE ``event:`` name (``""`` for OpenAI/Gemini streams,
+                e.g. ``"content_block_delta"`` for Anthropic).
+            data: The raw ``data:`` payload (JSON, or the ``[DONE]`` sentinel).
+
+        Returns:
+            An :class:`SSEDelta` describing this frame.
+
+        Raises:
+            ProviderError: When a frame is a structured provider error event or
+                is irrecoverably malformed; the caller captures it as a
+                non-raising ``ModelAnswer.error`` with partial text preserved.
         """
         ...

@@ -15,8 +15,10 @@ endpoints sit in one place. Env-var names are sourced from
 
 from __future__ import annotations
 
+import json
+
 from ..models import TokenUsage
-from .base import ProviderError, status_error
+from .base import ProviderError, SSEDelta, status_error
 
 # Verified per-provider full completions URLs. Note Perplexity has NO ``/v1``
 # segment while xAI/OpenAI do, and Groq nests its OpenAI surface under
@@ -45,6 +47,10 @@ class OpenAICompatAdapter:
         max_tokens: Optional ``max_tokens`` cap. When ``None`` (default) the
             parameter is omitted so the provider applies its own default.
     """
+
+    # Every OpenAI-compatible vendor conclave ships speaks the standard
+    # streaming protocol (``stream: true`` -> SSE deltas -> ``[DONE]``).
+    supports_streaming = True
 
     def __init__(
         self,
@@ -121,6 +127,70 @@ class OpenAICompatAdapter:
 
         usage = _parse_usage(payload.get("usage"))
         return content, usage
+
+    def stream_request(
+        self,
+        model_id: str,
+        messages: list[dict[str, str]],
+        temperature: float | None,
+        timeout: float,
+        api_key: str,
+    ) -> tuple[str, dict[str, str], dict]:
+        """Build the streaming POST: ``build_request`` + ``stream`` flags.
+
+        Sets ``stream: true`` and ``stream_options.include_usage: true`` so the
+        provider emits incremental ``choices[0].delta.content`` chunks followed
+        by a final chunk with empty ``choices`` and a top-level ``usage`` object
+        (verified against the OpenAI chat-completions streaming reference). See
+        :meth:`ProviderAdapter.stream_request`.
+        """
+        url, headers, body = self.build_request(model_id, messages, temperature, timeout, api_key)
+        body["stream"] = True
+        body["stream_options"] = {"include_usage": True}
+        return url, headers, body
+
+    def parse_sse_event(self, event: str, data: str) -> SSEDelta:
+        """Parse one OpenAI-style SSE frame.
+
+        Frame shapes handled (verified against the OpenAI chat-completions
+        streaming reference):
+
+        * ``[DONE]`` -- the terminating sentinel -> ``done=True``.
+        * a chunk with ``choices[0].delta.content`` -> a text delta.
+        * the final ``include_usage`` chunk: ``choices == []`` and a top-level
+          ``usage`` object -> a usage frame.
+
+        A frame whose JSON is malformed raises :class:`ProviderError`; a frame
+        that simply carries no content (role-only delta, ``finish_reason`` only)
+        yields an empty :class:`SSEDelta`. See
+        :meth:`ProviderAdapter.parse_sse_event`.
+        """
+        if data == "[DONE]":
+            return SSEDelta(done=True)
+        try:
+            chunk = json.loads(data)
+        except (ValueError, TypeError) as exc:
+            raise ProviderError(
+                f"{self.prefix}: malformed stream frame ({type(exc).__name__})"
+            ) from exc
+        if not isinstance(chunk, dict):
+            raise ProviderError(f"{self.prefix}: malformed stream frame (non-object)")
+
+        # A structured error can arrive mid-stream as a normal data frame.
+        if isinstance(chunk.get("error"), (dict, str)):
+            raise ProviderError(status_error(self.prefix, 200, chunk, secondary_keys=("type",)))
+
+        text = ""
+        choices = chunk.get("choices")
+        if isinstance(choices, list) and choices:
+            delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
+            if isinstance(delta, dict):
+                content = delta.get("content")
+                if isinstance(content, str):
+                    text = content
+
+        usage = _parse_usage(chunk.get("usage"))
+        return SSEDelta(text=text, usage=usage)
 
 
 def _parse_usage(raw: object) -> TokenUsage | None:

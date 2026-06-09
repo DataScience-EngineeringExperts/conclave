@@ -18,9 +18,11 @@ usage maps ``usageMetadata.promptTokenCount``/``candidatesTokenCount``/
 
 from __future__ import annotations
 
+import json
+
 from ..models import TokenUsage
 from ..registry import PROVIDER_ENV_VARS
-from .base import ProviderError, status_error
+from .base import ProviderError, SSEDelta, status_error
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
@@ -40,6 +42,7 @@ class GeminiAdapter:
     # The concrete URL embeds the model and is built per-request; this base is
     # exposed for parity with the protocol's ``completions_url`` attribute.
     completions_url = GEMINI_BASE
+    supports_streaming = True
 
     def __init__(self, max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS) -> None:
         self.max_output_tokens = max_output_tokens
@@ -117,6 +120,65 @@ class GeminiAdapter:
 
         usage = _parse_usage(payload.get("usageMetadata"))
         return text, usage
+
+    def stream_request(
+        self,
+        model_id: str,
+        messages: list[dict[str, str]],
+        temperature: float | None,
+        timeout: float,
+        api_key: str,
+    ) -> tuple[str, dict[str, str], dict]:
+        """Build the streaming POST against ``streamGenerateContent?alt=sse``.
+
+        Same body as :meth:`build_request`, but the URL targets the streaming
+        method with ``?alt=sse`` so Gemini emits standard SSE frames (without
+        ``alt=sse`` it returns a single JSON array, not a stream -- verified
+        against the Gemini API streaming reference). See
+        :meth:`ProviderAdapter.stream_request`.
+        """
+        _url, headers, body = self.build_request(model_id, messages, temperature, timeout, api_key)
+        model = self._bare_model(model_id)
+        url = f"{GEMINI_BASE}/{model}:streamGenerateContent?alt=sse"
+        return url, headers, body
+
+    def parse_sse_event(self, event: str, data: str) -> SSEDelta:
+        """Parse one Gemini SSE frame (a partial ``GenerateContentResponse``).
+
+        Each frame carries ``candidates[0].content.parts[*].text`` (a text
+        delta) and may carry a *cumulative* ``usageMetadata`` accounting (last
+        wins). Gemini has no ``[DONE]`` sentinel -- the stream simply ends -- so
+        no frame sets ``done``; the transport's end-of-iteration terminates the
+        loop. A frame whose JSON is malformed raises :class:`ProviderError`; a
+        frame carrying a structured ``error`` likewise raises. A safety-blocked
+        or otherwise text-less candidate yields a usage-only / empty delta. See
+        :meth:`ProviderAdapter.parse_sse_event`.
+        """
+        try:
+            frame = json.loads(data)
+        except (ValueError, TypeError) as exc:
+            raise ProviderError(f"gemini: malformed stream frame ({type(exc).__name__})") from exc
+        if not isinstance(frame, dict):
+            raise ProviderError("gemini: malformed stream frame (non-object)")
+
+        if isinstance(frame.get("error"), (dict, str)):
+            raise ProviderError(status_error("gemini", 200, frame, secondary_keys=("status",)))
+
+        text = ""
+        candidates = frame.get("candidates")
+        if isinstance(candidates, list) and candidates:
+            candidate = candidates[0]
+            content = candidate.get("content") if isinstance(candidate, dict) else None
+            parts = content.get("parts") if isinstance(content, dict) else None
+            if isinstance(parts, list):
+                text = "".join(
+                    part.get("text", "")
+                    for part in parts
+                    if isinstance(part, dict) and "text" in part
+                )
+
+        usage = _parse_usage(frame.get("usageMetadata"))
+        return SSEDelta(text=text, usage=usage)
 
 
 def _parse_usage(raw: object) -> TokenUsage | None:

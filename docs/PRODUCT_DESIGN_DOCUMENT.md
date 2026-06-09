@@ -246,7 +246,8 @@ CLI (cli.py, typer+rich)   Library (from conclave import Council)
 | `modes.py` | Deliberation orchestration: `run_debate` (multi-round, anonymized peers, drop-out) and `run_adversarial` (propose → refute → verdict). Built entirely on `Council.fan_out` + `synthesize_blocks` — no duplicated concurrency or synthesizer code. |
 | `prompts.py` | Role/template strings for debate and adversarial (member, critic, judge, debate-final system prompts) and the anonymized peer-block builder. Separates *what each role is told* from *when to call whom*. |
 | `providers.py` | `call_model` — the single async call path. Resolves the adapter for a model id, reads the key value *by name at call time*, calls the adapter+transport, parses the reply, and captures latency, token usage, and any (redacted) error into a `ModelAnswer`; never raises for provider-side failures. Signature and never-raises contract unchanged from v0.1/v0.2. |
-| `transport.py` | The single async network boundary: `post_json` — one httpx call site for the whole highway. Nothing else in conclave touches the network. |
+| `transport.py` | The single async network boundary: `post_json` (buffered) + `stream_sse` (SSE via `client.stream(...)`, issue #7) — the only two httpx call sites for the whole highway. Nothing else in conclave touches the network. |
+| `streaming.py` | Council-level streaming engine (issue #7): `stream_ask` fans members out concurrently (interleaved via an `asyncio.Queue`), optionally streams the synthesizer, and emits `StreamEvent`s ending with a `done` event whose `CouncilResult` matches the buffered shape. Behind `Council.ask_stream`/`stream_sync`. synthesize/raw only. |
 | `adapters/__init__.py` | `resolve_adapter(model_id, config)` — the provider registry and **extension seam**. Maps a model-id prefix (or a config `endpoints:` entry) to the adapter that serves it. Adding a provider family = one registration here; adding an OpenAI-compatible endpoint = config-only. |
 | `adapters/base.py` | The `ProviderAdapter` protocol, `ProviderError`, and `redact()` — the secret-scrubber applied to every error string before it reaches `ModelAnswer.error`. |
 | `adapters/openai_compat.py` | `OpenAICompatAdapter` — serves openai / xai / perplexity / groq / deepseek / mistral / together and any custom OpenAI-compatible endpoint. Per-provider full completions URL (note: Perplexity has no `/v1` segment; Groq nests its OpenAI surface under `/openai/v1`). |
@@ -341,7 +342,8 @@ LLM-SDK dependency.** Packaged with hatchling; console script `conclave = concla
 - **No hosted/proxied token path.** No conclave-operated endpoint that sees user prompts or
   takes a margin. BYO-keys, direct-to-provider, always. (Permanent.)
 - **No persistence/caching of results** in v0.1 (caching is Roadmap, §9).
-- **No streaming** in v0.1 (Roadmap, §9).
+- **No streaming** in v0.1 (Roadmap, §9 — **LANDED for synthesize/raw in v0.3**, issue #7;
+  `debate`/`adversarial` streaming still out of scope).
 - **No server mode** in v0.1 (possible Roadmap, §9).
 - **No `vote` mode** yet (Roadmap, §9 — flagged for build, not for removal). `debate` and
   `adversarial` shipped in v0.2.
@@ -378,7 +380,23 @@ Ordered roughly by strategic value to the origin use case and to mcp-warden.
    defaults stay open under §12 #5. Struck through for traceability.
 4. **Caching** — optional result cache keyed on (prompt, council, mode, model ids) to make
    repeated/eval runs cheap. Must remain off by default and never persist keys.
-5. **Streaming** — stream member answers and/or the synthesis to the terminal/library.
+5. ~~**Streaming** — stream member answers and/or the synthesis to the terminal/library.~~
+   **LANDED** (issue #7): streaming for the `synthesize`/`raw` path. Library API is the
+   `Council.ask_stream` async generator (plus `Council.stream_sync` for non-async callers),
+   yielding `StreamEvent`s (`member_delta`/`member_done`, `synthesis_delta`/`synthesis_done`,
+   terminal `done` carrying the full `CouncilResult`); CLI flag is `--stream`. The single
+   streaming network boundary is `transport.stream_sse` (`client.stream(...)`), reusing the
+   pooled client/timeout/`redact()` plumbing; each adapter parses its own SSE delta shape
+   (OpenAI-compat `choices[].delta.content` + `[DONE]` with `stream_options.include_usage`;
+   Anthropic `content_block_delta` text + `message_start`/`message_delta` usage +
+   `message_stop`; Gemini `streamGenerateContent?alt=sse` `parts[].text` + cumulative
+   `usageMetadata`). A non-streamable model or any mid-stream error degrades gracefully —
+   partial text preserved, error on `ModelAnswer`, never raises — and the assembled
+   `ModelAnswer` (text + usage) matches the buffered result, so synthesis/`CouncilResult`
+   are unaffected. Non-streaming remains the default and is byte-for-byte unchanged.
+   `--stream` + cache: a hit renders the cached final text in one shot (no fake token
+   stream). `debate`/`adversarial` streaming is intentionally **out of scope** (a later
+   issue may extend them). Struck through for traceability.
 6. **Local HTTP/server mode (under evaluation)** — a *local* server for convenience only;
    must not become a hosted token path or violate the no-middleman non-goal.
 7. ~~**Key-leak hardening** — scrub/limit provider-originated error strings before they land

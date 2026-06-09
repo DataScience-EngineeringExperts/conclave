@@ -42,6 +42,47 @@ class ModelAnswer(BaseModel):
         return self.error is None and self.answer is not None
 
 
+class StreamEvent(BaseModel):
+    """One incremental event from a streaming council run (issue #7).
+
+    Streaming yields a flat sequence of these so a consumer can render live
+    output without knowing the council's internals. The terminal ``done`` event
+    carries the fully-assembled :class:`CouncilResult`, so a consumer that only
+    wants the final structured result can ignore every chunk and read
+    ``done`` -- the result shape is byte-for-byte the same as the
+    non-streaming path.
+
+    Attributes:
+        type: The event kind:
+
+            * ``"member_delta"`` -- an incremental text chunk from one council
+              member. ``name``/``model_id`` identify the member and ``text``
+              carries the new tokens.
+            * ``"member_done"`` -- a member finished (or failed). ``answer``
+              carries that member's final :class:`ModelAnswer` (with ``error``
+              set on failure, partial text preserved if any).
+            * ``"synthesis_delta"`` -- an incremental text chunk from the
+              synthesizer (only when ``synthesize=True`` and synthesis runs).
+            * ``"synthesis_done"`` -- the synthesizer finished; ``answer`` holds
+              its final :class:`ModelAnswer`.
+            * ``"done"`` -- the run is complete; ``result`` holds the full
+              :class:`CouncilResult`.
+        name: Friendly member/synthesizer name for delta/done events.
+        model_id: Resolved model id for delta/done events.
+        text: The incremental text for ``*_delta`` events.
+        answer: The final :class:`ModelAnswer` for ``member_done`` /
+            ``synthesis_done`` events.
+        result: The full :class:`CouncilResult` for the terminal ``done`` event.
+    """
+
+    type: str
+    name: str | None = None
+    model_id: str | None = None
+    text: str | None = None
+    answer: ModelAnswer | None = None
+    result: CouncilResult | None = None
+
+
 class DebateRound(BaseModel):
     """One round of a multi-round debate.
 
@@ -148,3 +189,9 @@ class CouncilResult(BaseModel):
     def failed_answers(self) -> list[ModelAnswer]:
         """Members that were attempted but errored."""
         return [a for a in self.answers if not a.ok]
+
+
+# ``StreamEvent.result`` forward-references ``CouncilResult`` (defined after it
+# under ``from __future__ import annotations``); resolve that ref now that the
+# class exists so ``StreamEvent`` validates correctly.
+StreamEvent.model_rebuild()

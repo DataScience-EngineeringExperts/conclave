@@ -9,6 +9,13 @@ Public library API::
     result = council.ask_sync("Your prompt")            # sync
     result = await council.ask("Your prompt")            # async
 
+    # streaming (synthesize/raw only): incremental StreamEvents
+    async for event in council.ask_stream("Your prompt"):
+        if event.type in ("member_delta", "synthesis_delta"):
+            print(event.text, end="", flush=True)
+        elif event.type == "done":
+            result = event.result   # full CouncilResult, same shape as ask()
+
     # multi-round debate
     result = await council.debate("Your prompt", rounds=3)
     result = council.debate_sync("Your prompt", rounds=3)
@@ -39,6 +46,7 @@ from .models import (
     CouncilResult,
     DebateRound,
     ModelAnswer,
+    StreamEvent,
     TokenUsage,
 )
 from .transport import aclose
@@ -52,6 +60,7 @@ __all__ = [
     "TokenUsage",
     "DebateRound",
     "AdversarialResult",
+    "StreamEvent",
     "ConclaveConfig",
     "load_config",
     "aclose",
