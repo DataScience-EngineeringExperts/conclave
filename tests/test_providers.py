@@ -144,6 +144,47 @@ async def test_call_model_unknown_provider_is_error(monkeypatch):
     assert "unknown provider 'mystery'" in answer.error
 
 
+async def test_call_model_custom_endpoint_key_not_leaked_in_error(monkeypatch, tmp_path):
+    """A custom-endpoint key value echoed in a provider error is scrubbed (issue #14).
+
+    Repro: declare a custom OpenAI-compatible endpoint whose api_key_env is NOT
+    in PROVIDER_ENV_VARS and whose value has no recognized prefix, then have the
+    mocked transport return a 401 whose error message echoes that key. The
+    resulting ModelAnswer.error must not contain the key value anywhere.
+    """
+    # Obviously-synthetic, unprefixed fake key -- no sk-/xai-/pplx-/AIza shape,
+    # so pattern-based scrubbing alone would miss it; only name-based scrubbing
+    # via the custom endpoint's env var saves it.
+    fake_key = "togetherFAKEsecret_unprefixed_0123456789"
+    monkeypatch.setenv("TOGETHER_API_KEY", fake_key)
+
+    config_file = tmp_path / "conclave.yml"
+    config_file.write_text(
+        "endpoints:\n"
+        "  together:\n"
+        "    completions_url: https://api.together.xyz/v1/chat/completions\n"
+        "    env_var: TOGETHER_API_KEY\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CONCLAVE_CONFIG", str(config_file))
+
+    async def echoing_401(url, headers, json_body, timeout):
+        # Simulate a gateway that echoes the submitted credential on auth failure.
+        return 401, {"error": {"message": f"invalid api key: {fake_key}"}}
+
+    monkeypatch.setattr("conclave.transport.post_json", echoing_401)
+
+    answer = await call_model(
+        "together",
+        "together/some-model",
+        [{"role": "user", "content": "hi"}],
+    )
+    assert not answer.ok
+    assert answer.error is not None
+    assert fake_key not in answer.error
+    assert "[REDACTED]" in answer.error
+
+
 # --------------------------------------------------------------------------- #
 # Redaction
 # --------------------------------------------------------------------------- #
@@ -175,3 +216,27 @@ def test_provider_error_message_is_pre_redacted():
     err = ProviderError("openai: HTTP 401: Bearer sk-leakedTOKEN12345")
     assert "sk-leakedTOKEN12345" not in str(err)
     assert "[REDACTED]" in str(err)
+
+
+def test_redact_scrubs_custom_endpoint_env_var_value(monkeypatch, tmp_path):
+    """An unprefixed custom-endpoint key value is scrubbed via config (issue #14).
+
+    The key has no recognized provider prefix, so only name-based scrubbing
+    sourced from config.endpoints[*].env_var can catch it.
+    """
+    fake_key = "togetherFAKEsecret_unprefixed_0123456789"
+    monkeypatch.setenv("TOGETHER_API_KEY", fake_key)
+
+    config_file = tmp_path / "conclave.yml"
+    config_file.write_text(
+        "endpoints:\n"
+        "  together:\n"
+        "    completions_url: https://api.together.xyz/v1/chat/completions\n"
+        "    env_var: TOGETHER_API_KEY\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CONCLAVE_CONFIG", str(config_file))
+
+    cleaned = redact(f"auth failed: invalid api key: {fake_key}")
+    assert fake_key not in cleaned
+    assert "[REDACTED]" in cleaned

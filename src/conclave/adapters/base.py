@@ -15,8 +15,9 @@ Two cross-cutting concerns live here:
   malformed payloads. Its message is ALREADY scrubbed via :func:`redact` so it
   is safe to surface in ``ModelAnswer.error``.
 * :func:`redact` -- key-leak hardening. Strips bearer tokens, ``sk-`` style
-  keys, ``x-api-key`` echoes, and any value of the env vars we hold names for,
-  before an error string can ever escape the call path.
+  keys, ``x-api-key`` echoes, and any value of the env vars we hold names for --
+  built-in providers AND custom-endpoint ``api_key_env`` names declared in
+  config -- before an error string can ever escape the call path.
 """
 
 from __future__ import annotations
@@ -38,10 +39,29 @@ _HEADER_KEY_RE = re.compile(r"(x-(?:goog-)?api-key)\s*[:=]\s*[A-Za-z0-9._\-]+", 
 _REDACTED = "[REDACTED]"
 
 
+def _custom_endpoint_env_vars() -> list[str]:
+    """Return the env-var NAMES declared by custom endpoints, or [] on any error.
+
+    Custom OpenAI-compatible endpoints (``config.endpoints[*].env_var``) name a
+    key var that is NOT in :data:`PROVIDER_ENV_VARS`, so :func:`redact` would not
+    otherwise know to mask its value -- the BYO-keys leak class. We load config
+    here (lazily, to avoid an import cycle) purely to learn those names; failures
+    must never break redaction, so any error yields an empty list and we fall
+    back to pattern-based scrubbing only.
+    """
+    try:
+        from ..config import load_config
+
+        return [ep.env_var for ep in load_config().endpoints.values() if ep.env_var]
+    except Exception:  # noqa: BLE001 -- redaction must never raise
+        return []
+
+
 def redact(text: str) -> str:
     """Scrub anything key-shaped from a string before it can be surfaced.
 
-    Removes, in order: any live value of an env var we know a name for,
+    Removes, in order: any live value of an env var we know a name for --
+    including custom-endpoint ``api_key_env`` names declared in config --
     ``Bearer <token>`` auth headers, ``x-api-key``/``x-goog-api-key`` header
     echoes, and standalone provider-style key tokens (``sk-``, ``xai-``,
     ``pplx-``, ``AIza...``). Idempotent and safe on already-clean text.
@@ -55,13 +75,15 @@ def redact(text: str) -> str:
     if not text:
         return text
     cleaned = text
-    # 1) Redact concrete env-var values first (most authoritative). We only read
-    # values here to mask them; the masked result never contains the value.
-    for names in PROVIDER_ENV_VARS.values():
-        for name in names:
-            value = os.environ.get(name, "").strip()
-            if value:
-                cleaned = cleaned.replace(value, _REDACTED)
+    # 1) Redact concrete env-var values first (most authoritative). This covers
+    # the built-in providers AND any custom-endpoint key var declared in config,
+    # so a BYO custom key with an unrecognized shape is still masked. We only
+    # read values here to mask them; the masked result never contains the value.
+    builtin_names = [name for names in PROVIDER_ENV_VARS.values() for name in names]
+    for name in builtin_names + _custom_endpoint_env_vars():
+        value = os.environ.get(name, "").strip()
+        if value:
+            cleaned = cleaned.replace(value, _REDACTED)
     # 2) Header-shaped echoes.
     cleaned = _HEADER_KEY_RE.sub(rf"\1: {_REDACTED}", cleaned)
     # 3) Bearer auth headers.
