@@ -13,8 +13,9 @@ handling is written exactly once.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
+from . import cache as cache_mod
 from . import transport
 from .config import ConclaveConfig, load_config
 from .logging import get_logger
@@ -48,6 +49,12 @@ class Council:
         config: Pre-loaded config; if ``None``, loaded from disk + defaults.
         temperature: Sampling temperature for member calls.
         timeout: Per-call timeout in seconds.
+        cache: Opt-in result cache. ``None`` (default) defers to
+            ``config.cache`` (off unless enabled in ``~/.conclave/config.yml``);
+            ``True``/``False`` overrides it for this council. When enabled, an
+            identical repeat run is served from the on-disk cache instead of
+            re-calling the providers. The cache never persists API keys --
+            see :mod:`conclave.cache`.
 
     Example:
         >>> council = Council(models=["grok", "perplexity"], synthesizer="claude")
@@ -62,12 +69,15 @@ class Council:
         config: ConclaveConfig | None = None,
         temperature: float = 0.7,
         timeout: float = 120.0,
+        cache: bool | None = None,
     ) -> None:
         self.config = config or load_config()
         self.requested_models = list(models)
         self.synthesizer = synthesizer or self.config.synthesizer
         self.temperature = temperature
         self.timeout = timeout
+        # Explicit override wins; otherwise defer to config (off by default).
+        self.cache_enabled = self.config.cache if cache is None else cache
 
     def _available_members(self) -> tuple[list[tuple[str, str]], list[str]]:
         """Partition requested members into (available, skipped-for-no-key).
@@ -87,6 +97,64 @@ class Council:
                 logger.warning("skipping %s (%s): no API key in environment", name, model_id)
                 skipped.append(name)
         return members, skipped
+
+    def _cache_key(
+        self,
+        prompt: str,
+        mode: str,
+        *,
+        rounds: int | None = None,
+        proposer: str | None = None,
+    ) -> str:
+        """Build the cache key for a run from the resolved, secret-free identity.
+
+        Uses the *resolved* member ids and the synthesizer/judge identity so two
+        runs collide only when they would genuinely produce equivalent output.
+        Members that would be skipped for a missing key are excluded -- a cache
+        entry reflects the council that actually ran, so a key reappearing later
+        produces the same membership. No environment value is read here.
+        """
+        members, _skipped = self._available_members()
+        synth_id = self.config.resolve_model_id(self.synthesizer)
+        return cache_mod.make_key(
+            prompt=prompt,
+            mode=mode,
+            members=members,
+            synthesizer=self.synthesizer,
+            synthesizer_model_id=synth_id,
+            temperature=self.temperature,
+            rounds=rounds,
+            proposer=proposer,
+        )
+
+    async def _cached_run(
+        self,
+        prompt: str,
+        mode: str,
+        run: Callable[[], Awaitable[CouncilResult]],
+        *,
+        rounds: int | None = None,
+        proposer: str | None = None,
+    ) -> CouncilResult:
+        """Serve ``run`` from the result cache when caching is enabled.
+
+        On a hit the cached :class:`CouncilResult` is returned with ``cached=True``
+        and the providers are not called. On a miss (or when caching is off) the
+        live ``run`` executes; a successful live run is stored best-effort. Cache
+        read/write failures never propagate -- they degrade to a normal live run.
+        """
+        if not self.cache_enabled:
+            return await run()
+
+        key = self._cache_key(prompt, mode, rounds=rounds, proposer=proposer)
+        hit = cache_mod.load(key)
+        if hit is not None:
+            logger.info("cache hit for %s run (%s)", mode, key[:12])
+            return hit
+
+        result = await run()
+        cache_mod.store(key, result)
+        return result
 
     async def fan_out(
         self,
@@ -141,6 +209,9 @@ class Council:
     async def ask(self, prompt: str, synthesize: bool = True) -> CouncilResult:
         """Run the council asynchronously.
 
+        When the result cache is enabled, an identical prior run is returned from
+        cache (``CouncilResult.cached is True``) without calling the providers.
+
         Args:
             prompt: The user prompt to fan out.
             synthesize: When True (default), merge answers via the synthesizer.
@@ -150,6 +221,13 @@ class Council:
             synthesis. A run with zero available members returns an empty-answer
             result rather than raising.
         """
+        mode = "synthesize" if synthesize else "raw"
+        return await self._cached_run(
+            prompt, mode, lambda: self._ask_uncached(prompt, synthesize=synthesize)
+        )
+
+    async def _ask_uncached(self, prompt: str, synthesize: bool = True) -> CouncilResult:
+        """The live ask path (no cache consultation). See :meth:`ask`."""
         members, skipped = self._available_members()
         result = CouncilResult(
             prompt=prompt,
@@ -234,19 +312,31 @@ class Council:
 
         Round 1 is an independent fan-out; rounds 2..N show each member its
         peers' anonymized prior answers; the synthesizer consolidates survivors.
+        Cache-served when caching is enabled (``rounds`` is part of the key).
         """
         from .modes import run_debate
 
-        return await run_debate(self, prompt, rounds=rounds)
+        return await self._cached_run(
+            prompt,
+            "debate",
+            lambda: run_debate(self, prompt, rounds=rounds),
+            rounds=rounds,
+        )
 
     async def adversarial(self, prompt: str, proposer: str | None = None) -> CouncilResult:
         """Run propose -> refute -> verdict. See :func:`conclave.modes.run_adversarial`.
 
         ``proposer`` (friendly name) defaults to the first requested member.
+        Cache-served when caching is enabled (``proposer`` is part of the key).
         """
         from .modes import run_adversarial
 
-        return await run_adversarial(self, prompt, proposer=proposer)
+        return await self._cached_run(
+            prompt,
+            "adversarial",
+            lambda: run_adversarial(self, prompt, proposer=proposer),
+            proposer=proposer,
+        )
 
     async def aclose(self) -> None:
         """Close the shared pooled HTTP client.

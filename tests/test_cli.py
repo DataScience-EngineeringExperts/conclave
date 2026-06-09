@@ -267,6 +267,58 @@ def test_skipped_members_warning_is_printed(monkeypatch, patch_cli_config, patch
     assert "gemini" in result.output
 
 
+def test_cache_flag_serves_second_run_from_cache(monkeypatch, patch_cli_config, tmp_path):
+    """`--cache` makes a second identical CLI run a hit (providers not re-called)."""
+    import conclave.council as council_mod
+    from conclave.models import ModelAnswer
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    _all_keys(monkeypatch)
+
+    counter = {"n": 0}
+
+    async def fake_call_model(name, model_id, messages, *, temperature=0.7, timeout=120.0):
+        counter["n"] += 1
+        return ModelAnswer(name=name, model_id=model_id, answer=f"ans-{model_id}")
+
+    monkeypatch.setattr(council_mod, "call_model", fake_call_model)
+
+    args = ["ask", "what is 2+2?", "--council", "grok", "--mode", "raw", "--cache", "--json"]
+    first = runner.invoke(cli.app, args)
+    assert first.exit_code == 0
+    n_after_first = counter["n"]
+    assert n_after_first > 0
+    assert json.loads(first.stdout)["cached"] is False
+
+    second = runner.invoke(cli.app, args)
+    assert second.exit_code == 0
+    assert counter["n"] == n_after_first  # no new provider calls -> served from cache
+    assert json.loads(second.stdout)["cached"] is True
+
+
+def test_no_cache_flag_runs_live_each_time(monkeypatch, patch_cli_config, tmp_path):
+    """`--no-cache` forces a live run even if config enabled caching."""
+    import conclave.council as council_mod
+    from conclave.models import ModelAnswer
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    _all_keys(monkeypatch)
+
+    counter = {"n": 0}
+
+    async def fake_call_model(name, model_id, messages, *, temperature=0.7, timeout=120.0):
+        counter["n"] += 1
+        return ModelAnswer(name=name, model_id=model_id, answer="ans")
+
+    monkeypatch.setattr(council_mod, "call_model", fake_call_model)
+
+    args = ["ask", "p", "--council", "grok", "--mode", "raw", "--no-cache", "--json"]
+    runner.invoke(cli.app, args)
+    n = counter["n"]
+    runner.invoke(cli.app, args)
+    assert counter["n"] == n * 2  # ran live both times
+
+
 def test_providers_command_lists_keys_without_values(monkeypatch, patch_cli_config):
     """`conclave providers` prints a table marking present/absent keys, no values."""
     monkeypatch.setenv("XAI_API_KEY", "super-secret-value")

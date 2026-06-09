@@ -162,6 +162,32 @@ synthesizer: claude
 
 Then: `conclave ask "..." --council fast`.
 
+## Result cache (optional, off by default)
+
+Repeated or eval runs can be served from an on-disk cache instead of re-calling
+the providers. It is **off by default** and **never persists API keys** — the
+cache key is a SHA-256 over the normalized prompt, the ordered council members
+(friendly name + resolved model id), the mode, the synthesizer/judge identity,
+and the mode params (temperature, debate `rounds`, adversarial `proposer`). No
+key value or env-var name ever reaches the key or the stored payload.
+
+Enable it per run with `--cache` (or disable a config default with `--no-cache`):
+
+```bash
+conclave ask "..." --council fast --cache
+```
+
+or set a default in `~/.conclave/config.yml`:
+
+```yaml
+cache: true
+```
+
+A cache hit returns the prior `CouncilResult` with `cached: true` set and does
+not touch the network. Entries live under `$XDG_CACHE_HOME/conclave` (else
+`~/.cache/conclave`); a corrupt or unreadable entry is treated as a miss and
+never crashes a run.
+
 ## Test
 
 ```bash

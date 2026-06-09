@@ -18,3 +18,10 @@ councils:
 
 # Default synthesizer (friendly name). Overridable with `--synthesizer`.
 synthesizer: claude
+
+# Optional result cache (OFF by default). When true, an identical repeat run is
+# served from an on-disk cache instead of re-calling the providers -- handy for
+# repeated/eval runs. Override per invocation with `--cache` / `--no-cache`.
+# The cache is keyed on (prompt, council, mode, model ids) and NEVER stores keys.
+# Stored under $XDG_CACHE_HOME/conclave (else ~/.cache/conclave).
+cache: false

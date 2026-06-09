@@ -62,12 +62,17 @@ class ConclaveConfig(BaseModel):
         councils: named lists of friendly names.
         synthesizer: friendly name of the default synthesizer model.
         endpoints: prefix -> custom OpenAI-compatible endpoint declaration.
+        cache: opt-in result cache (off by default). When ``True`` an identical
+            repeat run is served from the on-disk cache (see :mod:`conclave.cache`)
+            instead of re-calling the providers. The cache never persists keys.
+            A ``--cache/--no-cache`` CLI flag overrides this per invocation.
     """
 
     models: dict[str, str] = Field(default_factory=dict)
     councils: dict[str, list[str]] = Field(default_factory=dict)
     synthesizer: str = DEFAULT_SYNTHESIZER
     endpoints: dict[str, CustomEndpoint] = Field(default_factory=dict)
+    cache: bool = False
 
     def resolve_model_id(self, name: str) -> str:
         """Map a friendly name to a provider-prefixed model id.
@@ -183,9 +188,13 @@ def _load_config_uncached(path: Path) -> ConclaveConfig:
         if isinstance(spec, dict)
     }
 
+    # Off by default; only an explicit truthy ``cache: true`` in the file enables it.
+    cache = bool(raw.get("cache", False))
+
     return ConclaveConfig(
         models=merged_models,
         councils=councils,
         synthesizer=synthesizer,
         endpoints=endpoints,
+        cache=cache,
     )

@@ -165,6 +165,15 @@ def ask(
     as_json: bool = typer.Option(
         False, "--json", help="Emit the full result as JSON instead of panels."
     ),
+    cache: bool | None = typer.Option(
+        None,
+        "--cache/--no-cache",
+        help=(
+            "Use the on-disk result cache (off by default; defers to config when "
+            "unset). On a hit an identical prior run is returned without calling "
+            "the providers. The cache never stores API keys."
+        ),
+    ),
 ) -> None:
     """Fan PROMPT out to a council and synthesize, debate, or adversarially review.
 
@@ -190,7 +199,7 @@ def ask(
         err_console.print(f"[red]No council members resolved from '{council}'.[/red]")
         raise typer.Exit(code=2)
 
-    c = Council(models=members, synthesizer=synthesizer, config=cfg)
+    c = Council(models=members, synthesizer=synthesizer, config=cfg, cache=cache)
     if mode_lower == "debate":
         result = c.debate_sync(prompt, rounds=rounds)
     elif mode_lower == "adversarial":

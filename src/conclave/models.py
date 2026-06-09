@@ -110,6 +110,10 @@ class CouncilResult(BaseModel):
         rounds: Per-round answers for ``debate`` mode (empty otherwise).
         adversarial: The proposal/critique/verdict structure for
             ``adversarial`` mode (``None`` otherwise).
+        cached: ``True`` when this result was served from the optional result
+            cache rather than produced by a live run. ``False`` for every live
+            run and for freshly stored entries. Lets a consumer detect a cache
+            hit without re-running. See :mod:`conclave.cache`.
     """
 
     prompt: str
@@ -122,6 +126,7 @@ class CouncilResult(BaseModel):
     skipped: list[str] = Field(default_factory=list)
     rounds: list[DebateRound] = Field(default_factory=list)
     adversarial: AdversarialResult | None = None
+    cached: bool = False
 
     @property
     def successful_answers(self) -> list[ModelAnswer]:
