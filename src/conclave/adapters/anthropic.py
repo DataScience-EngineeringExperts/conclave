@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from ..models import TokenUsage
 from ..registry import PROVIDER_ENV_VARS
-from .base import ProviderError
+from .base import ProviderError, status_error
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -47,13 +47,15 @@ class AnthropicAdapter:
         self,
         model_id: str,
         messages: list[dict[str, str]],
-        temperature: float,
+        temperature: float | None,
         timeout: float,
         api_key: str,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the Messages POST, hoisting system out of the message array.
 
-        See :meth:`ProviderAdapter.build_request`.
+        ``temperature`` is included only when not ``None``; passing ``None``
+        omits it so the provider applies its own default (some models reject an
+        explicit ``temperature``). See :meth:`ProviderAdapter.build_request`.
         """
         headers = {
             "x-api-key": api_key,
@@ -78,8 +80,9 @@ class AnthropicAdapter:
             "model": self._bare_model(model_id),
             "max_tokens": self.max_tokens,
             "messages": turns,
-            "temperature": temperature,
         }
+        if temperature is not None:
+            body["temperature"] = temperature
         if system_parts:
             body["system"] = "\n\n".join(system_parts)
         return self.completions_url, headers, body
@@ -90,7 +93,9 @@ class AnthropicAdapter:
         See :meth:`ProviderAdapter.parse_response`.
         """
         if status < 200 or status >= 300:
-            raise ProviderError(_status_error(status, payload))
+            raise ProviderError(
+                status_error("anthropic", status, payload, secondary_keys=("type",))
+            )
         if not isinstance(payload, dict):
             raise ProviderError(f"anthropic: non-JSON response body (status {status})")
 
@@ -120,18 +125,3 @@ def _parse_usage(raw: object) -> TokenUsage | None:
         completion_tokens=completion,
         total_tokens=prompt + completion,
     )
-
-
-def _status_error(status: int, payload: object) -> str:
-    """Build a concise, redact-safe error message for a non-2xx status."""
-    detail = ""
-    if isinstance(payload, dict):
-        err = payload.get("error")
-        if isinstance(err, dict):
-            detail = str(err.get("message") or err.get("type") or "")
-        elif isinstance(err, str):
-            detail = err
-    elif isinstance(payload, str):
-        detail = payload[:200]
-    suffix = f": {detail}" if detail else ""
-    return f"anthropic: HTTP {status}{suffix}"

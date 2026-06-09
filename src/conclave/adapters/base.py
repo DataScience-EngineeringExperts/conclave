@@ -38,6 +38,65 @@ _HEADER_KEY_RE = re.compile(r"(x-(?:goog-)?api-key)\s*[:=]\s*[A-Za-z0-9._\-]+", 
 
 _REDACTED = "[REDACTED]"
 
+# Upper bound on the error-detail substring extracted from a provider body. A
+# provider can return an arbitrarily large error payload (a multi-KB
+# ``error.message`` has been observed); without a cap that whole blob lands in
+# ``ModelAnswer.error``, logs, and ``--json`` output, and amplifies any leak the
+# redactor then has to scrub. Bounded here so error strings stay readable.
+_DETAIL_CAP = 500
+
+
+def status_error(
+    prefix: str,
+    status: int,
+    payload: object,
+    *,
+    secondary_keys: tuple[str, ...] = (),
+) -> str:
+    """Build a concise, redact-safe ``"{prefix}: HTTP {status}[: detail]"`` string.
+
+    Shared by every concrete adapter so the non-2xx error format -- and the
+    detail length cap -- live in exactly one place. The extracted ``detail`` is
+    always truncated to :data:`_DETAIL_CAP` characters regardless of whether it
+    came from a dict ``error.message``, a secondary key, a string ``error``, a
+    top-level ``message``, or a raw string body. The returned message is NOT
+    redacted here; callers wrap it in :class:`ProviderError`, which redacts on
+    construction.
+
+    Args:
+        prefix: Provider label that opens the message (e.g. ``"anthropic"``).
+        status: HTTP status code returned by the transport.
+        payload: Decoded JSON object (dict), a raw string body, or anything else.
+        secondary_keys: Fallback keys read from a dict ``error`` object when
+            ``error.message`` is absent -- e.g. ``("type",)`` for Anthropic/OpenAI
+            or ``("status",)`` for Gemini. Tried in order.
+
+    Returns:
+        A bounded, single-line error string safe to pass to ``ProviderError``.
+    """
+    detail = ""
+    if isinstance(payload, dict):
+        err = payload.get("error")
+        if isinstance(err, dict):
+            detail = str(err.get("message") or "")
+            if not detail:
+                for key in secondary_keys:
+                    value = err.get(key)
+                    if value:
+                        detail = str(value)
+                        break
+        elif isinstance(err, str):
+            detail = err
+        # Some OpenAI-compatible providers put the message at the top level.
+        if not detail and "message" in payload:
+            detail = str(payload["message"])
+    elif isinstance(payload, str):
+        detail = payload
+
+    detail = detail[:_DETAIL_CAP]
+    suffix = f": {detail}" if detail else ""
+    return f"{prefix}: HTTP {status}{suffix}"
+
 
 def _custom_endpoint_env_vars() -> list[str]:
     """Return the env-var NAMES declared by custom endpoints, or [] on any error.
@@ -125,7 +184,7 @@ class ProviderAdapter(Protocol):
         self,
         model_id: str,
         messages: list[dict[str, str]],
-        temperature: float,
+        temperature: float | None,
         timeout: float,
         api_key: str,
     ) -> tuple[str, dict[str, str], dict]:
@@ -134,7 +193,9 @@ class ProviderAdapter(Protocol):
         Args:
             model_id: Friendly-resolved model id (e.g. ``"xai/grok-4.3"``).
             messages: OpenAI-style message list (roles system/user/assistant).
-            temperature: Sampling temperature.
+            temperature: Sampling temperature, or ``None`` to omit the parameter
+                entirely so the provider applies its own default (some models
+                reject an explicit ``temperature``).
             timeout: Per-call timeout in seconds (informational for body params).
             api_key: The resolved key VALUE, read at call time and never stored.
 
