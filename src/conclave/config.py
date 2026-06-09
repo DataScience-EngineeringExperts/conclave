@@ -70,10 +70,10 @@ class ConclaveConfig(BaseModel):
     endpoints: dict[str, CustomEndpoint] = Field(default_factory=dict)
 
     def resolve_model_id(self, name: str) -> str:
-        """Map a friendly name to a LiteLLM model id.
+        """Map a friendly name to a provider-prefixed model id.
 
         If ``name`` is unknown it is passed through verbatim, so a user can name
-        a council member by a raw LiteLLM id (e.g. ``"openai/gpt-4o"``).
+        a council member by a raw provider-prefixed id (e.g. ``"openai/gpt-4o"``).
         """
         return self.models.get(name, name)
 

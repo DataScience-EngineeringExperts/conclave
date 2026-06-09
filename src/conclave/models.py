@@ -22,7 +22,7 @@ class ModelAnswer(BaseModel):
 
     Attributes:
         name: Friendly council member name (e.g. ``"grok"``).
-        model_id: Resolved LiteLLM model id (e.g. ``"xai/grok-4.3"``).
+        model_id: Resolved provider-prefixed model id (e.g. ``"xai/grok-4.3"``).
         answer: The raw text answer, or ``None`` if the call failed.
         latency_s: Wall-clock seconds for the call.
         usage: Token usage if reported by the provider.
@@ -73,7 +73,7 @@ class AdversarialResult(BaseModel):
             judge could not run.
         verdict_error: Error message if the judge step failed, else ``None``.
         judge: Friendly name of the judge (synthesizer) model.
-        judge_model_id: Resolved LiteLLM id of the judge.
+        judge_model_id: Resolved provider-prefixed id of the judge.
     """
 
     proposer: str
@@ -101,7 +101,7 @@ class CouncilResult(BaseModel):
             ``debate`` this mirrors the final round so existing consumers that
             read ``answers``/``synthesis`` keep working unchanged.
         synthesizer: Friendly name of the synthesizer model, if synthesis ran.
-        synthesizer_model_id: Resolved LiteLLM id of the synthesizer.
+        synthesizer_model_id: Resolved provider-prefixed id of the synthesizer.
         synthesis: The merged consolidated answer, or ``None`` if not produced.
             For ``debate`` this holds the final synthesized answer; for
             ``adversarial`` it mirrors the judge's verdict.

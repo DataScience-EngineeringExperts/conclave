@@ -1,7 +1,7 @@
 """The Council: concurrent multi-model fan-out plus synthesis.
 
 ``Council`` is the primary importable entry point. It resolves friendly names to
-LiteLLM model ids, skips any member whose API key is absent, fans the prompt out
+provider-prefixed model ids, skips any member whose API key is absent, fans the prompt out
 concurrently, collects partial results even when some members fail, and (in
 synthesize mode) asks a synthesizer model to merge the answers into one.
 
@@ -42,7 +42,7 @@ class Council:
     """A council of foundation models with an optional synthesizer.
 
     Args:
-        models: Friendly names (or raw LiteLLM ids) of council members.
+        models: Friendly names (or raw provider-prefixed model ids) of council members.
         synthesizer: Friendly name of the synthesizer model. If ``None``, the
             config default is used.
         config: Pre-loaded config; if ``None``, loaded from disk + defaults.
