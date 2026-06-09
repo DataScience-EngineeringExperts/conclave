@@ -43,7 +43,7 @@ from .models import (
 )
 from .transport import aclose
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "Council",

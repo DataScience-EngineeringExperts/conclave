@@ -2,7 +2,7 @@
 
 This module owns, in ONE place, everything that defines a built-in provider:
 
-* its LiteLLM provider prefix,
+* its provider prefix,
 * the env var(s) that satisfy its key,
 * (for OpenAI-compatible providers) its full ``/chat/completions`` URL,
 * the friendly-name -> default model id mapping.
@@ -65,7 +65,7 @@ class OpenAICompatProvider:
     env_vars: tuple[str, ...]
 
 
-# Friendly name -> default LiteLLM model id. Overridable via ~/.conclave/config.yml.
+# Friendly name -> default provider-prefixed model id. Overridable via ~/.conclave/config.yml.
 DEFAULT_MODELS: dict[str, str] = {
     "grok": "xai/grok-4.3",
     "gemini": "gemini/gemini-2.5-pro",
@@ -100,7 +100,7 @@ NATIVE_PROVIDERS: dict[str, tuple[str, ...]] = {
     "anthropic": ("ANTHROPIC_API_KEY",),
 }
 
-# Derived: LiteLLM provider prefix -> the env var(s) that satisfy it. Built from
+# Derived: provider prefix -> the env var(s) that satisfy it. Built from
 # the single-source tables above so it can never drift from them. The first
 # present var in the list is the active key. Order matters for fallbacks.
 PROVIDER_ENV_VARS: dict[str, list[str]] = {
@@ -165,14 +165,14 @@ def _assert_metadata_consistent() -> None:
 
 
 def provider_prefix(model_id: str) -> str:
-    """Extract the LiteLLM provider prefix from a model id.
+    """Extract the provider prefix from a model id.
 
     Args:
         model_id: e.g. ``"xai/grok-4.3"``.
 
     Returns:
         The provider prefix (``"xai"``). If the id has no ``/`` we treat the
-        whole string as the prefix, which mirrors LiteLLM's bare-name handling.
+        whole string as the prefix (the bare-name convention for unprefixed ids).
     """
     return model_id.split("/", 1)[0] if "/" in model_id else model_id
 
