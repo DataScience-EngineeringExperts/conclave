@@ -14,8 +14,6 @@ endpoints sit in one place. Env-var names are sourced from
 
 from __future__ import annotations
 
-from typing import Optional
-
 from ..models import TokenUsage
 from .base import ProviderError
 
@@ -45,7 +43,7 @@ class OpenAICompatAdapter:
         prefix: str,
         completions_url: str,
         env_vars: tuple[str, ...],
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
     ) -> None:
         self.prefix = prefix
         self.completions_url = completions_url
@@ -82,9 +80,7 @@ class OpenAICompatAdapter:
             body["max_tokens"] = self.max_tokens
         return self.completions_url, headers, body
 
-    def parse_response(
-        self, status: int, payload: object
-    ) -> tuple[str, Optional[TokenUsage]]:
+    def parse_response(self, status: int, payload: object) -> tuple[str, TokenUsage | None]:
         """Parse ``choices[0].message.content`` + ``usage``.
 
         See :meth:`ProviderAdapter.parse_response`.
@@ -92,9 +88,7 @@ class OpenAICompatAdapter:
         if status < 200 or status >= 300:
             raise ProviderError(_status_error(self.prefix, status, payload))
         if not isinstance(payload, dict):
-            raise ProviderError(
-                f"{self.prefix}: non-JSON response body (status {status})"
-            )
+            raise ProviderError(f"{self.prefix}: non-JSON response body (status {status})")
 
         try:
             choices = payload["choices"]
@@ -112,7 +106,7 @@ class OpenAICompatAdapter:
         return content, usage
 
 
-def _parse_usage(raw: object) -> Optional[TokenUsage]:
+def _parse_usage(raw: object) -> TokenUsage | None:
     """Map an OpenAI-style ``usage`` block to :class:`TokenUsage`, or ``None``."""
     if not isinstance(raw, dict):
         return None

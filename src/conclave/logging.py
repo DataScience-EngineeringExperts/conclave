@@ -28,9 +28,7 @@ def get_logger(name: str = "conclave") -> logging.Logger:
         level_name = os.environ.get("CONCLAVE_LOG_LEVEL", "WARNING").upper()
         level = getattr(logging, level_name, logging.WARNING)
         handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
-        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
         root.addHandler(handler)
         root.setLevel(level)
         root.propagate = False

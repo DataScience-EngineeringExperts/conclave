@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from ..models import TokenUsage
 from ..registry import PROVIDER_ENV_VARS
@@ -33,9 +33,7 @@ _BEARER_RE = re.compile(r"Bearer\s+[A-Za-z0-9._\-]+", re.IGNORECASE)
 # Matches standalone provider-style keys: sk-..., xai-..., pplx-..., AIza... etc.
 _KEY_LIKE_RE = re.compile(r"\b(?:sk|xai|pplx|AIza)[A-Za-z0-9._\-]{8,}\b")
 # Matches an x-api-key / x-goog-api-key header echoed with its value.
-_HEADER_KEY_RE = re.compile(
-    r"(x-(?:goog-)?api-key)\s*[:=]\s*[A-Za-z0-9._\-]+", re.IGNORECASE
-)
+_HEADER_KEY_RE = re.compile(r"(x-(?:goog-)?api-key)\s*[:=]\s*[A-Za-z0-9._\-]+", re.IGNORECASE)
 
 _REDACTED = "[REDACTED]"
 
@@ -123,9 +121,7 @@ class ProviderAdapter(Protocol):
         """
         ...
 
-    def parse_response(
-        self, status: int, payload: object
-    ) -> tuple[str, Optional[TokenUsage]]:
+    def parse_response(self, status: int, payload: object) -> tuple[str, TokenUsage | None]:
         """Parse a provider response into ``(text, usage)``.
 
         Args:

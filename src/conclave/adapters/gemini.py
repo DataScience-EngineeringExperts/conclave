@@ -18,8 +18,6 @@ usage maps ``usageMetadata.promptTokenCount``/``candidatesTokenCount``/
 
 from __future__ import annotations
 
-from typing import Optional
-
 from ..models import TokenUsage
 from ..registry import PROVIDER_ENV_VARS
 from .base import ProviderError
@@ -87,14 +85,10 @@ class GeminiAdapter:
             },
         }
         if system_parts:
-            body["systemInstruction"] = {
-                "parts": [{"text": "\n\n".join(system_parts)}]
-            }
+            body["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
         return url, headers, body
 
-    def parse_response(
-        self, status: int, payload: object
-    ) -> tuple[str, Optional[TokenUsage]]:
+    def parse_response(self, status: int, payload: object) -> tuple[str, TokenUsage | None]:
         """Concatenate the first candidate's text parts. See base protocol."""
         if status < 200 or status >= 300:
             raise ProviderError(_status_error(status, payload))
@@ -111,9 +105,7 @@ class GeminiAdapter:
             ) from exc
 
         text = "".join(
-            part.get("text", "")
-            for part in parts
-            if isinstance(part, dict) and "text" in part
+            part.get("text", "") for part in parts if isinstance(part, dict) and "text" in part
         )
         if not text:
             raise ProviderError("gemini: empty response (no text parts)")
@@ -122,7 +114,7 @@ class GeminiAdapter:
         return text, usage
 
 
-def _parse_usage(raw: object) -> Optional[TokenUsage]:
+def _parse_usage(raw: object) -> TokenUsage | None:
     """Map Gemini ``usageMetadata`` counts to :class:`TokenUsage`."""
     if not isinstance(raw, dict):
         return None

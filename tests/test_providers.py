@@ -23,7 +23,6 @@ from conclave.adapters.openai_compat import OpenAICompatAdapter
 from conclave.config import ConclaveConfig, CustomEndpoint
 from conclave.providers import call_model
 
-
 # --------------------------------------------------------------------------- #
 # Adapter registry
 # --------------------------------------------------------------------------- #
@@ -33,17 +32,12 @@ def test_resolve_adapter_built_in_prefixes():
     assert isinstance(resolve_adapter("openai/gpt-4.1"), OpenAICompatAdapter)
     assert isinstance(resolve_adapter("xai/grok-4.3"), OpenAICompatAdapter)
     assert isinstance(resolve_adapter("perplexity/sonar-pro"), OpenAICompatAdapter)
-    assert isinstance(
-        resolve_adapter("anthropic/claude-sonnet-4-6"), AnthropicAdapter
-    )
+    assert isinstance(resolve_adapter("anthropic/claude-sonnet-4-6"), AnthropicAdapter)
     assert isinstance(resolve_adapter("gemini/gemini-2.5-pro"), GeminiAdapter)
 
 
 def test_resolve_adapter_per_provider_urls():
-    assert (
-        resolve_adapter("xai/grok-4.3").completions_url
-        == "https://api.x.ai/v1/chat/completions"
-    )
+    assert resolve_adapter("xai/grok-4.3").completions_url == "https://api.x.ai/v1/chat/completions"
     # Perplexity has NO /v1 segment.
     assert (
         resolve_adapter("perplexity/sonar-pro").completions_url
@@ -125,9 +119,7 @@ async def test_call_model_transport_error_becomes_model_answer_error(monkeypatch
 
     monkeypatch.setattr("conclave.transport.post_json", boom)
 
-    answer = await call_model(
-        "openai", "openai/gpt-4.1", [{"role": "user", "content": "hi"}]
-    )
+    answer = await call_model("openai", "openai/gpt-4.1", [{"role": "user", "content": "hi"}])
     assert not answer.ok
     assert answer.answer is None
     assert "timed out" in answer.error
@@ -138,9 +130,7 @@ async def test_call_model_missing_key_is_error(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("CONCLAVE_CONFIG", "/nonexistent/conclave.yml")
 
-    answer = await call_model(
-        "openai", "openai/gpt-4.1", [{"role": "user", "content": "hi"}]
-    )
+    answer = await call_model("openai", "openai/gpt-4.1", [{"role": "user", "content": "hi"}])
     assert not answer.ok
     assert "OPENAI_API_KEY" in answer.error
 
@@ -149,9 +139,7 @@ async def test_call_model_unknown_provider_is_error(monkeypatch):
     """An unknown provider prefix surfaces as a helpful, non-raising error."""
     monkeypatch.setenv("CONCLAVE_CONFIG", "/nonexistent/conclave.yml")
 
-    answer = await call_model(
-        "mystery", "mystery/model", [{"role": "user", "content": "hi"}]
-    )
+    answer = await call_model("mystery", "mystery/model", [{"role": "user", "content": "hi"}])
     assert not answer.ok
     assert "unknown provider 'mystery'" in answer.error
 

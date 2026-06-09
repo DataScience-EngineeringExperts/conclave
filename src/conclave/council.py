@@ -13,7 +13,7 @@ handling is written exactly once.
 from __future__ import annotations
 
 import asyncio
-from typing import Callable
+from collections.abc import Callable
 
 from .config import ConclaveConfig, load_config
 from .logging import get_logger
@@ -90,7 +90,7 @@ class Council:
     async def fan_out(
         self,
         members: list[tuple[str, str]],
-        messages_for: "MessagesFor",
+        messages_for: MessagesFor,
     ) -> list[ModelAnswer]:
         """Fan a per-member message list out concurrently and collect results.
 
@@ -123,7 +123,7 @@ class Council:
         # against any unexpected raise so one bad member can't abort the gather.
         gathered = await asyncio.gather(*tasks, return_exceptions=True)
         answers: list[ModelAnswer] = []
-        for (name, model_id), outcome in zip(members, gathered):
+        for (name, model_id), outcome in zip(members, gathered, strict=True):
             if isinstance(outcome, ModelAnswer):
                 answers.append(outcome)
             else:
@@ -161,9 +161,7 @@ class Council:
             return result
 
         base_messages = [{"role": "user", "content": prompt}]
-        result.answers = await self.fan_out(
-            members, lambda _name, _model_id: base_messages
-        )
+        result.answers = await self.fan_out(members, lambda _name, _model_id: base_messages)
 
         if synthesize:
             await self._synthesize(result)
@@ -189,9 +187,7 @@ class Council:
             logger.warning(result.synthesis_error)
             return
 
-        blocks = "\n\n".join(
-            f"### Answer from {a.name} ({a.model_id})\n{a.answer}" for a in usable
-        )
+        blocks = "\n\n".join(f"### Answer from {a.name} ({a.model_id})\n{a.answer}" for a in usable)
         user_content = (
             f"Original prompt:\n{result.prompt}\n\n"
             f"Council answers:\n\n{blocks}\n\n"
@@ -203,9 +199,7 @@ class Council:
         else:
             result.synthesis_error = answer.error
 
-    async def synthesize_blocks(
-        self, system_prompt: str, user_content: str
-    ) -> ModelAnswer:
+    async def synthesize_blocks(self, system_prompt: str, user_content: str) -> ModelAnswer:
         """Call the synthesizer model with an arbitrary system + user message.
 
         Shared by synthesize mode, debate's final consolidation, and the
@@ -244,9 +238,7 @@ class Council:
 
         return await run_debate(self, prompt, rounds=rounds)
 
-    async def adversarial(
-        self, prompt: str, proposer: str | None = None
-    ) -> CouncilResult:
+    async def adversarial(self, prompt: str, proposer: str | None = None) -> CouncilResult:
         """Run propose -> refute -> verdict. See :func:`conclave.modes.run_adversarial`.
 
         ``proposer`` (friendly name) defaults to the first requested member.
@@ -256,15 +248,14 @@ class Council:
         return await run_adversarial(self, prompt, proposer=proposer)
 
     @staticmethod
-    def _run_sync(coro_factory: Callable[[], "asyncio.Future | object"], label: str):
+    def _run_sync(coro_factory: Callable[[], asyncio.Future | object], label: str):
         """Run an async council method synchronously, guarding nested loops."""
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(coro_factory())
         raise RuntimeError(
-            f"{label}() called from within a running event loop; "
-            "await the async method instead"
+            f"{label}() called from within a running event loop; await the async method instead"
         )
 
     def ask_sync(self, prompt: str, synthesize: bool = True) -> CouncilResult:
@@ -273,19 +264,13 @@ class Council:
         Safe to call from non-async code. Raises ``RuntimeError`` if invoked
         from inside a running event loop -- use :meth:`ask` there instead.
         """
-        return self._run_sync(
-            lambda: self.ask(prompt, synthesize=synthesize), "ask_sync"
-        )
+        return self._run_sync(lambda: self.ask(prompt, synthesize=synthesize), "ask_sync")
 
     def debate_sync(self, prompt: str, rounds: int = 2) -> CouncilResult:
         """Synchronous wrapper around :meth:`debate`."""
-        return self._run_sync(
-            lambda: self.debate(prompt, rounds=rounds), "debate_sync"
-        )
+        return self._run_sync(lambda: self.debate(prompt, rounds=rounds), "debate_sync")
 
-    def adversarial_sync(
-        self, prompt: str, proposer: str | None = None
-    ) -> CouncilResult:
+    def adversarial_sync(self, prompt: str, proposer: str | None = None) -> CouncilResult:
         """Synchronous wrapper around :meth:`adversarial`."""
         return self._run_sync(
             lambda: self.adversarial(prompt, proposer=proposer), "adversarial_sync"

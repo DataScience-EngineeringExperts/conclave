@@ -20,7 +20,8 @@ clear :class:`ProviderError` that the call path turns into a helpful
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from ..registry import PROVIDER_ENV_VARS, provider_prefix
 from .anthropic import AnthropicAdapter
@@ -58,9 +59,7 @@ def _openai_compat_adapter(prefix: str) -> OpenAICompatAdapter:
     )
 
 
-def resolve_adapter(
-    model_id: str, config: "ConclaveConfig | None" = None
-) -> ProviderAdapter:
+def resolve_adapter(model_id: str, config: ConclaveConfig | None = None) -> ProviderAdapter:
     """Resolve a model id to the adapter that speaks its provider's wire format.
 
     Args:

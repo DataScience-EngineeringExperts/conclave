@@ -13,8 +13,6 @@ response; the transport just moves bytes and reports HTTP status.
 
 from __future__ import annotations
 
-from typing import Optional
-
 import httpx
 
 from .logging import get_logger
@@ -23,7 +21,7 @@ logger = get_logger("transport")
 
 # One shared, lazily-created client so connections are pooled across calls
 # within a process. httpx.AsyncClient is safe to share across concurrent tasks.
-_client: Optional[httpx.AsyncClient] = None
+_client: httpx.AsyncClient | None = None
 
 
 class TransportError(Exception):
@@ -69,9 +67,7 @@ async def post_json(
     """
     client = _get_client()
     try:
-        response = await client.post(
-            url, headers=headers, json=json_body, timeout=timeout
-        )
+        response = await client.post(url, headers=headers, json=json_body, timeout=timeout)
     except httpx.TimeoutException as exc:
         raise TransportError(f"request timed out after {timeout:.0f}s") from exc
     except httpx.HTTPError as exc:
