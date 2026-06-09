@@ -5,6 +5,10 @@ on:
     branches: ["main"]
   pull_request:
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   gitleaks:
     name: "gitleaks"
@@ -16,6 +20,6 @@ jobs:
           fetch-depth: 0
 
       - name: Scan for secrets
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
