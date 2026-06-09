@@ -16,9 +16,11 @@ Response text is the concatenation of every ``content[*].text`` block whose
 
 from __future__ import annotations
 
+import json
+
 from ..models import TokenUsage
 from ..registry import PROVIDER_ENV_VARS
-from .base import ProviderError, status_error
+from .base import ProviderError, SSEDelta, status_error
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -34,6 +36,7 @@ class AnthropicAdapter:
 
     prefix = "anthropic"
     completions_url = ANTHROPIC_URL
+    supports_streaming = True
 
     def __init__(self, max_tokens: int = DEFAULT_MAX_TOKENS) -> None:
         self.max_tokens = max_tokens
@@ -112,6 +115,87 @@ class AnthropicAdapter:
 
         usage = _parse_usage(payload.get("usage"))
         return text, usage
+
+    def stream_request(
+        self,
+        model_id: str,
+        messages: list[dict[str, str]],
+        temperature: float | None,
+        timeout: float,
+        api_key: str,
+    ) -> tuple[str, dict[str, str], dict]:
+        """Build the streaming POST: ``build_request`` + ``stream: true``.
+
+        Anthropic streams the same ``/v1/messages`` endpoint with ``stream:
+        true``; no other body change is needed. See
+        :meth:`ProviderAdapter.stream_request`.
+        """
+        url, headers, body = self.build_request(model_id, messages, temperature, timeout, api_key)
+        body["stream"] = True
+        return url, headers, body
+
+    def parse_sse_event(self, event: str, data: str) -> SSEDelta:
+        """Parse one Anthropic SSE frame by its named ``event`` type.
+
+        Event flow handled (verified against the Anthropic Messages streaming
+        reference):
+
+        * ``message_start`` -- carries ``message.usage.input_tokens`` (the
+          prompt accounting) -> a usage frame with ``prompt_tokens`` set.
+        * ``content_block_delta`` with ``delta.type == "text_delta"`` ->
+          ``delta.text`` is a text delta. (``input_json_delta`` /
+          ``thinking_delta`` blocks carry no answer text and are skipped.)
+        * ``message_delta`` -- carries the *cumulative* ``usage.output_tokens``
+          -> a usage frame with ``completion_tokens`` set (last wins).
+        * ``message_stop`` -> ``done=True``.
+        * ``error`` -- a structured stream error -> :class:`ProviderError`.
+
+        Other events (``content_block_start``/``stop``, ``ping``) yield an empty
+        :class:`SSEDelta`. See :meth:`ProviderAdapter.parse_sse_event`.
+        """
+        if event == "message_stop":
+            return SSEDelta(done=True)
+        try:
+            frame = json.loads(data)
+        except (ValueError, TypeError) as exc:
+            raise ProviderError(
+                f"anthropic: malformed stream frame ({type(exc).__name__})"
+            ) from exc
+        if not isinstance(frame, dict):
+            raise ProviderError("anthropic: malformed stream frame (non-object)")
+
+        frame_type = frame.get("type")
+        if frame_type == "error" or event == "error":
+            raise ProviderError(status_error("anthropic", 200, frame, secondary_keys=("type",)))
+
+        if frame_type == "content_block_delta":
+            delta = frame.get("delta")
+            if isinstance(delta, dict) and delta.get("type") == "text_delta":
+                text = delta.get("text")
+                if isinstance(text, str):
+                    return SSEDelta(text=text)
+            return SSEDelta()
+
+        if frame_type == "message_start":
+            message = frame.get("message")
+            usage = message.get("usage") if isinstance(message, dict) else None
+            if isinstance(usage, dict):
+                prompt = int(usage.get("input_tokens", 0) or 0)
+                if prompt:
+                    # Leave total at 0 so _merge_usage recomputes it from the
+                    # merged prompt + completion (Anthropic never sends a sum).
+                    return SSEDelta(usage=TokenUsage(prompt_tokens=prompt))
+            return SSEDelta()
+
+        if frame_type == "message_delta":
+            usage = frame.get("usage")
+            if isinstance(usage, dict):
+                completion = int(usage.get("output_tokens", 0) or 0)
+                if completion:
+                    return SSEDelta(usage=TokenUsage(completion_tokens=completion))
+            return SSEDelta()
+
+        return SSEDelta()
 
 
 def _parse_usage(raw: object) -> TokenUsage | None:

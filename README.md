@@ -112,6 +112,18 @@ the synthesizer *and* the adversarial judge.
 of a council defined in your config (see below). The built-in `default` council
 is all known providers.
 
+Add `--stream` to render member (and synthesizer) tokens live as they arrive
+(`synthesize`/`raw` modes only):
+
+```bash
+conclave ask "Explain CRDTs in two paragraphs." -c grok,gemini,claude --stream
+```
+
+Streaming and the non-streaming default produce the **same** final
+`CouncilResult`; `--stream` only changes how output is rendered. It is ignored
+with `--json` (which always emits the full structured payload), and on a cache
+hit the cached text is rendered in one shot rather than as a fake token stream.
+
 ## Quickstart (library)
 
 ```python
@@ -130,6 +142,28 @@ for answer in result.answers:
 
 print("SYNTHESIS:\n", result.synthesis)
 ```
+
+### Streaming (synthesize/raw)
+
+`Council.ask_stream` is an async generator that yields incremental `StreamEvent`s
+as member (and synthesizer) tokens arrive, then a terminal `done` event carrying
+the full `CouncilResult` — the same shape `ask()` returns, so downstream code is
+unaffected:
+
+```python
+async for event in council.ask_stream("What is the capital of France?"):
+    if event.type in ("member_delta", "synthesis_delta"):
+        print(event.text, end="", flush=True)        # live token
+    elif event.type == "done":
+        result = event.result                          # full CouncilResult
+```
+
+Event types: `member_delta` / `member_done` (per member, interleaved),
+`synthesis_delta` / `synthesis_done` (when synthesizing), and the final `done`.
+A member that cannot stream, or any mid-stream failure, degrades gracefully —
+partial text is preserved and the error lands on that member's `ModelAnswer`,
+never raising (the same never-raises contract as `ask`). Streaming applies to
+`synthesize`/`raw` only; `debate`/`adversarial` are not streamed.
 
 ### Debate and adversarial modes
 
