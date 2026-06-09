@@ -6,8 +6,6 @@ downstream library consumer (e.g. mcp-warden). Keep field names stable.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -33,10 +31,10 @@ class ModelAnswer(BaseModel):
 
     name: str
     model_id: str
-    answer: Optional[str] = None
+    answer: str | None = None
     latency_s: float = 0.0
-    usage: Optional[TokenUsage] = None
-    error: Optional[str] = None
+    usage: TokenUsage | None = None
+    error: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -81,10 +79,10 @@ class AdversarialResult(BaseModel):
     proposer: str
     proposal: ModelAnswer
     critiques: list[ModelAnswer] = Field(default_factory=list)
-    verdict: Optional[str] = None
-    verdict_error: Optional[str] = None
-    judge: Optional[str] = None
-    judge_model_id: Optional[str] = None
+    verdict: str | None = None
+    verdict_error: str | None = None
+    judge: str | None = None
+    judge_model_id: str | None = None
 
     @property
     def successful_critiques(self) -> list[ModelAnswer]:
@@ -117,13 +115,13 @@ class CouncilResult(BaseModel):
     prompt: str
     mode: str = "synthesize"
     answers: list[ModelAnswer] = Field(default_factory=list)
-    synthesizer: Optional[str] = None
-    synthesizer_model_id: Optional[str] = None
-    synthesis: Optional[str] = None
-    synthesis_error: Optional[str] = None
+    synthesizer: str | None = None
+    synthesizer_model_id: str | None = None
+    synthesis: str | None = None
+    synthesis_error: str | None = None
     skipped: list[str] = Field(default_factory=list)
     rounds: list[DebateRound] = Field(default_factory=list)
-    adversarial: Optional[AdversarialResult] = None
+    adversarial: AdversarialResult | None = None
 
     @property
     def successful_answers(self) -> list[ModelAnswer]:

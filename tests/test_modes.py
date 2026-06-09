@@ -221,6 +221,7 @@ async def test_debate_peers_anonymized_in_round2(monkeypatch, patch_call_model):
 
 async def test_debate_no_members_available(monkeypatch, patch_call_model, clear_keys):
     """Zero available members yields an empty debate result, not an exception."""
+
     def handler(model, messages, **kwargs):  # pragma: no cover - never called
         return make_response("unused")
 
@@ -372,9 +373,7 @@ async def test_adversarial_proposal_failure_skips_critics(monkeypatch, patch_cal
 
     patch_call_model(handler)
 
-    council = Council(
-        models=["grok", "gemini"], synthesizer="claude", config=_config()
-    )
+    council = Council(models=["grok", "gemini"], synthesizer="claude", config=_config())
     result = await council.adversarial("q")
 
     adv = result.adversarial
@@ -386,9 +385,7 @@ async def test_adversarial_proposal_failure_skips_critics(monkeypatch, patch_cal
     assert result.synthesis is None
 
 
-async def test_adversarial_proposer_no_key_falls_back(
-    monkeypatch, patch_call_model, clear_keys
-):
+async def test_adversarial_proposer_no_key_falls_back(monkeypatch, patch_call_model, clear_keys):
     """A requested proposer without a key falls back to the first available member."""
     # Only gemini + claude have keys; requested proposer grok does not.
     monkeypatch.setenv("GEMINI_API_KEY", "dummy")
@@ -432,9 +429,7 @@ async def test_adversarial_judge_no_key_returns_structure(
 
     patch_call_model(handler)
 
-    council = Council(
-        models=["grok", "gemini"], synthesizer="claude", config=_config()
-    )
+    council = Council(models=["grok", "gemini"], synthesizer="claude", config=_config())
     result = await council.adversarial("q")
 
     adv = result.adversarial
@@ -444,10 +439,9 @@ async def test_adversarial_judge_no_key_returns_structure(
     assert "no API key" in adv.verdict_error
 
 
-async def test_adversarial_no_members_available(
-    monkeypatch, patch_call_model, clear_keys
-):
+async def test_adversarial_no_members_available(monkeypatch, patch_call_model, clear_keys):
     """Zero available members yields an empty adversarial result, not an error."""
+
     def handler(model, messages, **kwargs):  # pragma: no cover - never called
         return make_response("unused")
 
@@ -478,9 +472,7 @@ def test_adversarial_sync_wrapper(monkeypatch, patch_call_model):
 
     patch_call_model(handler)
 
-    council = Council(
-        models=["grok", "gemini"], synthesizer="claude", config=_config()
-    )
+    council = Council(models=["grok", "gemini"], synthesizer="claude", config=_config())
     result = council.adversarial_sync("hi")
 
     assert result.mode == "adversarial"

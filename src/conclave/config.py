@@ -124,10 +124,7 @@ def load_config(path: Path | None = None) -> ConclaveConfig:
     merged_models = dict(DEFAULT_MODELS)
     merged_models.update(raw.get("models", {}) or {})
 
-    councils = {
-        name: list(members)
-        for name, members in (raw.get("councils", {}) or {}).items()
-    }
+    councils = {name: list(members) for name, members in (raw.get("councils", {}) or {}).items()}
     # Always provide a "default" council if none defined: all known providers.
     councils.setdefault("default", list(DEFAULT_MODELS.keys()))
 

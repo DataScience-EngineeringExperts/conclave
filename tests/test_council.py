@@ -72,21 +72,17 @@ async def test_concurrency_is_real(monkeypatch):
     """Members run concurrently: total time ~= slowest call, not the sum."""
     _all_keys(monkeypatch)
 
-    from conclave.models import ModelAnswer
     import conclave.council as council_mod
+    from conclave.models import ModelAnswer
 
     # Replace call_model with a coroutine that sleeps, to prove gather concurrency.
-    async def sleepy_call_model(
-        name, model_id, messages, *, temperature=0.7, timeout=120.0
-    ):
+    async def sleepy_call_model(name, model_id, messages, *, temperature=0.7, timeout=120.0):
         await asyncio.sleep(0.2)
         return ModelAnswer(name=name, model_id=model_id, answer=f"ok {model_id}")
 
     monkeypatch.setattr(council_mod, "call_model", sleepy_call_model)
 
-    council = Council(
-        models=["grok", "gemini", "perplexity"], config=_config()
-    )
+    council = Council(models=["grok", "gemini", "perplexity"], config=_config())
     start = asyncio.get_event_loop().time()
     result = await council.ask("hi", synthesize=False)
     elapsed = asyncio.get_event_loop().time() - start
@@ -160,9 +156,7 @@ async def test_synthesizer_without_key_returns_raw(monkeypatch, patch_call_model
 
     patch_call_model(handler)
 
-    council = Council(
-        models=["grok"], synthesizer="claude", config=_config()
-    )
+    council = Council(models=["grok"], synthesizer="claude", config=_config())
     result = await council.ask("q")
 
     assert len(result.successful_answers) == 1
@@ -173,6 +167,7 @@ async def test_synthesizer_without_key_returns_raw(monkeypatch, patch_call_model
 
 async def test_no_members_available(monkeypatch, patch_call_model, clear_keys):
     """Zero available members yields an empty result, not an exception."""
+
     def handler(model, messages, **kwargs):  # pragma: no cover - never called
         return make_response("unused")
 
@@ -195,9 +190,7 @@ async def test_synthesis_over_no_survivors(monkeypatch, patch_call_model):
 
     patch_call_model(handler)
 
-    council = Council(
-        models=["grok", "gemini"], synthesizer="claude", config=_config()
-    )
+    council = Council(models=["grok", "gemini"], synthesizer="claude", config=_config())
     result = await council.ask("q")
 
     assert len(result.failed_answers) == 2

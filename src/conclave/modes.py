@@ -35,9 +35,7 @@ if TYPE_CHECKING:  # avoid a circular import at runtime; only needed for typing
 logger = get_logger("modes")
 
 
-async def run_debate(
-    council: "Council", prompt: str, rounds: int = 2
-) -> CouncilResult:
+async def run_debate(council: Council, prompt: str, rounds: int = 2) -> CouncilResult:
     """Run a multi-round debate and return a structured :class:`CouncilResult`.
 
     Args:
@@ -62,8 +60,7 @@ async def run_debate(
 
     # Stable letter labels by initial position; survives drop-outs.
     letters = {
-        name: prompts.LETTERS[i % len(prompts.LETTERS)]
-        for i, (name, _) in enumerate(members)
+        name: prompts.LETTERS[i % len(prompts.LETTERS)] for i, (name, _) in enumerate(members)
     }
 
     survivors = list(members)  # (name, model_id) pairs still in the debate
@@ -74,9 +71,7 @@ async def run_debate(
             logger.warning("debate ended early at round %d: no survivors", round_no)
             break
 
-        messages_for = _debate_messages_for(
-            prompt, round_no, rounds, prior, letters
-        )
+        messages_for = _debate_messages_for(prompt, round_no, rounds, prior, letters)
         answers = await council.fan_out(survivors, messages_for)
         result.rounds.append(DebateRound(round_number=round_no, answers=answers))
 
@@ -119,23 +114,19 @@ def _debate_messages_for(
         return lambda _name, _model_id: base
 
     def messages_for(name: str, _model_id: str) -> list[dict[str, str]]:
-        peer_block = prompts.anonymized_peer_block(
-            name, letters[name], prior, letters
-        )
+        peer_block = prompts.anonymized_peer_block(name, letters[name], prior, letters)
         return [
             {"role": "system", "content": prompts.DEBATE_SYSTEM},
             {
                 "role": "user",
-                "content": prompts.debate_round_user(
-                    prompt, round_no, rounds, peer_block
-                ),
+                "content": prompts.debate_round_user(prompt, round_no, rounds, peer_block),
             },
         ]
 
     return messages_for
 
 
-async def _debate_synthesize(council: "Council", result: CouncilResult) -> None:
+async def _debate_synthesize(council: Council, result: CouncilResult) -> None:
     """Consolidate the final round's surviving answers via the synthesizer."""
     final = result.rounds[-1].successful_answers if result.rounds else []
     if not final:
@@ -166,7 +157,7 @@ async def _debate_synthesize(council: "Council", result: CouncilResult) -> None:
 
 
 async def run_adversarial(
-    council: "Council", prompt: str, proposer: str | None = None
+    council: Council, prompt: str, proposer: str | None = None
 ) -> CouncilResult:
     """Run a propose -> refute -> verdict pass and return a :class:`CouncilResult`.
 
@@ -239,9 +230,7 @@ def _critic_messages_for(prompt: str, proposal_text: str):
     return critic_messages
 
 
-def _pick_proposer(
-    members: list[tuple[str, str]], requested: str
-) -> tuple[str, str]:
+def _pick_proposer(members: list[tuple[str, str]], requested: str) -> tuple[str, str]:
     """Return the requested proposer member, or the first available as fallback."""
     for member in members:
         if member[0] == requested:
@@ -249,9 +238,7 @@ def _pick_proposer(
     return members[0]
 
 
-async def _adversarial_judge(
-    council: "Council", prompt: str, adv: AdversarialResult
-) -> None:
+async def _adversarial_judge(council: Council, prompt: str, adv: AdversarialResult) -> None:
     """Run the judge over the proposal + critiques, mutating ``adv``."""
     judge_id = council.config.resolve_model_id(council.synthesizer)
     adv.judge = council.synthesizer
@@ -259,8 +246,7 @@ async def _adversarial_judge(
 
     if not adv.proposal.ok:
         adv.verdict_error = (
-            f"proposal from '{adv.proposer}' failed ({adv.proposal.error}); "
-            "no verdict produced"
+            f"proposal from '{adv.proposer}' failed ({adv.proposal.error}); no verdict produced"
         )
         logger.warning(adv.verdict_error)
         return
@@ -275,8 +261,7 @@ async def _adversarial_judge(
     usable_critiques = adv.successful_critiques
     if usable_critiques:
         critique_blocks = "\n\n".join(
-            f"### Critique from {c.name} ({c.model_id})\n{c.answer}"
-            for c in usable_critiques
+            f"### Critique from {c.name} ({c.model_id})\n{c.answer}" for c in usable_critiques
         )
     else:
         critique_blocks = "(no usable critiques were produced)"

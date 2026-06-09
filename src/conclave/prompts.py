@@ -70,9 +70,7 @@ def anonymized_peer_block(
     parts: list[str] = []
     own = prior.get(self_name)
     if own is not None and own.ok:
-        parts.append(
-            f"### Your previous answer (you are Model {self_letter})\n{own.answer}"
-        )
+        parts.append(f"### Your previous answer (you are Model {self_letter})\n{own.answer}")
     for name, ans in prior.items():
         if name == self_name or not ans.ok:
             continue

@@ -19,8 +19,8 @@ Transport-level tests (in ``test_providers.py``) instead patch
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 import pytest
 
@@ -61,9 +61,7 @@ def patch_call_model(monkeypatch) -> Callable:
     import conclave.council as council_mod
 
     def install(handler: Callable):
-        async def fake_call_model(
-            name, model_id, messages, *, temperature=0.7, timeout=120.0
-        ):
+        async def fake_call_model(name, model_id, messages, *, temperature=0.7, timeout=120.0):
             # A tiny await so concurrency is genuinely exercised by gather.
             await asyncio.sleep(0)
             try:

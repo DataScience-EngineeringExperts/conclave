@@ -12,7 +12,6 @@ Two commands:
 from __future__ import annotations
 
 import json
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -60,9 +59,7 @@ def _answer_panel(ans, *, border: str = "cyan") -> Panel:
 def _print_skipped(result: CouncilResult) -> None:
     """Print the skipped-no-key warning line if any members were skipped."""
     if result.skipped:
-        err_console.print(
-            f"[yellow]Skipped (no key): {', '.join(result.skipped)}[/yellow]"
-        )
+        err_console.print(f"[yellow]Skipped (no key): {', '.join(result.skipped)}[/yellow]")
 
 
 def _print_synthesis(result: CouncilResult, title: str = "SYNTHESIS") -> None:
@@ -118,8 +115,7 @@ def _render_adversarial(result: CouncilResult) -> None:
         console.print(
             Panel(
                 adv.verdict,
-                title=f"[bold green]VERDICT[/bold green] "
-                f"({adv.judge} · {adv.judge_model_id})",
+                title=f"[bold green]VERDICT[/bold green] ({adv.judge} · {adv.judge_model_id})",
                 border_style="green",
             )
         )
@@ -154,13 +150,13 @@ def ask(
         "-m",
         help="Run mode: synthesize | raw | debate | adversarial.",
     ),
-    synthesizer: Optional[str] = typer.Option(
+    synthesizer: str | None = typer.Option(
         None, "--synthesizer", "-s", help="Override the synthesizer/judge model name."
     ),
     rounds: int = typer.Option(
         2, "--rounds", "-r", help="Number of debate rounds (debate mode only).", min=1
     ),
-    proposer: Optional[str] = typer.Option(
+    proposer: str | None = typer.Option(
         None,
         "--proposer",
         "-p",
@@ -174,8 +170,7 @@ def ask(
     mode_lower = mode.lower()
     if mode_lower not in _VALID_MODES:
         err_console.print(
-            f"[red]Unknown mode '{mode}'. Choose one of: "
-            f"{', '.join(sorted(_VALID_MODES))}.[/red]"
+            f"[red]Unknown mode '{mode}'. Choose one of: {', '.join(sorted(_VALID_MODES))}.[/red]"
         )
         raise typer.Exit(code=2)
 
@@ -199,8 +194,7 @@ def ask(
 
     if not result.answers:
         err_console.print(
-            "[red]No council members had keys available. "
-            "Run 'conclave providers' to check.[/red]"
+            "[red]No council members had keys available. Run 'conclave providers' to check.[/red]"
         )
         raise typer.Exit(code=1)
 
@@ -224,9 +218,7 @@ def providers() -> None:
         table.add_row(name, model_id, mark, source)
 
     console.print(table)
-    console.print(
-        f"[dim]synthesizer default: {cfg.synthesizer} · conclave {__version__}[/dim]"
-    )
+    console.print(f"[dim]synthesizer default: {cfg.synthesizer} · conclave {__version__}[/dim]")
 
 
 def _builtin_default_note() -> str:

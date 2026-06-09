@@ -22,7 +22,6 @@ from conclave.adapters.anthropic import AnthropicAdapter
 from conclave.adapters.gemini import GeminiAdapter
 from conclave.adapters.openai_compat import OpenAICompatAdapter
 
-
 # --------------------------------------------------------------------------- #
 # OpenAI-compatible adapter (openai / xai / perplexity)
 # --------------------------------------------------------------------------- #
@@ -39,9 +38,7 @@ def _openai_adapter() -> OpenAICompatAdapter:
 def test_openai_compat_build_request():
     adapter = _openai_adapter()
     messages = [{"role": "user", "content": "hi"}]
-    url, headers, body = adapter.build_request(
-        "openai/gpt-4.1", messages, 0.7, 120.0, "sk-secret"
-    )
+    url, headers, body = adapter.build_request("openai/gpt-4.1", messages, 0.7, 120.0, "sk-secret")
     assert url == "https://api.openai.com/v1/chat/completions"
     assert headers["Authorization"] == "Bearer sk-secret"
     assert headers["Content-Type"] == "application/json"
@@ -210,8 +207,7 @@ def test_gemini_build_request_role_mapping_and_system_instruction():
     )
     # Model embedded in the URL path; gemini/ prefix stripped.
     assert url == (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-2.5-pro:generateContent"
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
     )
     # Auth header is x-goog-api-key (no Bearer).
     assert headers["x-goog-api-key"] == "AIza-secret"
@@ -243,9 +239,7 @@ def test_gemini_build_request_configurable_max_output_tokens_no_system():
 def test_gemini_parse_success():
     adapter = GeminiAdapter()
     payload = {
-        "candidates": [
-            {"content": {"parts": [{"text": "part one "}, {"text": "part two"}]}}
-        ],
+        "candidates": [{"content": {"parts": [{"text": "part one "}, {"text": "part two"}]}}],
         "usageMetadata": {
             "promptTokenCount": 8,
             "candidatesTokenCount": 6,

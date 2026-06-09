@@ -16,8 +16,6 @@ Response text is the concatenation of every ``content[*].text`` block whose
 
 from __future__ import annotations
 
-from typing import Optional
-
 from ..models import TokenUsage
 from ..registry import PROVIDER_ENV_VARS
 from .base import ProviderError
@@ -86,9 +84,7 @@ class AnthropicAdapter:
             body["system"] = "\n\n".join(system_parts)
         return self.completions_url, headers, body
 
-    def parse_response(
-        self, status: int, payload: object
-    ) -> tuple[str, Optional[TokenUsage]]:
+    def parse_response(self, status: int, payload: object) -> tuple[str, TokenUsage | None]:
         """Concatenate ``content[*].text`` and map usage.
 
         See :meth:`ProviderAdapter.parse_response`.
@@ -100,9 +96,7 @@ class AnthropicAdapter:
 
         content = payload.get("content")
         if not isinstance(content, list):
-            raise ProviderError(
-                "anthropic: malformed response, missing content array"
-            )
+            raise ProviderError("anthropic: malformed response, missing content array")
         text = "".join(
             block.get("text", "")
             for block in content
@@ -115,7 +109,7 @@ class AnthropicAdapter:
         return text, usage
 
 
-def _parse_usage(raw: object) -> Optional[TokenUsage]:
+def _parse_usage(raw: object) -> TokenUsage | None:
     """Map Anthropic ``input_tokens``/``output_tokens`` to :class:`TokenUsage`."""
     if not isinstance(raw, dict):
         return None

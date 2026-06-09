@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from conclave.config import load_config
 from conclave.registry import (
     DEFAULT_MODELS,

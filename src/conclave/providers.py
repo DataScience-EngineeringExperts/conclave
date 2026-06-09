@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Optional
 
 from . import transport
 from .adapters import ProviderError, resolve_adapter
@@ -29,7 +28,7 @@ from .transport import TransportError
 logger = get_logger("providers")
 
 
-def _resolve_key(adapter: ProviderAdapter) -> Optional[str]:
+def _resolve_key(adapter: ProviderAdapter) -> str | None:
     """Read the active key VALUE for an adapter from the environment, or None.
 
     Walks the adapter's candidate env var names in order and returns the first
@@ -77,9 +76,7 @@ async def call_model(
     except ProviderError as exc:
         latency = time.perf_counter() - started
         logger.warning("%s (%s) unresolved: %s", name, model_id, exc)
-        return ModelAnswer(
-            name=name, model_id=model_id, latency_s=latency, error=str(exc)
-        )
+        return ModelAnswer(name=name, model_id=model_id, latency_s=latency, error=str(exc))
 
     api_key = _resolve_key(adapter)
     if api_key is None:
@@ -87,9 +84,7 @@ async def call_model(
         names = " or ".join(adapter.env_vars) or "(none)"
         msg = f"no API key in environment (set {names})"
         logger.warning("%s (%s) %s", name, model_id, msg)
-        return ModelAnswer(
-            name=name, model_id=model_id, latency_s=latency, error=msg
-        )
+        return ModelAnswer(name=name, model_id=model_id, latency_s=latency, error=msg)
 
     try:
         url, headers, body = adapter.build_request(
@@ -112,13 +107,9 @@ async def call_model(
         # transport message and any composed string.
         message = redact(str(exc))
         logger.warning("%s (%s) failed: %s", name, model_id, message)
-        return ModelAnswer(
-            name=name, model_id=model_id, latency_s=latency, error=message
-        )
+        return ModelAnswer(name=name, model_id=model_id, latency_s=latency, error=message)
     except Exception as exc:  # noqa: BLE001 -- never let an unexpected raise kill the run
         latency = time.perf_counter() - started
         message = redact(f"{type(exc).__name__}: {exc}")
         logger.warning("%s (%s) unexpected error: %s", name, model_id, message)
-        return ModelAnswer(
-            name=name, model_id=model_id, latency_s=latency, error=message
-        )
+        return ModelAnswer(name=name, model_id=model_id, latency_s=latency, error=message)
