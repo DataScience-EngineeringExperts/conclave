@@ -355,11 +355,18 @@ async def test_adversarial_critic_failure_still_verdicts(monkeypatch, patch_call
     assert adv.verdict == "VERDICT DESPITE FAILURE"
 
 
-async def test_adversarial_proposal_failure_skips_critics(monkeypatch, patch_call_model):
-    """If the proposal itself fails, critics are skipped and no verdict is made."""
+async def test_adversarial_all_proposers_fail_degrades_to_synthesize(monkeypatch, patch_call_model):
+    """If every member fails as proposer, the run degrades to synthesize (issue #9).
+
+    No member can produce a usable proposal, so there is nothing to refute. The
+    run must NOT abort with "no verdict produced"; it degrades and surfaces an
+    actionable warning on ``result.synthesis_error`` (mirrored to the adversarial
+    ``verdict_error``). Critics never run because no proposal exists.
+    """
     _all_keys(monkeypatch)
 
     critic_calls: list[str] = []
+    proposer_attempts: list[str] = []
 
     def handler(model, messages, **kwargs):
         system = _system_text(messages)
@@ -368,7 +375,8 @@ async def test_adversarial_proposal_failure_skips_critics(monkeypatch, patch_cal
         if "critic on an adversarial review" in system:  # pragma: no cover
             critic_calls.append(model)
             return make_response("crit")
-        # Proposal (grok) fails.
+        # Every proposal attempt fails (grok first, then gemini fallback).
+        proposer_attempts.append(model)
         raise RuntimeError("proposer down")
 
     patch_call_model(handler)
@@ -376,13 +384,97 @@ async def test_adversarial_proposal_failure_skips_critics(monkeypatch, patch_cal
     council = Council(models=["grok", "gemini"], synthesizer="claude", config=_config())
     result = await council.adversarial("q")
 
-    adv = result.adversarial
-    assert not adv.proposal.ok
-    assert adv.critiques == []
+    # Both members were tried as proposer in council order before degrading.
+    assert proposer_attempts == ["xai/grok-4.3", "gemini/gemini-2.5-pro"]
+    # No critics ran -- there was no usable proposal to refute.
     assert critic_calls == []
+    # The actionable degrade warning is surfaced on the CouncilResult.
+    assert result.synthesis_error is not None
+    assert "degraded to synthesize" in result.synthesis_error
+    assert "grok, gemini" in result.synthesis_error
+    # Mirrored into the adversarial structure for field-specific consumers.
+    adv = result.adversarial
+    assert adv is not None
     assert adv.verdict is None
-    assert "proposal from 'grok' failed" in adv.verdict_error
-    assert result.synthesis is None
+    assert adv.verdict_error == result.synthesis_error
+    assert not adv.proposal.ok
+
+
+async def test_adversarial_failed_proposer_falls_back_to_next_member(monkeypatch, patch_call_model):
+    """A chosen proposer returning an unusable answer falls back to the next member.
+
+    The run completes with a real verdict (issue #9). The failed first proposer
+    is recorded in ``answers`` but never doubles as a critic; the surviving
+    members critique the *successful* fallback proposal.
+    """
+    _all_keys(monkeypatch)
+
+    def handler(model, messages, **kwargs):
+        system = _system_text(messages)
+        if "judge of an adversarial review" in system:
+            return make_response("VERDICT AFTER FALLBACK")
+        if "critic on an adversarial review" in system:
+            return make_response(f"critique from {model}")
+        # Proposal step: the first proposer (grok) fails; gemini succeeds.
+        if model == "xai/grok-4.3":
+            raise RuntimeError("grok malformed proposal")
+        return make_response(f"proposal from {model}")
+
+    patch_call_model(handler)
+
+    council = Council(
+        models=["grok", "gemini", "perplexity"],
+        synthesizer="claude",
+        config=_config(),
+    )
+    result = await council.adversarial("q")  # requested proposer = grok
+
+    adv = result.adversarial
+    assert adv is not None
+    # Fallback proposer is gemini (next available after the failed grok).
+    assert adv.proposer == "gemini"
+    assert adv.proposal.ok
+    assert "proposal from gemini/gemini-2.5-pro" in adv.proposal.answer
+    # The failed grok attempt is NOT a critic; perplexity is the sole critic.
+    assert {c.name for c in adv.critiques} == {"perplexity"}
+    # The run completed with a real verdict despite the proposer failure.
+    assert adv.verdict == "VERDICT AFTER FALLBACK"
+    assert result.synthesis == "VERDICT AFTER FALLBACK"
+    assert result.synthesis_error is None
+    # answers carries the failed proposal attempt + the successful proposal + critique.
+    failed = [a for a in result.answers if not a.ok]
+    assert {a.name for a in failed} == {"grok"}
+
+
+async def test_adversarial_explicit_failed_proposer_falls_back(monkeypatch, patch_call_model):
+    """An explicit --proposer that fails still falls back to the next member."""
+    _all_keys(monkeypatch)
+
+    def handler(model, messages, **kwargs):
+        system = _system_text(messages)
+        if "judge of an adversarial review" in system:
+            return make_response("V")
+        if "critic on an adversarial review" in system:
+            return make_response("crit")
+        if model == "perplexity/sonar-pro":
+            raise RuntimeError("perplexity proposal blocked")
+        return make_response(f"prop {model}")
+
+    patch_call_model(handler)
+
+    council = Council(
+        models=["grok", "gemini", "perplexity"],
+        synthesizer="claude",
+        config=_config(),
+    )
+    # Explicitly request perplexity as proposer; it fails -> first available (grok).
+    result = await council.adversarial("q", proposer="perplexity")
+
+    adv = result.adversarial
+    assert adv is not None
+    assert adv.proposer == "grok"
+    assert adv.proposal.ok
+    assert adv.verdict == "V"
 
 
 async def test_adversarial_proposer_no_key_falls_back(monkeypatch, patch_call_model, clear_keys):
