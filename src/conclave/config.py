@@ -66,6 +66,13 @@ class ConclaveConfig(BaseModel):
             repeat run is served from the on-disk cache (see :mod:`conclave.cache`)
             instead of re-calling the providers. The cache never persists keys.
             A ``--cache/--no-cache`` CLI flag overrides this per invocation.
+        converge_threshold: opt-in debate early-stop threshold (off by default,
+            ``None``). When set to a value in ``[0.0, 1.0]``, a ``debate`` run
+            stops before ``rounds`` is exhausted once the round-over-round answer
+            stability (a :mod:`difflib` similarity ratio averaged across members)
+            reaches the threshold. ``None`` keeps the historic fixed-rounds
+            behavior exactly. A ``--converge-threshold`` / ``--converge/--no-converge``
+            CLI flag overrides this per invocation. See :func:`conclave.modes.run_debate`.
     """
 
     models: dict[str, str] = Field(default_factory=dict)
@@ -73,6 +80,7 @@ class ConclaveConfig(BaseModel):
     synthesizer: str = DEFAULT_SYNTHESIZER
     endpoints: dict[str, CustomEndpoint] = Field(default_factory=dict)
     cache: bool = False
+    converge_threshold: float | None = None
 
     def resolve_model_id(self, name: str) -> str:
         """Map a friendly name to a provider-prefixed model id.
@@ -191,10 +199,38 @@ def _load_config_uncached(path: Path) -> ConclaveConfig:
     # Off by default; only an explicit truthy ``cache: true`` in the file enables it.
     cache = bool(raw.get("cache", False))
 
+    # Off by default (None). A malformed value degrades to off rather than raising,
+    # keeping config loading resilient like the rest of this module.
+    converge_threshold = _coerce_threshold(raw.get("converge_threshold"))
+
     return ConclaveConfig(
         models=merged_models,
         councils=councils,
         synthesizer=synthesizer,
         endpoints=endpoints,
         cache=cache,
+        converge_threshold=converge_threshold,
     )
+
+
+def _coerce_threshold(value: Any) -> float | None:
+    """Coerce a config ``converge_threshold`` value to a float in ``[0.0, 1.0]``.
+
+    Returns ``None`` (early-stop off) for an absent, non-numeric, or out-of-range
+    value, logging a warning in the latter cases. This mirrors the module's
+    resilient loading: a bad config field never crashes a run, it just disables
+    the optional feature.
+    """
+    if value is None:
+        return None
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError):
+        logger.warning("converge_threshold %r is not a number; disabling early-stop", value)
+        return None
+    if not 0.0 <= threshold <= 1.0:
+        logger.warning(
+            "converge_threshold %s is outside [0.0, 1.0]; disabling early-stop", threshold
+        )
+        return None
+    return threshold

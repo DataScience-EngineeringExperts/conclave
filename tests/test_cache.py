@@ -28,6 +28,7 @@ from conclave import Council
 from conclave import cache as cache_mod
 from conclave.config import ConclaveConfig
 from conclave.models import ModelAnswer
+from tests.conftest import make_response
 
 
 @pytest.fixture
@@ -316,3 +317,62 @@ def test_make_key_normalizes_whitespace():
     assert cache_mod.make_key(prompt="a  b\n c", **common) == cache_mod.make_key(
         prompt=" a b c ", **common
     )
+
+
+def test_make_key_debate_converge_threshold_differs(monkeypatch):
+    """A converged-config debate and a no-converge debate must NOT collide (issue #4).
+
+    Otherwise identical inputs: only ``converge_threshold`` differs. The cache key
+    must differ so a converged run (which may stop early) is never served for a
+    fixed-rounds request, and vice versa.
+    """
+    base = dict(
+        prompt="hello world",
+        mode="debate",
+        members=[("a", "x/1"), ("b", "y/2")],
+        synthesizer="claude",
+        synthesizer_model_id="anthropic/claude-sonnet-4-6",
+        temperature=0.7,
+        rounds=5,
+    )
+    k_off = cache_mod.make_key(converge_threshold=None, **base)
+    k_on = cache_mod.make_key(converge_threshold=0.9, **base)
+    k_on2 = cache_mod.make_key(converge_threshold=0.95, **base)
+    assert k_off != k_on  # converge on vs off -> different keys
+    assert k_on != k_on2  # different thresholds -> different keys
+    # Determinism preserved.
+    assert k_off == cache_mod.make_key(converge_threshold=None, **base)
+
+
+async def test_cache_converge_vs_fixed_no_collision(cache_home, monkeypatch, patch_call_model):
+    """End-to-end: a converged debate and a fixed debate get distinct cache entries.
+
+    With caching enabled, running the same prompt as a converged debate then as a
+    fixed (no-converge) debate must produce two separate cache files -- the second
+    run must not be served the first run's result.
+    """
+    _set_keys(monkeypatch)
+
+    def handler(model, messages, **kwargs):
+        system = next((m["content"] for m in messages if m.get("role") == "system"), "")
+        if "synthesizer concluding a multi-round" in system:
+            return make_response("SYNTH")
+        return make_response(f"identical stable answer from {model}")
+
+    patch_call_model(handler)
+
+    cfg = _config(cache=True)
+    council = Council(models=["grok", "gemini"], synthesizer="claude", config=cfg, cache=True)
+
+    converged = await council.debate("q", rounds=5, converge_threshold=0.9)
+    fixed = await council.debate("q", rounds=5)  # no convergence
+
+    # The converged run stopped early; the fixed run ran all 5 rounds. If they had
+    # collided, the fixed run would have been served the converged (2-round) entry.
+    assert converged.converged is True
+    assert len(converged.rounds) == 2
+    assert fixed.converged is False
+    assert len(fixed.rounds) == 5
+    # Two distinct cache files exist.
+    files = list(cache_home.glob("*.json"))
+    assert len(files) == 2

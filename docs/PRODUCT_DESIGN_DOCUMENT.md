@@ -345,8 +345,15 @@ Ordered roughly by strategic value to the origin use case and to mcp-warden.
 
 1. **`vote` mode** — structured majority with reported split. Needs a constrained
    answer schema so votes are comparable.
-2. **Debate convergence/stop criteria** — today debate runs a fixed `--rounds`; add optional
-   early-stop when answers converge (and a configurable convergence signal).
+2. ~~**Debate convergence/stop criteria** — today debate runs a fixed `--rounds`; add optional
+   early-stop when answers converge (and a configurable convergence signal).~~ **LANDED**
+   (issue #4): opt-in early-stop via `converge_threshold` (config field, `Council.debate`
+   param, and `--converge-threshold` / `--converge`/`--no-converge` CLI flags). The signal is
+   round-over-round answer stability — per-member `difflib.SequenceMatcher` ratio averaged
+   across members — deterministic, stdlib-only, offline-testable. Off by default (`None`),
+   preserving fixed-rounds behavior exactly. Recorded on `CouncilResult.converged` +
+   `convergence_score`; `converge_threshold` is part of the debate cache key so a converged
+   run and a fixed run never collide. Kept in the list, struck through, for traceability.
 3. **More first-class providers** — additional friendly-name defaults (e.g. more OpenAI,
    Anthropic, Google, and open-weights endpoints). New OpenAI-compatible vendors are already
    config-only via `endpoints:`; this item is about promoting common ones to typed defaults

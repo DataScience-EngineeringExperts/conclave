@@ -84,6 +84,7 @@ def make_key(
     temperature: float,
     rounds: int | None = None,
     proposer: str | None = None,
+    converge_threshold: float | None = None,
 ) -> str:
     """Build the stable cache key (sha256 hex) for a council run.
 
@@ -95,8 +96,8 @@ def make_key(
     * ordered ``(friendly_name, resolved_model_id)`` member pairs (order matters --
       see module docstring),
     * synthesizer/judge friendly name + resolved model id,
-    * temperature, and mode params (``rounds`` for debate, ``proposer`` for
-      adversarial) when they apply.
+    * temperature, and mode params (``rounds`` + ``converge_threshold`` for
+      debate, ``proposer`` for adversarial) when they apply.
 
     Args:
         prompt: The raw user prompt (normalized internally).
@@ -108,6 +109,9 @@ def make_key(
         rounds: Debate round count (included only for ``debate``).
         proposer: Adversarial proposer friendly name (included only for
             ``adversarial``).
+        converge_threshold: Debate early-stop threshold (included only for
+            ``debate``). A converged run and a fixed-rounds run over otherwise
+            identical inputs must not collide, so this is part of the key.
 
     Returns:
         A 64-char lowercase hex SHA-256 digest. Contains zero key material.
@@ -124,6 +128,9 @@ def make_key(
     }
     if mode == "debate":
         payload["rounds"] = rounds
+        # Early-stop changes how many rounds actually run and thus the output;
+        # it must distinguish a converged run from a fixed-rounds run.
+        payload["converge_threshold"] = converge_threshold
     if mode == "adversarial":
         payload["proposer"] = proposer
 

@@ -25,3 +25,12 @@ synthesizer: claude
 # The cache is keyed on (prompt, council, mode, model ids) and NEVER stores keys.
 # Stored under $XDG_CACHE_HOME/conclave (else ~/.cache/conclave).
 cache: false
+
+# Optional debate early-stop on convergence (OFF by default, unset). When set to
+# a value in [0.0, 1.0], a `--mode debate` run stops before `--rounds` is
+# exhausted once answers stabilize round-over-round (a difflib similarity ratio
+# averaged across members reaches this threshold). Leave unset for the historic
+# fixed-rounds behavior. Override per invocation with `--converge-threshold` or
+# `--converge` / `--no-converge`. A high value (e.g. 0.95) only stops on
+# near-identical successive answers.
+# converge_threshold: 0.95

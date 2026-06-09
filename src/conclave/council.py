@@ -105,6 +105,7 @@ class Council:
         *,
         rounds: int | None = None,
         proposer: str | None = None,
+        converge_threshold: float | None = None,
     ) -> str:
         """Build the cache key for a run from the resolved, secret-free identity.
 
@@ -125,6 +126,7 @@ class Council:
             temperature=self.temperature,
             rounds=rounds,
             proposer=proposer,
+            converge_threshold=converge_threshold,
         )
 
     async def _cached_run(
@@ -135,6 +137,7 @@ class Council:
         *,
         rounds: int | None = None,
         proposer: str | None = None,
+        converge_threshold: float | None = None,
     ) -> CouncilResult:
         """Serve ``run`` from the result cache when caching is enabled.
 
@@ -146,7 +149,13 @@ class Council:
         if not self.cache_enabled:
             return await run()
 
-        key = self._cache_key(prompt, mode, rounds=rounds, proposer=proposer)
+        key = self._cache_key(
+            prompt,
+            mode,
+            rounds=rounds,
+            proposer=proposer,
+            converge_threshold=converge_threshold,
+        )
         hit = cache_mod.load(key)
         if hit is not None:
             logger.info("cache hit for %s run (%s)", mode, key[:12])
@@ -307,20 +316,39 @@ class Council:
             timeout=self.timeout,
         )
 
-    async def debate(self, prompt: str, rounds: int = 2) -> CouncilResult:
+    async def debate(
+        self, prompt: str, rounds: int = 2, converge_threshold: float | None = None
+    ) -> CouncilResult:
         """Run a multi-round debate. See :func:`conclave.modes.run_debate`.
 
         Round 1 is an independent fan-out; rounds 2..N show each member its
         peers' anonymized prior answers; the synthesizer consolidates survivors.
-        Cache-served when caching is enabled (``rounds`` is part of the key).
+        Cache-served when caching is enabled (``rounds`` and the resolved
+        ``converge_threshold`` are part of the key).
+
+        Args:
+            prompt: The user prompt.
+            rounds: Maximum number of rounds (the historic fixed count).
+            converge_threshold: Opt-in early-stop threshold. ``None`` (default)
+                defers to ``config.converge_threshold`` (off unless set in
+                ``~/.conclave/config.yml``); an explicit value overrides it for
+                this call. With early-stop off the debate runs exactly ``rounds``,
+                identical to the historic behavior. Mirrors the ``cache``
+                None-defers-to-config convention.
         """
         from .modes import run_debate
 
+        # Resolve the opt-in here (mirrors ``cache``: explicit arg wins, else
+        # config) so the cache key reflects what will actually run.
+        threshold = (
+            self.config.converge_threshold if converge_threshold is None else converge_threshold
+        )
         return await self._cached_run(
             prompt,
             "debate",
-            lambda: run_debate(self, prompt, rounds=rounds),
+            lambda: run_debate(self, prompt, rounds=rounds, converge_threshold=threshold),
             rounds=rounds,
+            converge_threshold=threshold,
         )
 
     async def adversarial(self, prompt: str, proposer: str | None = None) -> CouncilResult:
@@ -398,9 +426,14 @@ class Council:
         """
         return self._run_sync(lambda: self.ask(prompt, synthesize=synthesize), "ask_sync")
 
-    def debate_sync(self, prompt: str, rounds: int = 2) -> CouncilResult:
+    def debate_sync(
+        self, prompt: str, rounds: int = 2, converge_threshold: float | None = None
+    ) -> CouncilResult:
         """Synchronous wrapper around :meth:`debate`."""
-        return self._run_sync(lambda: self.debate(prompt, rounds=rounds), "debate_sync")
+        return self._run_sync(
+            lambda: self.debate(prompt, rounds=rounds, converge_threshold=converge_threshold),
+            "debate_sync",
+        )
 
     def adversarial_sync(self, prompt: str, proposer: str | None = None) -> CouncilResult:
         """Synchronous wrapper around :meth:`adversarial`."""

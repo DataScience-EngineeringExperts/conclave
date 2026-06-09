@@ -256,6 +256,210 @@ def test_debate_sync_wrapper(monkeypatch, patch_call_model):
 
 
 # --------------------------------------------------------------------------- #
+# Debate convergence / early-stop (issue #4)
+# --------------------------------------------------------------------------- #
+
+
+def _round_no(messages) -> int:
+    """Infer the debate round from a member message list.
+
+    Round 1 is a bare user prompt (no system message); later rounds carry the
+    debate system prompt and a 'Round N of M' marker in the user content.
+    """
+    system = _system_text(messages)
+    if "debating a prompt over several rounds" not in system:
+        return 1
+    user = next((m["content"] for m in messages if m["role"] == "user"), "")
+    # The user content embeds 'Round {n} of {m}.'
+    import re
+
+    match = re.search(r"Round (\d+) of", user)
+    return int(match.group(1)) if match else 1
+
+
+async def test_debate_convergence_off_runs_full_rounds(monkeypatch, patch_call_model):
+    """Convergence OFF (default) -> debate runs exactly --rounds, unchanged.
+
+    Even with answers that would converge, with no threshold the historic
+    fixed-rounds behavior must be byte-for-byte preserved: all rounds run and
+    the result reports no early stop.
+    """
+    _all_keys(monkeypatch)
+
+    def handler(model, messages, **kwargs):
+        system = _system_text(messages)
+        if "synthesizer concluding a multi-round" in system:
+            return make_response("SYNTH")
+        # Identical answer every round (would converge if checked).
+        return make_response("the answer is stable and unchanging across rounds")
+
+    patch_call_model(handler)
+
+    council = Council(models=["grok", "gemini"], synthesizer="claude", config=_config())
+    result = await council.debate("q", rounds=3)  # no converge_threshold
+
+    assert len(result.rounds) == 3
+    assert result.converged is False
+    assert result.convergence_score is None
+
+
+async def test_debate_convergence_on_stops_early(monkeypatch, patch_call_model):
+    """Convergence ON + converging answers -> stops early, records score + rounds.
+
+    Each member returns the same text in rounds 1 and 2, so round-2 stability is
+    1.0 and the debate stops after round 2 instead of running the full 5 rounds.
+    """
+    _all_keys(monkeypatch)
+
+    rounds_seen: list[int] = []
+
+    def handler(model, messages, **kwargs):
+        system = _system_text(messages)
+        if "synthesizer concluding a multi-round" in system:
+            return make_response("SYNTH")
+        rounds_seen.append(_round_no(messages))
+        # Same body each round -> round-over-round stability == 1.0.
+        return make_response(f"final stable answer from {model}")
+
+    patch_call_model(handler)
+
+    council = Council(models=["grok", "gemini"], synthesizer="claude", config=_config())
+    result = await council.debate("q", rounds=5, converge_threshold=0.9)
+
+    # Stopped after round 2 (the first round eligible for a convergence check).
+    assert len(result.rounds) == 2
+    assert result.converged is True
+    assert result.convergence_score is not None
+    assert result.convergence_score >= 0.9
+    # No round beyond 2 ever ran.
+    assert max(rounds_seen) == 2
+    # Final synthesis still runs over the converged round.
+    assert result.synthesis == "SYNTH"
+
+
+async def test_debate_convergence_on_never_converges_runs_full(monkeypatch, patch_call_model):
+    """Convergence ON + answers that never stabilize -> full --rounds, no early stop."""
+    _all_keys(monkeypatch)
+
+    def handler(model, messages, **kwargs):
+        system = _system_text(messages)
+        if "synthesizer concluding a multi-round" in system:
+            return make_response("SYNTH")
+        # A wholly different, long answer each round -> low stability ratio.
+        rnd = _round_no(messages)
+        unique = "alpha beta gamma delta " * rnd + str(rnd) * (rnd * 50)
+        return make_response(f"round {rnd} {model} {unique}")
+
+    patch_call_model(handler)
+
+    council = Council(models=["grok", "gemini"], synthesizer="claude", config=_config())
+    result = await council.debate("q", rounds=3, converge_threshold=0.95)
+
+    assert len(result.rounds) == 3  # no false early stop
+    assert result.converged is False
+    assert result.convergence_score is None
+
+
+async def test_debate_convergence_degenerate_input_falls_back(monkeypatch, patch_call_model):
+    """A degenerate convergence input (no comparable answers) -> fixed rounds, no crash.
+
+    Every member fails round 1, so it has no usable prior answer to compare round
+    2 against. The detector must not crash or falsely stop; with all members
+    dropped the debate ends on its own, but the run completes cleanly with the
+    convergence fields untouched.
+    """
+    _all_keys(monkeypatch)
+
+    def handler(model, messages, **kwargs):
+        # Everyone always fails -> no usable answers in any round.
+        raise RuntimeError("provider down")
+
+    patch_call_model(handler)
+
+    council = Council(models=["grok", "gemini"], synthesizer="claude", config=_config())
+    result = await council.debate("q", rounds=3, converge_threshold=0.5)
+
+    # All failed round 1 -> debate ends after round 1 (no survivors); the
+    # convergence check never falsely fires and nothing crashes.
+    assert len(result.rounds) == 1
+    assert result.converged is False
+    assert result.convergence_score is None
+    assert result.synthesis is None
+
+
+async def test_debate_convergence_partial_degenerate_does_not_crash(monkeypatch, patch_call_model):
+    """Mixed usable/failed answers in a round still score without crashing.
+
+    One member converges (stable answer) while another fails in round 2. The
+    detector scores only the member usable in both rounds; the run does not crash
+    and behaves deterministically.
+    """
+    _all_keys(monkeypatch)
+
+    def handler(model, messages, **kwargs):
+        system = _system_text(messages)
+        if "synthesizer concluding a multi-round" in system:
+            return make_response("SYNTH")
+        rnd = _round_no(messages)
+        if model == "gemini/gemini-2.5-pro" and rnd >= 2:
+            raise RuntimeError("gemini failed round 2")
+        return make_response(f"stable body from {model}")
+
+    patch_call_model(handler)
+
+    council = Council(models=["grok", "gemini"], synthesizer="claude", config=_config())
+    result = await council.debate("q", rounds=5, converge_threshold=0.9)
+
+    # grok stayed stable across rounds 1->2 (ratio 1.0); mean over the one
+    # comparable member is >= threshold, so the debate stops after round 2.
+    assert len(result.rounds) == 2
+    assert result.converged is True
+    assert result.convergence_score is not None
+    assert result.convergence_score >= 0.9
+
+
+async def test_debate_convergence_defers_to_config(monkeypatch, patch_call_model):
+    """converge_threshold=None on the call defers to config.converge_threshold."""
+    _all_keys(monkeypatch)
+
+    def handler(model, messages, **kwargs):
+        if "synthesizer concluding a multi-round" in _system_text(messages):
+            return make_response("SYNTH")
+        return make_response(f"identical stable answer from {model}")
+
+    patch_call_model(handler)
+
+    cfg = _config()
+    cfg.converge_threshold = 0.9  # enable via config, not the call arg
+    council = Council(models=["grok", "gemini"], synthesizer="claude", config=cfg)
+    result = await council.debate("q", rounds=5)  # no explicit threshold
+
+    assert len(result.rounds) == 2
+    assert result.converged is True
+
+
+def test_round_convergence_helper_direct():
+    """The convergence scorer: identical pairs -> 1.0, no comparable pairs -> None."""
+    from conclave.models import ModelAnswer
+    from conclave.modes import _round_convergence
+
+    prev = {
+        "a": ModelAnswer(name="a", model_id="x/1", answer="hello world"),
+        "b": ModelAnswer(name="b", model_id="y/2", answer="foo bar"),
+    }
+    curr_same = {
+        "a": ModelAnswer(name="a", model_id="x/1", answer="hello world"),
+        "b": ModelAnswer(name="b", model_id="y/2", answer="foo bar"),
+    }
+    assert _round_convergence(prev, curr_same) == 1.0
+
+    # No member has a usable answer in both rounds -> None (degenerate).
+    failed = {"a": ModelAnswer(name="a", model_id="x/1", error="boom")}
+    assert _round_convergence(prev, failed) is None
+    assert _round_convergence({}, {}) is None
+
+
+# --------------------------------------------------------------------------- #
 # Adversarial
 # --------------------------------------------------------------------------- #
 

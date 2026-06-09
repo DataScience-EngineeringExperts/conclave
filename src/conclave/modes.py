@@ -22,6 +22,7 @@ Design notes:
 
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 from typing import TYPE_CHECKING
 
 from . import prompts
@@ -35,20 +36,36 @@ if TYPE_CHECKING:  # avoid a circular import at runtime; only needed for typing
 logger = get_logger("modes")
 
 
-async def run_debate(council: Council, prompt: str, rounds: int = 2) -> CouncilResult:
+async def run_debate(
+    council: Council,
+    prompt: str,
+    rounds: int = 2,
+    converge_threshold: float | None = None,
+) -> CouncilResult:
     """Run a multi-round debate and return a structured :class:`CouncilResult`.
 
     Args:
         council: The :class:`Council` providing fan-out, config, and synthesizer.
         prompt: The user prompt.
-        rounds: Number of rounds (clamped to ``>= 1``). Round 1 is independent;
-            each later round shows members their peers' anonymized prior answers.
+        rounds: Maximum number of rounds (clamped to ``>= 1``). Round 1 is
+            independent; each later round shows members their peers' anonymized
+            prior answers.
+        converge_threshold: Opt-in early-stop threshold in ``[0.0, 1.0]``. When
+            ``None`` (default), the debate runs exactly ``rounds`` -- identical
+            to the historic fixed-rounds behavior. When set, after each round
+            ``>= 2`` the round-over-round answer stability is scored (see
+            :func:`_round_convergence`); if it reaches the threshold the debate
+            stops early. A degenerate score (e.g. no comparable answers) never
+            triggers a stop and never crashes -- it falls back to running the
+            remaining fixed rounds.
 
     Returns:
         A :class:`CouncilResult` with ``rounds`` (per-round answers), ``answers``
         mirroring the final round, and ``synthesis`` from the final consolidation.
-        Survivors are tracked per round: a member that errors drops out of the
-        next round. Zero available members yields an empty result, not an error.
+        ``converged``/``convergence_score`` record whether (and at what score) an
+        early stop fired; the actual rounds run is ``len(rounds)``. Survivors are
+        tracked per round: a member that errors drops out of the next round. Zero
+        available members yields an empty result, not an error.
     """
     rounds = max(1, rounds)
     members, skipped = council._available_members()
@@ -75,8 +92,20 @@ async def run_debate(council: Council, prompt: str, rounds: int = 2) -> CouncilR
         answers = await council.fan_out(survivors, messages_for)
         result.rounds.append(DebateRound(round_number=round_no, answers=answers))
 
-        # Survivors for the next round = members that succeeded this round.
         by_name = {a.name: a for a in answers}
+
+        # Early-stop check: only from round 2 on (round 1 has no prior to compare
+        # against), only when opted in, and only if more rounds would otherwise
+        # run. A detector failure degrades to continuing the fixed rounds.
+        if (
+            converge_threshold is not None
+            and round_no >= 2
+            and round_no < rounds
+            and _should_stop(prior, by_name, converge_threshold, result, round_no)
+        ):
+            break
+
+        # Survivors for the next round = members that succeeded this round.
         prior = by_name
         next_survivors = [(n, m) for (n, m) in survivors if by_name[n].ok]
         dropped = [n for (n, _m) in survivors if not by_name[n].ok]
@@ -94,6 +123,77 @@ async def run_debate(council: Council, prompt: str, rounds: int = 2) -> CouncilR
 
     await _debate_synthesize(council, result)
     return result
+
+
+def _should_stop(
+    prev: dict[str, ModelAnswer],
+    curr: dict[str, ModelAnswer],
+    threshold: float,
+    result: CouncilResult,
+    round_no: int,
+) -> bool:
+    """Decide whether the debate has converged enough to stop after this round.
+
+    Scores the current round against the previous round via
+    :func:`_round_convergence` and, when the score reaches ``threshold``, records
+    the early stop on ``result`` (``converged`` + ``convergence_score``) and
+    returns ``True``. Any unexpected failure in scoring is swallowed and treated
+    as "not converged" so a detector bug can never crash the debate -- it simply
+    degrades to running the remaining fixed rounds.
+    """
+    try:
+        score = _round_convergence(prev, curr)
+    except Exception as exc:  # noqa: BLE001 -- detector must never crash the run
+        logger.warning("convergence scoring failed at round %d (%s); continuing", round_no, exc)
+        return False
+
+    if score is None:
+        # No comparable answers (degenerate input): cannot conclude convergence.
+        logger.info("round %d: no comparable answers for convergence; continuing", round_no)
+        return False
+
+    logger.info("round %d convergence score: %.3f (threshold %.3f)", round_no, score, threshold)
+    if score >= threshold:
+        result.converged = True
+        result.convergence_score = score
+        logger.info("debate converged at round %d (score %.3f); stopping early", round_no, score)
+        return True
+    return False
+
+
+def _round_convergence(
+    prev: dict[str, ModelAnswer],
+    curr: dict[str, ModelAnswer],
+) -> float | None:
+    """Score round-over-round answer stability in ``[0.0, 1.0]``, or ``None``.
+
+    The signal is **round-over-round stability**: for each member that produced a
+    usable answer in *both* the previous and current round, compute the
+    :class:`difflib.SequenceMatcher` ratio between the two answer texts (1.0 =
+    identical, 0.0 = nothing in common), then average across those members. A high
+    mean means members stopped revising -- the debate has stabilized.
+
+    This signal is deliberately simple, deterministic, and dependency-free
+    (stdlib ``difflib`` only), so it is fully offline-testable and adds no heavy
+    dependency. It is preferred over cross-member agreement because a debate
+    converging means members *stop changing their answers*, which is faithfully
+    captured by self-stability and does not penalize a legitimate, stable
+    disagreement between members.
+
+    Returns:
+        The mean stability ratio, or ``None`` when no member has a usable answer
+        in both rounds (degenerate input -- the caller treats this as "not
+        converged" rather than crashing or falsely stopping).
+    """
+    ratios: list[float] = []
+    for name, curr_ans in curr.items():
+        prev_ans = prev.get(name)
+        if prev_ans is None or not prev_ans.ok or not curr_ans.ok:
+            continue
+        ratios.append(SequenceMatcher(None, prev_ans.answer or "", curr_ans.answer or "").ratio())
+    if not ratios:
+        return None
+    return sum(ratios) / len(ratios)
 
 
 def _debate_messages_for(

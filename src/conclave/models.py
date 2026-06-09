@@ -114,6 +114,15 @@ class CouncilResult(BaseModel):
             cache rather than produced by a live run. ``False`` for every live
             run and for freshly stored entries. Lets a consumer detect a cache
             hit without re-running. See :mod:`conclave.cache`.
+        converged: ``True`` when a ``debate`` run stopped early because answers
+            converged (the convergence score crossed the configured threshold)
+            before ``rounds`` was exhausted. ``False`` for every other run,
+            including a debate that ran its full round count. The actual number
+            of rounds run is always ``len(rounds)``. See
+            :func:`conclave.modes.run_debate`.
+        convergence_score: The convergence score (0.0--1.0) of the round that
+            triggered an early stop, or ``None`` when no early stop occurred.
+            Higher means more stable round-over-round (more converged).
     """
 
     prompt: str
@@ -127,6 +136,8 @@ class CouncilResult(BaseModel):
     rounds: list[DebateRound] = Field(default_factory=list)
     adversarial: AdversarialResult | None = None
     cached: bool = False
+    converged: bool = False
+    convergence_score: float | None = None
 
     @property
     def successful_answers(self) -> list[ModelAnswer]:

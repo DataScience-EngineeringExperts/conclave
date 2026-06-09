@@ -80,6 +80,10 @@ conclave ask "Name three sorting algorithms." -c grok,perplexity --mode raw
 conclave ask "Is a service mesh worth it for 8 services?" \
   -c grok,gemini,claude --mode debate --rounds 3
 
+# Debate with early-stop: stop before --rounds once answers stop changing
+conclave ask "Is a service mesh worth it for 8 services?" \
+  -c grok,gemini,claude --mode debate --rounds 5 --converge-threshold 0.95
+
 # Adversarial: one model proposes, the rest refute, the synthesizer judges
 conclave ask "Defend event sourcing for this ledger." \
   -c grok,gemini,perplexity --mode adversarial --proposer grok
@@ -89,9 +93,11 @@ conclave ask "..." -c grok,perplexity --mode debate --json
 ```
 
 Mode flags at a glance: `--mode synthesize|raw|debate|adversarial`. `--rounds N`
-(default 2) applies to `debate`; `--proposer NAME` (default: first member) applies
-to `adversarial`. `--synthesizer/-s` overrides the synthesizer *and* the adversarial
-judge.
+(default 2) is the *maximum* round count for `debate`; `--converge-threshold FLOAT`
+(or `--converge`/`--no-converge`) optionally stops a debate early once answers
+stabilize round-over-round (off by default — `--rounds` runs in full). `--proposer
+NAME` (default: first member) applies to `adversarial`. `--synthesizer/-s` overrides
+the synthesizer *and* the adversarial judge.
 
 `--council` accepts either a comma-separated list of friendly names or the name
 of a council defined in your config (see below). The built-in `default` council
@@ -127,6 +133,10 @@ for rnd in debate.rounds:
     print("round", rnd.round_number, [a.name for a in rnd.successful_answers])
 print("FINAL:\n", debate.synthesis)
 
+# debate with optional early-stop: stop before `rounds` once answers converge
+quick = council.debate_sync("Is P=NP likely false?", rounds=5, converge_threshold=0.95)
+print("ran", len(quick.rounds), "rounds; converged:", quick.converged, quick.convergence_score)
+
 # adversarial: propose -> refute -> verdict
 adv = council.adversarial_sync("Defend CRDTs for offline-first apps.", proposer="grok")
 print("PROPOSAL by", adv.adversarial.proposer, "->", adv.adversarial.proposal.answer)
@@ -138,7 +148,8 @@ print("VERDICT:\n", adv.adversarial.verdict)   # also mirrored to adv.synthesis
 `CouncilResult` exposes `mode`, `answers` (per-model `ModelAnswer` with `model_id`,
 `latency_s`, `usage`, `error`), `synthesis`, `synthesizer`, `skipped`, plus
 `successful_answers` / `failed_answers` helpers. For `debate` it also carries
-`rounds` (a list of `DebateRound`, each with per-member `answers`); for
+`rounds` (a list of `DebateRound`, each with per-member `answers`) plus
+`converged`/`convergence_score` (set when an early-stop fired); for
 `adversarial` it carries `adversarial` (an `AdversarialResult` with `proposer`,
 `proposal`, `critiques`, `verdict`). For debate the final round is mirrored into
 `answers` and the synthesis into `synthesis`; for adversarial the proposal +
@@ -168,8 +179,9 @@ Repeated or eval runs can be served from an on-disk cache instead of re-calling
 the providers. It is **off by default** and **never persists API keys** — the
 cache key is a SHA-256 over the normalized prompt, the ordered council members
 (friendly name + resolved model id), the mode, the synthesizer/judge identity,
-and the mode params (temperature, debate `rounds`, adversarial `proposer`). No
-key value or env-var name ever reaches the key or the stored payload.
+and the mode params (temperature, debate `rounds` + `converge_threshold`,
+adversarial `proposer`). No key value or env-var name ever reaches the key or the
+stored payload.
 
 Enable it per run with `--cache` (or disable a config default with `--no-cache`):
 

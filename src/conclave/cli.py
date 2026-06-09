@@ -92,6 +92,12 @@ def _render_debate(result: CouncilResult) -> None:
         console.rule(f"[bold]Round {rnd.round_number}[/bold]")
         for ans in rnd.answers:
             console.print(_answer_panel(ans, border="magenta"))
+    if result.converged:
+        score = result.convergence_score if result.convergence_score is not None else 0.0
+        err_console.print(
+            f"[green]Converged after {len(result.rounds)} round(s) "
+            f"(score {score:.3f}); stopped early.[/green]"
+        )
     _print_synthesis(result, title="FINAL SYNTHESIS")
 
 
@@ -134,6 +140,39 @@ _RENDERERS = {
 
 _VALID_MODES = {"synthesize", "raw", "debate", "adversarial"}
 
+# Threshold used when --converge is passed without an explicit --converge-threshold.
+# High by design: an early stop should require answers that are nearly stable
+# round-over-round, so the default is conservative and rarely fires spuriously.
+_DEFAULT_CONVERGE_THRESHOLD = 0.95
+
+
+def _resolve_converge_threshold(
+    converge: bool | None,
+    converge_threshold: float | None,
+    config_threshold: float | None,
+) -> float | None:
+    """Resolve the CLI convergence flags + config into a single threshold.
+
+    Returns the threshold to run with, or ``None`` for early-stop off. Precedence,
+    mirroring how ``--cache/--no-cache`` overrides config per invocation:
+
+    * an explicit ``--converge-threshold`` value wins (and implies on);
+    * else ``--no-converge`` forces off regardless of config;
+    * else ``--converge`` turns on at the default threshold;
+    * else (both flags unset) defer to the config value.
+
+    Resolution happens here (not in the council) so ``--no-converge`` can force
+    off even when config enables it; the resulting concrete threshold is then
+    passed to :meth:`Council.debate_sync`.
+    """
+    if converge_threshold is not None:
+        return converge_threshold
+    if converge is False:
+        return None
+    if converge is True:
+        return _DEFAULT_CONVERGE_THRESHOLD
+    return config_threshold
+
 
 @app.command()
 def ask(
@@ -154,7 +193,28 @@ def ask(
         None, "--synthesizer", "-s", help="Override the synthesizer/judge model name."
     ),
     rounds: int = typer.Option(
-        2, "--rounds", "-r", help="Number of debate rounds (debate mode only).", min=1
+        2, "--rounds", "-r", help="Maximum number of debate rounds (debate mode only).", min=1
+    ),
+    converge: bool | None = typer.Option(
+        None,
+        "--converge/--no-converge",
+        help=(
+            "Enable/disable debate early-stop on answer convergence (debate mode "
+            "only; off by default, defers to config when unset). --converge with "
+            "no --converge-threshold uses a default threshold of "
+            f"{_DEFAULT_CONVERGE_THRESHOLD}; --no-converge forces it off."
+        ),
+    ),
+    converge_threshold: float | None = typer.Option(
+        None,
+        "--converge-threshold",
+        help=(
+            "Debate early-stop threshold in [0.0, 1.0] (debate mode only). When "
+            "set, the debate stops once round-over-round answer stability reaches "
+            "this value. Implies --converge. Overrides config; unset defers to it."
+        ),
+        min=0.0,
+        max=1.0,
     ),
     proposer: str | None = typer.Option(
         None,
@@ -201,7 +261,10 @@ def ask(
 
     c = Council(models=members, synthesizer=synthesizer, config=cfg, cache=cache)
     if mode_lower == "debate":
-        result = c.debate_sync(prompt, rounds=rounds)
+        threshold = _resolve_converge_threshold(
+            converge, converge_threshold, cfg.converge_threshold
+        )
+        result = c.debate_sync(prompt, rounds=rounds, converge_threshold=threshold)
     elif mode_lower == "adversarial":
         result = c.adversarial_sync(prompt, proposer=proposer)
     else:
