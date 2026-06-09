@@ -49,6 +49,7 @@ async def call_model(
     *,
     temperature: float = 0.7,
     timeout: float = 120.0,
+    config: ConclaveConfig | None = None,
 ) -> ModelAnswer:
     """Call a single model and return a structured :class:`ModelAnswer`.
 
@@ -62,6 +63,12 @@ async def call_model(
         messages: OpenAI-style message list.
         temperature: Sampling temperature.
         timeout: Per-call timeout in seconds.
+        config: Pre-resolved config to use for adapter resolution (custom
+            ``endpoints:``). A caller that already holds the config -- e.g.
+            ``Council`` -- threads it in so this hot path does not re-read it.
+            When ``None`` (a standalone call) the config is resolved via the
+            memoized :func:`conclave.config.load_config`, so even repeated
+            standalone calls avoid redundant disk reads (issue #15).
 
     Returns:
         A ``ModelAnswer`` with either ``answer`` populated or ``error`` set.
@@ -69,10 +76,11 @@ async def call_model(
     started = time.perf_counter()
 
     # Resolve the adapter (config-aware for user-declared custom endpoints). A
-    # bad/unknown provider id surfaces as a clean, non-raising error.
+    # bad/unknown provider id surfaces as a clean, non-raising error. Prefer the
+    # injected config; fall back to the memoized loader only when called standalone.
     try:
-        config: ConclaveConfig = load_config()
-        adapter = resolve_adapter(model_id, config)
+        resolved_config = config if config is not None else load_config()
+        adapter = resolve_adapter(model_id, resolved_config)
     except ProviderError as exc:
         latency = time.perf_counter() - started
         logger.warning("%s (%s) unresolved: %s", name, model_id, exc)

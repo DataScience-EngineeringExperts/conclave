@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from ..models import TokenUsage
 from ..registry import PROVIDER_ENV_VARS
-from .base import ProviderError
+from .base import ProviderError, status_error
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
@@ -53,11 +53,16 @@ class GeminiAdapter:
         self,
         model_id: str,
         messages: list[dict[str, str]],
-        temperature: float,
+        temperature: float | None,
         timeout: float,
         api_key: str,
     ) -> tuple[str, dict[str, str], dict]:
-        """Build the generateContent POST. See :meth:`ProviderAdapter.build_request`."""
+        """Build the generateContent POST.
+
+        ``temperature`` is added to ``generationConfig`` only when not ``None``;
+        passing ``None`` omits it so the model applies its own default. See
+        :meth:`ProviderAdapter.build_request`.
+        """
         model = self._bare_model(model_id)
         url = f"{GEMINI_BASE}/{model}:generateContent"
         headers = {
@@ -77,12 +82,12 @@ class GeminiAdapter:
             gemini_role = _ROLE_MAP.get(role, "user")
             contents.append({"role": gemini_role, "parts": [{"text": content}]})
 
+        generation_config: dict = {"maxOutputTokens": self.max_output_tokens}
+        if temperature is not None:
+            generation_config["temperature"] = temperature
         body: dict = {
             "contents": contents,
-            "generationConfig": {
-                "temperature": temperature,
-                "maxOutputTokens": self.max_output_tokens,
-            },
+            "generationConfig": generation_config,
         }
         if system_parts:
             body["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
@@ -91,7 +96,7 @@ class GeminiAdapter:
     def parse_response(self, status: int, payload: object) -> tuple[str, TokenUsage | None]:
         """Concatenate the first candidate's text parts. See base protocol."""
         if status < 200 or status >= 300:
-            raise ProviderError(_status_error(status, payload))
+            raise ProviderError(status_error("gemini", status, payload, secondary_keys=("status",)))
         if not isinstance(payload, dict):
             raise ProviderError(f"gemini: non-JSON response body (status {status})")
 
@@ -123,18 +128,3 @@ def _parse_usage(raw: object) -> TokenUsage | None:
         completion_tokens=int(raw.get("candidatesTokenCount", 0) or 0),
         total_tokens=int(raw.get("totalTokenCount", 0) or 0),
     )
-
-
-def _status_error(status: int, payload: object) -> str:
-    """Build a concise, redact-safe error message for a non-2xx status."""
-    detail = ""
-    if isinstance(payload, dict):
-        err = payload.get("error")
-        if isinstance(err, dict):
-            detail = str(err.get("message") or err.get("status") or "")
-        elif isinstance(err, str):
-            detail = err
-    elif isinstance(payload, str):
-        detail = payload[:200]
-    suffix = f": {detail}" if detail else ""
-    return f"gemini: HTTP {status}{suffix}"

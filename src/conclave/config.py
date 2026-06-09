@@ -104,8 +104,46 @@ def _read_yaml(path: Path) -> dict[str, Any]:
         return {}
 
 
+def _resolve_path(path: Path | None) -> Path:
+    """Resolve the effective config path from an explicit arg or the environment."""
+    if path is not None:
+        return path
+    env_path = os.environ.get("CONCLAVE_CONFIG")
+    return Path(env_path) if env_path else DEFAULT_CONFIG_PATH
+
+
+def _cache_key(path: Path) -> tuple[str, float]:
+    """A (path, mtime) cache key. mtime is 0.0 when the file is absent.
+
+    Keying on mtime means an edited or newly created config is picked up on the
+    next call, while an unchanged file is served from the in-process cache --
+    eliminating the repeated disk read + YAML parse that ``call_model`` used to
+    incur on every single model call (issue #15), without ever serving stale data.
+    """
+    try:
+        return (str(path), path.stat().st_mtime)
+    except OSError:
+        return (str(path), 0.0)
+
+
+# In-process memo: (path, mtime) -> merged config. Cleared automatically when the
+# underlying file changes (mtime moves) and explicitly via ``clear_config_cache``.
+_CONFIG_CACHE: dict[tuple[str, float], ConclaveConfig] = {}
+
+
+def clear_config_cache() -> None:
+    """Drop the memoized config. Intended for tests and long-lived processes."""
+    _CONFIG_CACHE.clear()
+
+
 def load_config(path: Path | None = None) -> ConclaveConfig:
-    """Load and merge configuration.
+    """Load and merge configuration, memoized by (path, mtime).
+
+    The result is cached in-process keyed on the resolved path and its
+    modification time, so repeated calls within a run (e.g. one per model call)
+    do not re-read disk or re-parse YAML. The cache self-invalidates when the
+    file's mtime changes, preserving the previous always-fresh behavior across
+    edits while removing the redundant hot-path reads (issue #15).
 
     Args:
         path: Optional override path. Defaults to ``~/.conclave/config.yml`` or
@@ -115,10 +153,19 @@ def load_config(path: Path | None = None) -> ConclaveConfig:
         A fully merged ``ConclaveConfig``. Built-in model defaults are always
         present; file entries override or extend them.
     """
-    if path is None:
-        env_path = os.environ.get("CONCLAVE_CONFIG")
-        path = Path(env_path) if env_path else DEFAULT_CONFIG_PATH
+    resolved = _resolve_path(path)
+    key = _cache_key(resolved)
+    cached = _CONFIG_CACHE.get(key)
+    if cached is not None:
+        return cached
 
+    config = _load_config_uncached(resolved)
+    _CONFIG_CACHE[key] = config
+    return config
+
+
+def _load_config_uncached(path: Path) -> ConclaveConfig:
+    """Read + merge config from ``path`` with no caching (the real disk work)."""
     raw = _read_yaml(path)
 
     merged_models = dict(DEFAULT_MODELS)
