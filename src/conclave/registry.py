@@ -66,12 +66,18 @@ class OpenAICompatProvider:
 
 
 # Friendly name -> default provider-prefixed model id. Overridable via ~/.conclave/config.yml.
+# Every entry is a DIRECT vendor key to a DIRECT vendor endpoint (no aggregator/router) --
+# the no-middleman positioning in PRODUCT_DESIGN_DOCUMENT.md §11 is load-bearing.
 DEFAULT_MODELS: dict[str, str] = {
     "grok": "xai/grok-4.3",
     "gemini": "gemini/gemini-2.5-pro",
     "claude": "anthropic/claude-sonnet-4-6",
     "perplexity": "perplexity/sonar-pro",
     "openai": "openai/gpt-4.1",
+    "groq": "groq/llama-3.3-70b-versatile",
+    "deepseek": "deepseek/deepseek-chat",
+    "mistral": "mistral/mistral-large-latest",
+    "together": "together/meta-llama/Llama-3.3-70B-Instruct-Turbo",
 }
 
 # SINGLE SOURCE OF TRUTH for built-in OpenAI-compatible providers: prefix ->
@@ -90,6 +96,27 @@ OPENAI_COMPAT_PROVIDERS: dict[str, OpenAICompatProvider] = {
     "perplexity": OpenAICompatProvider(
         completions_url="https://api.perplexity.ai/chat/completions",
         env_vars=("PERPLEXITY_API_KEY",),
+    ),
+    # Groq's OpenAI-compatible surface lives under an /openai/v1 path prefix
+    # (https://console.groq.com/docs/openai). Direct vendor key, direct endpoint.
+    "groq": OpenAICompatProvider(
+        completions_url="https://api.groq.com/openai/v1/chat/completions",
+        env_vars=("GROQ_API_KEY",),
+    ),
+    # DeepSeek's /v1 segment is OpenAI-SDK compatibility sugar (no version meaning)
+    # and is accepted (https://api-docs.deepseek.com/).
+    "deepseek": OpenAICompatProvider(
+        completions_url="https://api.deepseek.com/v1/chat/completions",
+        env_vars=("DEEPSEEK_API_KEY",),
+    ),
+    "mistral": OpenAICompatProvider(
+        completions_url="https://api.mistral.ai/v1/chat/completions",
+        env_vars=("MISTRAL_API_KEY",),
+    ),
+    # Together's canonical REST host is api.together.xyz (https://docs.together.ai).
+    "together": OpenAICompatProvider(
+        completions_url="https://api.together.xyz/v1/chat/completions",
+        env_vars=("TOGETHER_API_KEY",),
     ),
 }
 

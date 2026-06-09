@@ -94,5 +94,9 @@ def clear_keys(monkeypatch) -> None:
         "ANTHROPIC_API_KEY",
         "PERPLEXITY_API_KEY",
         "OPENAI_API_KEY",
+        "GROQ_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "MISTRAL_API_KEY",
+        "TOGETHER_API_KEY",
     ):
         monkeypatch.delenv(var, raising=False)

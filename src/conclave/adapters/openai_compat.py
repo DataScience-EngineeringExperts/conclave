@@ -4,8 +4,9 @@ The widest-reach adapter: any provider exposing the OpenAI ``/chat/completions``
 shape (``{model, messages, temperature}`` in, ``choices[0].message.content`` out)
 is served by a single :class:`OpenAICompatAdapter` instance, parameterized by its
 full completions URL and env var name(s). conclave ships instances for **openai**,
-**xai**, and **perplexity**; the same class powers any user-supplied
-OpenAI-compatible endpoint declared in config.
+**xai**, **perplexity**, **groq**, **deepseek**, **mistral**, and **together**
+(all direct vendor key -> direct vendor endpoint); the same class powers any
+user-supplied OpenAI-compatible endpoint declared in config.
 
 Per-provider full URLs live in :data:`OPENAI_COMPAT_URLS` so the verified
 endpoints sit in one place. Env-var names are sourced from
@@ -18,11 +19,18 @@ from ..models import TokenUsage
 from .base import ProviderError, status_error
 
 # Verified per-provider full completions URLs. Note Perplexity has NO ``/v1``
-# segment; xAI and OpenAI do. These are the authoritative endpoints.
+# segment while xAI/OpenAI do, and Groq nests its OpenAI surface under
+# ``/openai/v1``. These mirror :data:`conclave.registry.OPENAI_COMPAT_PROVIDERS`
+# (the source of truth) -- the import-time drift guard fails loudly if they
+# desync. Every entry is a direct vendor endpoint (no aggregator/router).
 OPENAI_COMPAT_URLS: dict[str, str] = {
     "openai": "https://api.openai.com/v1/chat/completions",
     "xai": "https://api.x.ai/v1/chat/completions",
     "perplexity": "https://api.perplexity.ai/chat/completions",
+    "groq": "https://api.groq.com/openai/v1/chat/completions",
+    "deepseek": "https://api.deepseek.com/v1/chat/completions",
+    "mistral": "https://api.mistral.ai/v1/chat/completions",
+    "together": "https://api.together.xyz/v1/chat/completions",
 }
 
 

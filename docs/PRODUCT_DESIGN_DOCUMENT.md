@@ -185,18 +185,26 @@ live in `registry.DEFAULT_MODELS` / `registry.PROVIDER_ENV_VARS` and are overrid
 | Anthropic | `claude` | `anthropic/claude-sonnet-4-6` | `ANTHROPIC_API_KEY` | BUILT |
 | Perplexity | `perplexity` | `perplexity/sonar-pro` | `PERPLEXITY_API_KEY` | BUILT |
 | OpenAI | `openai` | `openai/gpt-4.1` | `OPENAI_API_KEY` | BUILT |
+| Groq | `groq` | `groq/llama-3.3-70b-versatile` | `GROQ_API_KEY` | BUILT |
+| DeepSeek | `deepseek` | `deepseek/deepseek-chat` | `DEEPSEEK_API_KEY` | BUILT |
+| Mistral | `mistral` | `mistral/mistral-large-latest` | `MISTRAL_API_KEY` | BUILT |
+| Together | `together` | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` | `TOGETHER_API_KEY` | BUILT |
 | *(any provider known to an adapter)* | *raw id as name* | *passed through verbatim* | *adapter's provider env var* | SUPPORTED (untyped) |
 | *(any OpenAI-compatible endpoint)* | *config `endpoints:` entry* | *your model id* | *the endpoint's `api_key_env`* | SUPPORTED (config-only) |
 
-**Default synthesizer:** `claude`. **Default council** (when none is configured): all five
-known providers. Because `resolve_model_id()` passes unknown names through verbatim, a user
+All nine first-class providers are **direct vendor key -> direct vendor endpoint** (no
+aggregator/router), per §11. The Groq/DeepSeek/Mistral/Together additions (issue #5) are
+OpenAI-compatible, each served by `OpenAICompatAdapter` with a verified URL and key env-var
+(no native adapter required). Aggregators/routers (e.g. OpenRouter) are deliberately *not*
+promoted — they stay config-only via `endpoints:`, keeping no-middleman intact.
+
+**Default synthesizer:** `claude`. **Default council:** all nine known providers when none is
+configured. Because `resolve_model_id()` passes unknown names through verbatim, a user
 can already add a council member by raw id whose prefix an adapter recognizes (e.g.
 `openai/gpt-4o`) without a code change; it just won't have a static key-presence check
 (treated as "attempt and catch"). A wholly new OpenAI-compatible vendor needs no code at all
 — a `config.yml` `endpoints:` entry (base URL + `api_key_env`) makes it a first-class member
-via `OpenAICompatAdapter` (see §6).
-
-Expanding the *first-class* provider list (more friendly-name defaults) is Roadmap, §9.
+via `OpenAICompatAdapter` (see §6). Further first-class defaults remain Roadmap, §9 #3.
 
 ---
 
@@ -241,7 +249,7 @@ CLI (cli.py, typer+rich)   Library (from conclave import Council)
 | `transport.py` | The single async network boundary: `post_json` — one httpx call site for the whole highway. Nothing else in conclave touches the network. |
 | `adapters/__init__.py` | `resolve_adapter(model_id, config)` — the provider registry and **extension seam**. Maps a model-id prefix (or a config `endpoints:` entry) to the adapter that serves it. Adding a provider family = one registration here; adding an OpenAI-compatible endpoint = config-only. |
 | `adapters/base.py` | The `ProviderAdapter` protocol, `ProviderError`, and `redact()` — the secret-scrubber applied to every error string before it reaches `ModelAnswer.error`. |
-| `adapters/openai_compat.py` | `OpenAICompatAdapter` — serves openai / xai / perplexity and any custom OpenAI-compatible endpoint. Per-provider full completions URL (note: Perplexity has no `/v1` segment). |
+| `adapters/openai_compat.py` | `OpenAICompatAdapter` — serves openai / xai / perplexity / groq / deepseek / mistral / together and any custom OpenAI-compatible endpoint. Per-provider full completions URL (note: Perplexity has no `/v1` segment; Groq nests its OpenAI surface under `/openai/v1`). |
 | `adapters/anthropic.py` | `AnthropicAdapter` — native `POST /v1/messages` (`x-api-key` + `anthropic-version`); system prompt hoisted to the top-level `system` field; `max_tokens` required (default 4096); parses `content[].text` and `input_tokens`/`output_tokens`. |
 | `adapters/gemini.py` | `GeminiAdapter` — native `generateContent` (`x-goog-api-key`); OpenAI roles mapped (assistant→model), `systemInstruction` hoisted, `generationConfig.{temperature,maxOutputTokens}`; parses `usageMetadata`. |
 | `registry.py` | Single source of truth for friendly-name → model-id defaults and provider → env-var mapping. Key *presence* logic only — never key values. |
@@ -263,10 +271,11 @@ CLI (cli.py, typer+rich)   Library (from conclave import Council)
 depending on an LLM SDK. `resolve_adapter` (`adapters/__init__.py`) maps each model id to a
 `ProviderAdapter`; every adapter serializes its provider's request shape and hands it to the
 **one** network call site, `transport.post_json` (`transport.py`). Three adapters cover the
-five first-class providers: `OpenAICompatAdapter` (openai/xai/perplexity, OpenAI-style
-`/chat/completions`), `AnthropicAdapter` (native `/v1/messages`, system-prompt hoist,
-required `max_tokens`), and `GeminiAdapter` (native `generateContent`, role mapping,
-`usageMetadata`). Extension is deliberately cheap: a **new provider family** is one
+nine first-class providers: `OpenAICompatAdapter`
+(openai/xai/perplexity/groq/deepseek/mistral/together, OpenAI-style `/chat/completions`),
+`AnthropicAdapter` (native `/v1/messages`, system-prompt hoist, required `max_tokens`), and
+`GeminiAdapter` (native `generateContent`, role mapping, `usageMetadata`). Extension is
+deliberately cheap: a **new provider family** is one
 registration in `adapters/__init__.py`; a **new OpenAI-compatible endpoint** (local server,
 gateway, another vendor) is **config-only** — a `~/.conclave/config.yml` `endpoints:` entry
 giving a base URL and the env-var *name* of its key, served by `OpenAICompatAdapter` with no
@@ -284,7 +293,8 @@ LLM-SDK dependency.** Packaged with hatchling; console script `conclave = concla
 
 **Shipped in v0.1:**
 - `synthesize` and `raw` modes (fan-out, partial results, synthesizer merge).
-- 5 first-class providers + pass-through for any model id an adapter recognizes.
+- First-class providers (5 at v0.1; 9 since issue #5) + pass-through for any model id an
+  adapter recognizes.
 - BYO-keys via env-var name only; graceful skip of missing-key members.
 - Concurrent fan-out with per-call timeout and temperature.
 - Structured `CouncilResult` with latency, token usage, per-model error capture.
@@ -307,9 +317,9 @@ LLM-SDK dependency.** Packaged with hatchling; console script `conclave = concla
 - **LiteLLM removed.** Replaced by conclave's own provider highway: an `httpx` async
   transport (`transport.py`) behind a per-provider adapter registry (`adapters/`). `httpx`
   is now the only network dependency; there is no LLM-SDK dependency (see §6).
-- Three adapters cover the five first-class providers (`OpenAICompatAdapter` for
-  openai/xai/perplexity, native `AnthropicAdapter`, native `GeminiAdapter`); `resolve_adapter`
-  is the extension seam.
+- Three adapters cover the first-class providers (`OpenAICompatAdapter` for
+  openai/xai/perplexity and the issue-#5 additions groq/deepseek/mistral/together, native
+  `AnthropicAdapter`, native `GeminiAdapter`); `resolve_adapter` is the extension seam.
 - **Custom OpenAI-compatible endpoints** via a config `endpoints:` section — config-only, no
   code change.
 - **Key-leak hardening landed:** provider/transport error strings are scrubbed by `redact()`
@@ -354,10 +364,18 @@ Ordered roughly by strategic value to the origin use case and to mcp-warden.
    preserving fixed-rounds behavior exactly. Recorded on `CouncilResult.converged` +
    `convergence_score`; `converge_threshold` is part of the debate cache key so a converged
    run and a fixed run never collide. Kept in the list, struck through, for traceability.
-3. **More first-class providers** — additional friendly-name defaults (e.g. more OpenAI,
+3. ~~**More first-class providers** — additional friendly-name defaults (e.g. more OpenAI,
    Anthropic, Google, and open-weights endpoints). New OpenAI-compatible vendors are already
    config-only via `endpoints:`; this item is about promoting common ones to typed defaults
-   (and adding native adapters where a provider isn't OpenAI-compatible).
+   (and adding native adapters where a provider isn't OpenAI-compatible).~~ **LANDED**
+   (issue #5): promoted four direct-key, OpenAI-compatible vendors to typed first-class
+   defaults — `groq`, `deepseek`, `mistral`, `together` — each with a doc-verified completions
+   URL, key env-var, and default model id, registered in the single source of truth
+   (`registry.OPENAI_COMPAT_PROVIDERS`) so `PROVIDER_ENV_VARS`, the adapter URL table, the
+   import-time drift guard, `redact()` coverage, and `conclave providers` stay consistent. No
+   native adapter was needed (all four are OpenAI-compatible). Aggregators/routers were
+   intentionally excluded (config-only via `endpoints:`) to preserve no-middleman (§11). Further
+   defaults stay open under §12 #5. Struck through for traceability.
 4. **Caching** — optional result cache keyed on (prompt, council, mode, model ids) to make
    repeated/eval runs cheap. Must remain off by default and never persist keys.
 5. **Streaming** — stream member answers and/or the synthesis to the terminal/library.

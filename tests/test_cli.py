@@ -331,3 +331,47 @@ def test_providers_command_lists_keys_without_values(monkeypatch, patch_cli_conf
     assert "grok" in result.output
     assert "XAI_API_KEY" in result.output
     assert "super-secret-value" not in result.output
+
+
+def test_providers_command_lists_new_first_class_providers(monkeypatch, tmp_path):
+    """`conclave providers` includes the issue-#5 direct-key providers + env vars.
+
+    Uses the real default config (no patched cli.load_config) so the registry's
+    DEFAULT_MODELS drive the table; an empty CONCLAVE_CONFIG path means the
+    built-in defaults are what appear.
+    """
+    monkeypatch.setenv("CONCLAVE_CONFIG", str(tmp_path / "missing.yml"))
+    # The env-var column only renders a NAME when a key is present (otherwise it
+    # shows '-'), so set each new provider's key. The values are obvious fakes and
+    # must never appear in the output (BYO-keys name-only posture).
+    secrets = {
+        "GROQ_API_KEY": "groq-secret-value",
+        "DEEPSEEK_API_KEY": "deepseek-secret-value",
+        "MISTRAL_API_KEY": "mistral-secret-value",
+        "TOGETHER_API_KEY": "together-secret-value",
+    }
+    for var, val in secrets.items():
+        monkeypatch.setenv(var, val)
+    # Force a wide console so Rich does not ellipsize the (long) env-var / model
+    # columns; the module-level console fixes its width at import time, so swap in
+    # a wide one. Otherwise the assertions would test rendering width, not content.
+    from rich.console import Console
+
+    monkeypatch.setattr(cli, "console", Console(width=200))
+    from conclave.config import clear_config_cache
+
+    clear_config_cache()
+
+    result = runner.invoke(cli.app, ["providers"])
+    assert result.exit_code == 0
+    for name, env_var in (
+        ("groq", "GROQ_API_KEY"),
+        ("deepseek", "DEEPSEEK_API_KEY"),
+        ("mistral", "MISTRAL_API_KEY"),
+        ("together", "TOGETHER_API_KEY"),
+    ):
+        assert name in result.output
+        assert env_var in result.output
+    # No secret VALUE ever appears (only the env-var NAME does).
+    for val in secrets.values():
+        assert val not in result.output

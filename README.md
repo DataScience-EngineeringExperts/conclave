@@ -47,6 +47,15 @@ using each provider's standard variable name:
 | Anthropic  | `claude`      | `anthropic/claude-sonnet-4-6` | `ANTHROPIC_API_KEY`            |
 | Perplexity | `perplexity`  | `perplexity/sonar-pro`      | `PERPLEXITY_API_KEY`             |
 | OpenAI     | `openai`      | `openai/gpt-4.1`            | `OPENAI_API_KEY`                 |
+| Groq       | `groq`        | `groq/llama-3.3-70b-versatile` | `GROQ_API_KEY`                |
+| DeepSeek   | `deepseek`    | `deepseek/deepseek-chat`    | `DEEPSEEK_API_KEY`               |
+| Mistral    | `mistral`     | `mistral/mistral-large-latest` | `MISTRAL_API_KEY`             |
+| Together   | `together`    | `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` | `TOGETHER_API_KEY` |
+
+Every first-class provider above is a **direct vendor key to a direct vendor
+endpoint** — conclave never routes through an aggregator. Any other
+OpenAI-compatible vendor (including aggregators/routers, which are deliberately
+*not* first-class) remains usable config-only via an `endpoints:` entry.
 
 Set whichever you have:
 
@@ -211,11 +220,12 @@ The suite mocks the httpx transport, so it needs no network and no API keys.
 ## Extending: custom OpenAI-compatible providers
 
 conclave's provider layer is an adapter registry over a single `httpx` transport
-(`resolve_adapter` in `src/conclave/adapters/`). The five first-class providers are
+(`resolve_adapter` in `src/conclave/adapters/`). The first-class providers are
 adapters; adding a *new* provider family is one registration. Adding any
 **OpenAI-compatible** endpoint (a local server, a gateway, another vendor's
-`/chat/completions`) needs **no code** — just an `endpoints:` entry in your config that
-names the base URL and the env-var that holds its key:
+`/chat/completions`, or an aggregator/router you choose to use) needs **no code** —
+just an `endpoints:` entry in your config that names the base URL and the env-var
+that holds its key:
 
 ```yaml
 endpoints:

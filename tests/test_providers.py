@@ -13,6 +13,8 @@ Per-adapter ``build_request`` / ``parse_response`` tests live in
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import conclave.config as config_mod
@@ -74,6 +76,133 @@ def test_resolve_adapter_custom_endpoint_from_config():
 def test_resolve_adapter_unknown_prefix_raises():
     with pytest.raises(ProviderError, match="unknown provider 'mystery'"):
         resolve_adapter("mystery/model")
+
+
+# --------------------------------------------------------------------------- #
+# First-class direct-key OpenAI-compatible providers (issue #5)
+# --------------------------------------------------------------------------- #
+
+# Each tuple: (friendly name, model id, completions URL, env var, bare model id
+# the adapter must send to the vendor). All are direct vendor key -> direct
+# vendor endpoint (no aggregator) per PRODUCT_DESIGN_DOCUMENT.md §11. Endpoints,
+# env-var names, and default model ids were verified against live vendor docs.
+NEW_PROVIDERS = [
+    (
+        "groq",
+        "groq/llama-3.3-70b-versatile",
+        "https://api.groq.com/openai/v1/chat/completions",
+        "GROQ_API_KEY",
+        "llama-3.3-70b-versatile",
+    ),
+    (
+        "deepseek",
+        "deepseek/deepseek-chat",
+        "https://api.deepseek.com/v1/chat/completions",
+        "DEEPSEEK_API_KEY",
+        "deepseek-chat",
+    ),
+    (
+        "mistral",
+        "mistral/mistral-large-latest",
+        "https://api.mistral.ai/v1/chat/completions",
+        "MISTRAL_API_KEY",
+        "mistral-large-latest",
+    ),
+    (
+        "together",
+        "together/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        "https://api.together.xyz/v1/chat/completions",
+        "TOGETHER_API_KEY",
+        # Only the first '/' is the provider prefix; the rest is the vendor's id.
+        "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    ),
+]
+
+
+@pytest.mark.parametrize("name,model_id,url,env_var,bare", NEW_PROVIDERS)
+def test_new_provider_resolves_to_openai_compat_adapter(name, model_id, url, env_var, bare):
+    """friendly name -> default model id -> OpenAI-compat adapter + URL + env var."""
+    from conclave.config import load_config
+    from conclave.registry import DEFAULT_MODELS
+
+    cfg = load_config(path=Path("/nonexistent/conclave.yml"))
+    assert cfg.resolve_model_id(name) == model_id
+    assert DEFAULT_MODELS[name] == model_id
+
+    adapter = resolve_adapter(model_id)
+    assert isinstance(adapter, OpenAICompatAdapter)
+    assert adapter.completions_url == url
+    assert adapter.env_vars == (env_var,)
+    # The bare model id sent to the vendor strips only the provider prefix.
+    assert adapter._bare_model(model_id) == bare
+
+
+@pytest.mark.parametrize("name,model_id,url,env_var,bare", NEW_PROVIDERS)
+def test_new_provider_env_var_mapping(name, model_id, url, env_var, bare):
+    """The single-source derivation maps each new provider to its key env var."""
+    from conclave.registry import PROVIDER_ENV_VARS, key_source, required_env_vars
+
+    assert required_env_vars(model_id) == [env_var]
+    assert PROVIDER_ENV_VARS[name] == [env_var]
+    assert key_source(model_id) is None  # no key set in a clean test env
+
+
+@pytest.mark.parametrize("name,model_id,url,env_var,bare", NEW_PROVIDERS)
+async def test_new_provider_call_model_success(monkeypatch, name, model_id, url, env_var, bare):
+    """End-to-end call through a new provider yields a usable ModelAnswer."""
+    monkeypatch.setenv(env_var, "sk-newprovider-test")
+    monkeypatch.setenv("CONCLAVE_CONFIG", "/nonexistent/conclave.yml")
+
+    captured = {}
+
+    async def fake_post_json(post_url, headers, json_body, timeout):
+        captured["url"] = post_url
+        captured["headers"] = headers
+        captured["body"] = json_body
+        return 200, {
+            "choices": [{"message": {"content": f"hello from {name}"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+
+    monkeypatch.setattr("conclave.transport.post_json", fake_post_json)
+
+    answer = await call_model(name, model_id, [{"role": "user", "content": "hi"}])
+    assert answer.ok
+    assert answer.answer == f"hello from {name}"
+    assert answer.usage is not None
+    assert answer.usage.total_tokens == 5
+    assert answer.error is None
+    assert captured["url"] == url
+    assert captured["headers"]["Authorization"] == "Bearer sk-newprovider-test"
+    assert captured["body"]["model"] == bare
+
+
+@pytest.mark.parametrize("name,model_id,url,env_var,bare", NEW_PROVIDERS)
+async def test_new_provider_missing_key_is_error(monkeypatch, name, model_id, url, env_var, bare):
+    """A new provider with no key set yields a clean, non-raising error naming the var."""
+    monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv("CONCLAVE_CONFIG", "/nonexistent/conclave.yml")
+
+    answer = await call_model(name, model_id, [{"role": "user", "content": "hi"}])
+    assert not answer.ok
+    assert answer.answer is None
+    assert env_var in answer.error
+
+
+@pytest.mark.parametrize("name,model_id,url,env_var,bare", NEW_PROVIDERS)
+def test_redact_scrubs_new_provider_key_value(monkeypatch, name, model_id, url, env_var, bare):
+    """redact() masks each new provider's key value out of an error string.
+
+    Uses an unprefixed, no-recognized-shape value so ONLY the single-source
+    name-based derivation (PROVIDER_ENV_VARS -> redact) can scrub it. Proves the
+    new env vars are covered automatically with no edit to base.redact.
+    """
+    fake_key = f"{name}FAKEsecret_unprefixed_0123456789"
+    monkeypatch.setenv(env_var, fake_key)
+
+    cleaned = redact(f"{name}: HTTP 401: invalid api key: {fake_key}")
+    assert fake_key not in cleaned
+    assert "[REDACTED]" in cleaned
 
 
 # --------------------------------------------------------------------------- #
