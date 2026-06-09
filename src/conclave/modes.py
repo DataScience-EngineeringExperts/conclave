@@ -161,12 +161,26 @@ async def run_adversarial(
 ) -> CouncilResult:
     """Run a propose -> refute -> verdict pass and return a :class:`CouncilResult`.
 
+    The proposer is a single point of failure, so the run is layered to survive a
+    bad one:
+
+    1. **Proposer fallback.** Members are tried as proposer in council order,
+       starting with the requested one. A member that returns an unusable answer
+       (``ModelAnswer.error`` set / no text) is recorded and the next member is
+       tried, until one produces a usable proposal.
+    2. **Graceful degrade.** If no member can propose, the run does *not* abort
+       with "no verdict". It degrades to a plain synthesize over the surviving
+       members and surfaces an actionable warning on ``CouncilResult.synthesis_error``
+       (mirrored to the adversarial verdict so consumers reading either field see
+       why the adversarial flow was skipped).
+
     Args:
         council: The :class:`Council` providing fan-out, config, and judge.
         prompt: The user prompt.
         proposer: Friendly name of the proposing member. Defaults to the first
             requested council member. If the named proposer has no key, the run
-            falls back to the first available member.
+            falls back to the first available member; if its answer is unusable,
+            the run falls back to the next available member as proposer.
 
     Returns:
         A :class:`CouncilResult` whose ``adversarial`` field carries the proposal,
@@ -182,33 +196,48 @@ async def run_adversarial(
         return result
 
     requested_proposer = proposer or council.requested_models[0]
-    p_name, p_model_id = _pick_proposer(members, requested_proposer)
-    if p_name != requested_proposer:
+    order = _proposer_order(members, requested_proposer)
+
+    # Step 1: find a proposer that produces a usable answer. Each attempt is a
+    # single-member fan-out reusing the same partial-failure primitive. Failed
+    # attempts are recorded so the judge/degrade path can explain what was tried.
+    base = [{"role": "user", "content": prompt}]
+    proposal: ModelAnswer | None = None
+    p_name = order[0][0]
+    failed_proposers: list[ModelAnswer] = []
+    for cand_name, cand_model_id in order:
+        attempt = (await council.fan_out([(cand_name, cand_model_id)], lambda _n, _m: base))[0]
+        result.answers.append(attempt)
+        if attempt.ok:
+            proposal = attempt
+            p_name = cand_name
+            break
+        failed_proposers.append(attempt)
         logger.warning(
-            "proposer '%s' unavailable; falling back to '%s'",
-            requested_proposer,
-            p_name,
+            "proposer '%s' produced no usable answer (%s); trying next member",
+            cand_name,
+            attempt.error,
         )
 
-    # Step 1: the proposal (single-member fan-out reuses the same primitive).
-    base = [{"role": "user", "content": prompt}]
-    proposal = (await council.fan_out([(p_name, p_model_id)], lambda _n, _m: base))[0]
+    # Step 2: no member could propose -> degrade to synthesize over the survivors
+    # instead of aborting the whole run with "no verdict produced".
+    if proposal is None:
+        await _degrade_to_synthesize(council, result, failed_proposers)
+        return result
 
     adv = AdversarialResult(proposer=p_name, proposal=proposal)
-    result.answers.append(proposal)
 
-    # Step 2: critics refute the proposal. If the proposal itself failed, there is
-    # nothing to refute -- record the failure and skip to the (empty) judge.
-    critics = [(n, m) for (n, m) in members if n != p_name]
-    if proposal.ok and critics:
+    # Step 3: critics refute the proposal. Every other available member critiques;
+    # any failed-proposer attempts are excluded so a member is never both.
+    tried = {a.name for a in failed_proposers} | {p_name}
+    critics = [(n, m) for (n, m) in members if n not in tried]
+    if critics:
         adv.critiques = await council.fan_out(
             critics, _critic_messages_for(prompt, proposal.answer or "")
         )
         result.answers.extend(adv.critiques)
-    elif not proposal.ok:
-        logger.warning("proposal failed (%s); critics skipped", proposal.error)
 
-    # Step 3: the judge weighs proposal vs critiques and issues a verdict.
+    # Step 4: the judge weighs proposal vs critiques and issues a verdict.
     await _adversarial_judge(council, prompt, adv)
     result.adversarial = adv
     result.synthesis = adv.verdict
@@ -216,6 +245,48 @@ async def run_adversarial(
     result.synthesizer = adv.judge
     result.synthesizer_model_id = adv.judge_model_id
     return result
+
+
+async def _degrade_to_synthesize(
+    council: Council,
+    result: CouncilResult,
+    failed_proposers: list[ModelAnswer],
+) -> None:
+    """Fall back to plain synthesize when no member can produce a proposal.
+
+    Every requested member was tried as proposer and none returned a usable
+    answer, so there is nothing to refute. Rather than emit "no verdict produced",
+    we run the standard synthesizer over whatever members *did* answer (here:
+    none succeeded, by definition of reaching this path) and always surface an
+    actionable warning on ``result.synthesis_error`` explaining the degrade. The
+    warning is mirrored into an :class:`AdversarialResult` so consumers reading
+    ``result.adversarial.verdict_error`` (e.g. the CLI) see it too.
+    """
+    names = ", ".join(a.name for a in failed_proposers) or "(none)"
+    warning = (
+        "adversarial degraded to synthesize: no council member produced a usable "
+        f"proposal (tried: {names}). Showing a consolidated answer over the "
+        "surviving members instead of a propose/refute/verdict result."
+    )
+    logger.warning(warning)
+
+    # Reuse the single synthesizer path. successful_answers is empty here (all
+    # proposer attempts failed), so _synthesize records its own no-answers error;
+    # we override synthesis_error afterwards so the degrade reason is what surfaces.
+    await council._synthesize(result)
+    result.synthesis_error = warning
+    result.synthesizer = council.synthesizer
+    result.synthesizer_model_id = council.config.resolve_model_id(council.synthesizer)
+
+    # Mirror the degrade into the adversarial structure so the field-specific CLI
+    # renderer and library consumers reading result.adversarial both see it. The
+    # first failed attempt stands in as the (failed) proposal for shape parity.
+    if failed_proposers:
+        adv = AdversarialResult(proposer=failed_proposers[0].name, proposal=failed_proposers[0])
+        adv.verdict_error = warning
+        adv.judge = council.synthesizer
+        adv.judge_model_id = council.config.resolve_model_id(council.synthesizer)
+        result.adversarial = adv
 
 
 def _critic_messages_for(prompt: str, proposal_text: str):
@@ -230,12 +301,19 @@ def _critic_messages_for(prompt: str, proposal_text: str):
     return critic_messages
 
 
-def _pick_proposer(members: list[tuple[str, str]], requested: str) -> tuple[str, str]:
-    """Return the requested proposer member, or the first available as fallback."""
-    for member in members:
-        if member[0] == requested:
-            return member
-    return members[0]
+def _proposer_order(members: list[tuple[str, str]], requested: str) -> list[tuple[str, str]]:
+    """Return members ordered for proposer selection: requested first, then rest.
+
+    The requested proposer is tried first when it is available; every other
+    available member follows in council order so a failed proposer can fall back
+    to the next candidate. A requested name with no key is simply absent from
+    ``members`` (filtered upstream), so the council order leads.
+    """
+    requested_member = next((m for m in members if m[0] == requested), None)
+    if requested_member is None:
+        return list(members)
+    rest = [m for m in members if m[0] != requested]
+    return [requested_member, *rest]
 
 
 async def _adversarial_judge(council: Council, prompt: str, adv: AdversarialResult) -> None:

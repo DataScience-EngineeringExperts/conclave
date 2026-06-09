@@ -270,6 +270,28 @@ def test_gemini_parse_malformed_raises():
         adapter.parse_response(200, {"candidates": []})
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        # candidate present but content.parts key missing (issue #9 KeyError shape).
+        {"candidates": [{"content": {}}]},
+        # blocked/safety candidate with no content object at all.
+        {"candidates": [{"finishReason": "SAFETY"}]},
+    ],
+)
+def test_gemini_parse_missing_content_parts_raises_provider_error(payload):
+    """A candidate missing content.parts is a typed ProviderError, never a KeyError.
+
+    Issue #9: a malformed/blocked Gemini response (missing
+    ``candidates[0].content.parts``) must surface as a redact-safe ProviderError
+    so ``call_model`` can turn it into ``ModelAnswer.error`` rather than aborting
+    the run with a raw ``KeyError``.
+    """
+    adapter = GeminiAdapter()
+    with pytest.raises(ProviderError, match="missing candidates"):
+        adapter.parse_response(200, payload)
+
+
 def test_gemini_parse_error_status_raises():
     adapter = GeminiAdapter()
     payload = {"error": {"status": "PERMISSION_DENIED", "message": "no access"}}

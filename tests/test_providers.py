@@ -136,6 +136,33 @@ async def test_call_model_transport_error_becomes_model_answer_error(monkeypatch
     assert "timed out" in answer.error
 
 
+async def test_call_model_gemini_missing_parts_becomes_error(monkeypatch):
+    """A malformed Gemini body (missing candidates[0].content.parts) -> ModelAnswer.error.
+
+    Issue #9 end-to-end: the adapter's ProviderError must flow through call_model
+    as ``.error`` (never a raised KeyError), so one bad proposer cannot abort the
+    adversarial run. Exercises the real GeminiAdapter + the real call_model path
+    with only the transport patched.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "AIza-dummy")
+    monkeypatch.setenv("CONCLAVE_CONFIG", "/nonexistent/conclave.yml")
+
+    async def malformed_gemini(url, headers, json_body, timeout):
+        # 200 OK but the candidate carries no content.parts (blocked/empty shape).
+        return 200, {"candidates": [{"finishReason": "SAFETY"}]}
+
+    monkeypatch.setattr("conclave.transport.post_json", malformed_gemini)
+
+    answer = await call_model(
+        "gemini",
+        "gemini/gemini-2.5-pro",
+        [{"role": "user", "content": "hi"}],
+    )
+    assert not answer.ok
+    assert answer.answer is None
+    assert "missing candidates" in answer.error
+
+
 async def test_call_model_missing_key_is_error(monkeypatch):
     """No key in env -> a clean ModelAnswer.error naming the env var, never raises."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
