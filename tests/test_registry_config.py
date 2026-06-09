@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import pytest
+
 from conclave.config import load_config
 from conclave.registry import (
     DEFAULT_MODELS,
+    NATIVE_PROVIDERS,
+    OPENAI_COMPAT_PROVIDERS,
+    PROVIDER_ENV_VARS,
+    RegistryError,
+    _assert_metadata_consistent,
     key_present,
     key_source,
     provider_prefix,
@@ -108,3 +115,89 @@ def test_malformed_config_ignored(tmp_path):
     cfg = load_config(path=cfg_path)
     # Falls back to defaults rather than raising.
     assert cfg.models["grok"] == DEFAULT_MODELS["grok"]
+
+
+# --------------------------------------------------------------------------- #
+# Single-source-of-truth for provider metadata (issue #19)
+# --------------------------------------------------------------------------- #
+
+
+def test_provider_env_vars_derived_from_single_source():
+    """PROVIDER_ENV_VARS is built from the OpenAI-compat + native source tables.
+
+    There is no hand-maintained second copy that could drift: every env-var entry
+    must trace back to exactly one source table.
+    """
+    derived = {
+        **{prefix: list(meta.env_vars) for prefix, meta in OPENAI_COMPAT_PROVIDERS.items()},
+        **{prefix: list(env_vars) for prefix, env_vars in NATIVE_PROVIDERS.items()},
+    }
+    assert PROVIDER_ENV_VARS == derived
+
+
+def test_every_openai_compat_provider_has_env_vars():
+    """An OpenAI-compatible provider can never be declared with a URL but no key."""
+    for prefix, meta in OPENAI_COMPAT_PROVIDERS.items():
+        assert meta.env_vars, f"{prefix} declares a URL but no env var"
+        assert PROVIDER_ENV_VARS[prefix] == list(meta.env_vars)
+
+
+def test_registry_and_adapter_url_tables_are_in_sync():
+    """registry.OPENAI_COMPAT_PROVIDERS and adapters.OPENAI_COMPAT_URLS agree.
+
+    This is the invariant whose violation used to escape as a runtime KeyError in
+    _openai_compat_adapter (issue #19). The live tables must match exactly.
+    """
+    from conclave.adapters.openai_compat import OPENAI_COMPAT_URLS
+
+    assert set(OPENAI_COMPAT_PROVIDERS) == set(OPENAI_COMPAT_URLS)
+    for prefix, meta in OPENAI_COMPAT_PROVIDERS.items():
+        assert meta.completions_url == OPENAI_COMPAT_URLS[prefix]
+
+
+def test_consistency_check_passes_for_live_metadata():
+    """The import-time guard is a no-op against the real, in-sync tables."""
+    # Must not raise.
+    _assert_metadata_consistent()
+
+
+def test_consistency_check_detects_url_drift(monkeypatch):
+    """A URL present in the adapter table but absent from registry is caught loudly.
+
+    Simulates the exact drift scenario: someone adds a prefix to
+    adapters.OPENAI_COMPAT_URLS without adding it to the registry source of truth.
+    The former failure mode was a silent per-call KeyError; now it is a clear,
+    immediate RegistryError.
+    """
+    import conclave.adapters.openai_compat as oc
+
+    drifted = dict(oc.OPENAI_COMPAT_URLS)
+    drifted["ghostprovider"] = "https://api.ghost.example/v1/chat/completions"
+    monkeypatch.setattr(oc, "OPENAI_COMPAT_URLS", drifted)
+
+    with pytest.raises(RegistryError, match="ghostprovider"):
+        _assert_metadata_consistent()
+
+
+def test_consistency_check_detects_missing_url(monkeypatch):
+    """A registry provider with no matching adapter URL is caught loudly."""
+    import conclave.adapters.openai_compat as oc
+
+    drifted = dict(oc.OPENAI_COMPAT_URLS)
+    drifted.pop("perplexity")
+    monkeypatch.setattr(oc, "OPENAI_COMPAT_URLS", drifted)
+
+    with pytest.raises(RegistryError, match="perplexity"):
+        _assert_metadata_consistent()
+
+
+def test_consistency_check_detects_url_mismatch(monkeypatch):
+    """Same prefix, divergent URL between the two tables is caught loudly."""
+    import conclave.adapters.openai_compat as oc
+
+    drifted = dict(oc.OPENAI_COMPAT_URLS)
+    drifted["openai"] = "https://api.openai.com/v2/chat/completions"
+    monkeypatch.setattr(oc, "OPENAI_COMPAT_URLS", drifted)
+
+    with pytest.raises(RegistryError, match="URL drift"):
+        _assert_metadata_consistent()

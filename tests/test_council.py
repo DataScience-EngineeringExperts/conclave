@@ -222,3 +222,49 @@ async def test_ask_sync_raises_inside_loop(monkeypatch):
     council = Council(models=["grok"], config=_config())
     with pytest.raises(RuntimeError, match="running event loop"):
         council.ask_sync("hi")
+
+
+async def test_config_disk_read_at_most_once_per_ask(monkeypatch, tmp_path):
+    """A full Council.ask run hits the config file on disk at most once (issue #15).
+
+    Exercises the REAL call path (transport patched, not call_model) so every
+    member call plus synthesis flows through providers.call_model -> load_config.
+    With the memoized loader, the underlying disk read happens at most once across
+    the whole run rather than once per model call.
+    """
+    import conclave.config as config_mod
+
+    _all_keys(monkeypatch)
+
+    # Synthesizer is openai so the OpenAI-shaped transport stub serves both the
+    # members and the synthesis call (all OpenAI-compatible).
+    config_file = tmp_path / "conclave.yml"
+    config_file.write_text("synthesizer: openai\n", encoding="utf-8")
+    monkeypatch.setenv("CONCLAVE_CONFIG", str(config_file))
+
+    config_mod.clear_config_cache()
+
+    reads = {"n": 0}
+    real_read_yaml = config_mod._read_yaml
+
+    def counting_read_yaml(path):
+        reads["n"] += 1
+        return real_read_yaml(path)
+
+    monkeypatch.setattr(config_mod, "_read_yaml", counting_read_yaml)
+
+    async def fake_post(url, headers, json_body, timeout):
+        return 200, {"choices": [{"message": {"content": "answer"}}]}
+
+    monkeypatch.setattr("conclave.transport.post_json", fake_post)
+
+    # Council built with no injected config -> resolves via load_config; every
+    # member + synthesis call then also calls load_config from providers.
+    council = Council(models=["grok", "perplexity", "openai"], synthesizer="openai")
+    result = await council.ask("what is 2+2?")
+
+    assert result.synthesis == "answer"
+    assert len(result.answers) == 3
+    assert reads["n"] <= 1, f"expected at most one disk read for the run, got {reads['n']}"
+
+    config_mod.clear_config_cache()

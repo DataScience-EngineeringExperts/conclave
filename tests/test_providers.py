@@ -15,13 +15,24 @@ from __future__ import annotations
 
 import pytest
 
+import conclave.config as config_mod
+import conclave.providers as providers_mod
 from conclave.adapters import ProviderError, resolve_adapter
 from conclave.adapters.anthropic import AnthropicAdapter
 from conclave.adapters.base import redact
 from conclave.adapters.gemini import GeminiAdapter
 from conclave.adapters.openai_compat import OpenAICompatAdapter
-from conclave.config import ConclaveConfig, CustomEndpoint
+from conclave.config import ConclaveConfig, CustomEndpoint, clear_config_cache
 from conclave.providers import call_model
+
+
+@pytest.fixture(autouse=True)
+def _reset_config_cache():
+    """Each test starts and ends with an empty config memo for isolation."""
+    clear_config_cache()
+    yield
+    clear_config_cache()
+
 
 # --------------------------------------------------------------------------- #
 # Adapter registry
@@ -240,3 +251,94 @@ def test_redact_scrubs_custom_endpoint_env_var_value(monkeypatch, tmp_path):
     cleaned = redact(f"auth failed: invalid api key: {fake_key}")
     assert fake_key not in cleaned
     assert "[REDACTED]" in cleaned
+
+
+# --------------------------------------------------------------------------- #
+# Config is resolved once / injectable, not re-read per call (issue #15)
+# --------------------------------------------------------------------------- #
+
+
+async def _ok_post(url, headers, json_body, timeout):
+    """A minimal successful transport stub for hot-path tests."""
+    return 200, {"choices": [{"message": {"content": "ok"}}]}
+
+
+async def test_call_model_uses_injected_config_without_load(monkeypatch):
+    """When a config is injected, call_model never calls load_config (issue #15)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr("conclave.transport.post_json", _ok_post)
+
+    calls = {"n": 0}
+
+    def spy_load_config(*args, **kwargs):  # pragma: no cover - must not run
+        calls["n"] += 1
+        return ConclaveConfig()
+
+    monkeypatch.setattr(providers_mod, "load_config", spy_load_config)
+
+    injected = ConclaveConfig()
+    answer = await call_model(
+        "openai",
+        "openai/gpt-4.1",
+        [{"role": "user", "content": "hi"}],
+        config=injected,
+    )
+    assert answer.ok
+    assert calls["n"] == 0, "load_config must not be called when config is injected"
+
+
+async def test_call_model_standalone_reads_disk_at_most_once(monkeypatch, tmp_path):
+    """Repeated standalone calls re-read the config file at most once (issue #15).
+
+    The memoized loader means the disk read + YAML parse happens once even across
+    many call_model invocations for the same unchanged file -- the hot-path /
+    caching blocker the issue describes.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr("conclave.transport.post_json", _ok_post)
+
+    config_file = tmp_path / "conclave.yml"
+    config_file.write_text("synthesizer: openai\n", encoding="utf-8")
+    monkeypatch.setenv("CONCLAVE_CONFIG", str(config_file))
+
+    reads = {"n": 0}
+    real_read_yaml = config_mod._read_yaml
+
+    def counting_read_yaml(path):
+        reads["n"] += 1
+        return real_read_yaml(path)
+
+    monkeypatch.setattr(config_mod, "_read_yaml", counting_read_yaml)
+
+    # Simulate a 4-member x 3-round debate + synthesis worth of calls.
+    for _ in range(13):
+        answer = await call_model(
+            "openai",
+            "openai/gpt-4.1",
+            [{"role": "user", "content": "hi"}],
+        )
+        assert answer.ok
+
+    assert reads["n"] == 1, f"expected a single disk read, got {reads['n']}"
+
+
+def test_config_cache_invalidates_on_file_change(tmp_path):
+    """The memo self-invalidates when the config file's mtime changes."""
+    import os
+    import time
+
+    from conclave.config import load_config
+
+    clear_config_cache()
+    config_file = tmp_path / "conclave.yml"
+    config_file.write_text("synthesizer: openai\n", encoding="utf-8")
+
+    first = load_config(path=config_file)
+    assert first.synthesizer == "openai"
+
+    # Rewrite with a new value and bump mtime so the key changes.
+    config_file.write_text("synthesizer: gemini\n", encoding="utf-8")
+    os.utime(config_file, (time.time() + 5, time.time() + 5))
+
+    second = load_config(path=config_file)
+    assert second.synthesizer == "gemini"
