@@ -166,7 +166,17 @@ def ask(
         False, "--json", help="Emit the full result as JSON instead of panels."
     ),
 ) -> None:
-    """Fan PROMPT out to a council and synthesize, debate, or adversarially review."""
+    """Fan PROMPT out to a council and synthesize, debate, or adversarially review.
+
+    Exit codes:
+
+    * 0 -- the run produced at least one usable member answer.
+    * 1 -- the run completed but produced zero usable member answers (e.g. no
+      council member had an API key, or every member failed). Under ``--json``
+      the full JSON result is still emitted to stdout first, so a script can both
+      parse the payload and detect the failure via the non-zero exit code.
+    * 2 -- a usage/config error (unknown mode, or no members resolved).
+    """
     mode_lower = mode.lower()
     if mode_lower not in _VALID_MODES:
         err_console.print(
@@ -188,13 +198,22 @@ def ask(
     else:
         result = c.ask_sync(prompt, synthesize=(mode_lower == "synthesize"))
 
+    # A run that produced no usable member answers is a failure for scripting
+    # purposes regardless of output format. We compute this once and apply the
+    # same exit-code contract to both the JSON and human paths.
+    no_usable_answers = not result.successful_answers
+
     if as_json:
+        # Always emit valid JSON to stdout so a consumer can parse the payload,
+        # then signal failure via the exit code if nothing usable came back.
         console.print_json(json.dumps(_result_to_dict(result)))
+        if no_usable_answers:
+            raise typer.Exit(code=1)
         return
 
-    if not result.answers:
+    if no_usable_answers:
         err_console.print(
-            "[red]No council members had keys available. Run 'conclave providers' to check.[/red]"
+            "[red]No usable council answers. Run 'conclave providers' to check keys.[/red]"
         )
         raise typer.Exit(code=1)
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 
+from . import transport
 from .config import ConclaveConfig, load_config
 from .logging import get_logger
 from .models import CouncilResult, ModelAnswer
@@ -247,16 +248,57 @@ class Council:
 
         return await run_adversarial(self, prompt, proposer=proposer)
 
+    async def aclose(self) -> None:
+        """Close the shared pooled HTTP client.
+
+        Library users running their own event loop (e.g. a server) should call
+        this on shutdown so the process-wide connection pool is released and no
+        "unclosed client" warning is emitted under strict asyncio. It is safe to
+        call more than once; the pooled client is recreated lazily on next use.
+
+        The synchronous wrappers (:meth:`ask_sync`, :meth:`debate_sync`,
+        :meth:`adversarial_sync`) already close the client automatically before
+        their event loop ends, so CLI/sync callers do not need to call this.
+        """
+        await transport.aclose()
+
+    def close_sync(self) -> None:
+        """Synchronous wrapper around :meth:`aclose` for non-async callers."""
+        self._run_sync(self.aclose, "close_sync", close_client=False)
+
     @staticmethod
-    def _run_sync(coro_factory: Callable[[], asyncio.Future | object], label: str):
-        """Run an async council method synchronously, guarding nested loops."""
+    def _run_sync(
+        coro_factory: Callable[[], asyncio.Future | object],
+        label: str,
+        *,
+        close_client: bool = True,
+    ):
+        """Run an async council method synchronously, guarding nested loops.
+
+        ``asyncio.run`` creates (and tears down) a fresh event loop per call. The
+        pooled httpx client is bound to whichever loop first used it, so we close
+        it inside that same loop's ``finally`` before the loop is destroyed --
+        otherwise the pool leaks and asyncio emits an "unclosed client" warning.
+        ``close_client=False`` is used by :meth:`close_sync` itself to avoid
+        recursively re-closing.
+        """
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(coro_factory())
-        raise RuntimeError(
-            f"{label}() called from within a running event loop; await the async method instead"
-        )
+            pass
+        else:
+            raise RuntimeError(
+                f"{label}() called from within a running event loop; await the async method instead"
+            )
+
+        async def _runner():
+            try:
+                return await coro_factory()
+            finally:
+                if close_client:
+                    await transport.aclose()
+
+        return asyncio.run(_runner())
 
     def ask_sync(self, prompt: str, synthesize: bool = True) -> CouncilResult:
         """Synchronous wrapper around :meth:`ask`.

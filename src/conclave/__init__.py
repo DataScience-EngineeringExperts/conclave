@@ -21,6 +21,13 @@ The returned :class:`CouncilResult` carries each member's raw answer (with
 latency, token usage, and any error) plus the merged synthesis. For ``debate``
 it also carries per-round answers (``rounds``); for ``adversarial`` it carries
 the proposal/critique/verdict structure (``adversarial``).
+
+The ``*_sync`` wrappers close the pooled HTTP client automatically. Long-lived
+consumers that drive the async API on their own event loop (e.g. a server) must
+release the process-wide connection pool on shutdown::
+
+    import conclave
+    await conclave.aclose()   # or: await council.aclose()
 """
 
 from __future__ import annotations
@@ -34,6 +41,7 @@ from .models import (
     ModelAnswer,
     TokenUsage,
 )
+from .transport import aclose
 
 __version__ = "0.1.0"
 
@@ -46,5 +54,6 @@ __all__ = [
     "AdversarialResult",
     "ConclaveConfig",
     "load_config",
+    "aclose",
     "__version__",
 ]
