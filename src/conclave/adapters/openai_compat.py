@@ -15,7 +15,7 @@ endpoints sit in one place. Env-var names are sourced from
 from __future__ import annotations
 
 from ..models import TokenUsage
-from .base import ProviderError
+from .base import ProviderError, status_error
 
 # Verified per-provider full completions URLs. Note Perplexity has NO ``/v1``
 # segment; xAI and OpenAI do. These are the authoritative endpoints.
@@ -62,11 +62,17 @@ class OpenAICompatAdapter:
         self,
         model_id: str,
         messages: list[dict[str, str]],
-        temperature: float,
+        temperature: float | None,
         timeout: float,
         api_key: str,
     ) -> tuple[str, dict[str, str], dict]:
-        """Build the OpenAI-style POST. See :meth:`ProviderAdapter.build_request`."""
+        """Build the OpenAI-style POST.
+
+        ``temperature`` is included only when not ``None``; passing ``None``
+        omits it so the provider applies its own default (some reasoning models
+        reject an explicit ``temperature`` with a 400). See
+        :meth:`ProviderAdapter.build_request`.
+        """
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -74,8 +80,9 @@ class OpenAICompatAdapter:
         body: dict = {
             "model": self._bare_model(model_id),
             "messages": messages,
-            "temperature": temperature,
         }
+        if temperature is not None:
+            body["temperature"] = temperature
         if self.max_tokens is not None:
             body["max_tokens"] = self.max_tokens
         return self.completions_url, headers, body
@@ -86,7 +93,9 @@ class OpenAICompatAdapter:
         See :meth:`ProviderAdapter.parse_response`.
         """
         if status < 200 or status >= 300:
-            raise ProviderError(_status_error(self.prefix, status, payload))
+            raise ProviderError(
+                status_error(self.prefix, status, payload, secondary_keys=("type",))
+            )
         if not isinstance(payload, dict):
             raise ProviderError(f"{self.prefix}: non-JSON response body (status {status})")
 
@@ -115,20 +124,3 @@ def _parse_usage(raw: object) -> TokenUsage | None:
         completion_tokens=int(raw.get("completion_tokens", 0) or 0),
         total_tokens=int(raw.get("total_tokens", 0) or 0),
     )
-
-
-def _status_error(prefix: str, status: int, payload: object) -> str:
-    """Build a concise, redact-safe error message for a non-2xx status."""
-    detail = ""
-    if isinstance(payload, dict):
-        err = payload.get("error")
-        if isinstance(err, dict):
-            detail = str(err.get("message") or err.get("type") or "")
-        elif isinstance(err, str):
-            detail = err
-        if not detail and "message" in payload:
-            detail = str(payload["message"])
-    elif isinstance(payload, str):
-        detail = payload[:200]
-    suffix = f": {detail}" if detail else ""
-    return f"{prefix}: HTTP {status}{suffix}"

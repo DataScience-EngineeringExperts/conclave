@@ -19,6 +19,7 @@ import pytest
 
 from conclave.adapters import ProviderError
 from conclave.adapters.anthropic import AnthropicAdapter
+from conclave.adapters.base import _DETAIL_CAP, status_error
 from conclave.adapters.gemini import GeminiAdapter
 from conclave.adapters.openai_compat import OpenAICompatAdapter
 
@@ -274,3 +275,117 @@ def test_gemini_parse_error_status_raises():
     payload = {"error": {"status": "PERMISSION_DENIED", "message": "no access"}}
     with pytest.raises(ProviderError, match="HTTP 403"):
         adapter.parse_response(403, payload)
+
+
+# --------------------------------------------------------------------------- #
+# Shared status_error helper (issue #16) — consolidation + detail cap (D-3/D-4)
+# --------------------------------------------------------------------------- #
+
+
+def test_status_error_dict_message():
+    msg = status_error("openai", 401, {"error": {"message": "bad key", "type": "auth"}})
+    assert msg == "openai: HTTP 401: bad key"
+
+
+def test_status_error_secondary_key_fallback():
+    # No message -> fall back to the requested secondary key.
+    anthropic_msg = status_error(
+        "anthropic", 529, {"error": {"type": "overloaded_error"}}, secondary_keys=("type",)
+    )
+    assert anthropic_msg == "anthropic: HTTP 529: overloaded_error"
+    gemini_msg = status_error(
+        "gemini", 403, {"error": {"status": "PERMISSION_DENIED"}}, secondary_keys=("status",)
+    )
+    assert gemini_msg == "gemini: HTTP 403: PERMISSION_DENIED"
+
+
+def test_status_error_string_error_and_top_level_message():
+    assert status_error("xai", 500, {"error": "boom"}) == "xai: HTTP 500: boom"
+    # OpenAI-compatible providers sometimes put the message at the top level.
+    assert status_error("openai", 400, {"message": "top-level"}) == "openai: HTTP 400: top-level"
+
+
+def test_status_error_raw_string_body():
+    assert status_error("openai", 502, "gateway error") == "openai: HTTP 502: gateway error"
+
+
+def test_status_error_no_detail():
+    assert status_error("openai", 503, {}) == "openai: HTTP 503"
+    assert status_error("openai", 503, None) == "openai: HTTP 503"
+
+
+def test_status_error_caps_oversized_dict_message():
+    # D-3: a huge dict error.message must be bounded just like the string path.
+    huge = "x" * 5000
+    msg = status_error("openai", 400, {"error": {"message": huge}})
+    detail = msg.split(": ", 2)[2]
+    assert len(detail) == _DETAIL_CAP
+    # Whole message stays well under the pre-fix ~5018-char blowup.
+    assert len(msg) <= _DETAIL_CAP + 64
+
+
+def test_status_error_caps_oversized_raw_string_body():
+    msg = status_error("openai", 400, "y" * 5000)
+    assert len(msg.split(": ", 2)[2]) == _DETAIL_CAP
+
+
+def test_status_error_caps_secondary_key():
+    msg = status_error("gemini", 400, {"error": {"status": "z" * 5000}}, secondary_keys=("status",))
+    assert len(msg.split(": ", 2)[2]) == _DETAIL_CAP
+
+
+# --------------------------------------------------------------------------- #
+# Conditional temperature (issue #22) — None omits the param (D-11)
+# --------------------------------------------------------------------------- #
+
+
+def test_openai_compat_temperature_included_when_set():
+    adapter = _openai_adapter()
+    _url, _headers, body = adapter.build_request(
+        "openai/gpt-4.1", [{"role": "user", "content": "hi"}], 0.7, 120.0, "k"
+    )
+    assert body["temperature"] == 0.7
+
+
+def test_openai_compat_temperature_omitted_when_none():
+    adapter = _openai_adapter()
+    _url, _headers, body = adapter.build_request(
+        "openai/o1", [{"role": "user", "content": "hi"}], None, 120.0, "k"
+    )
+    assert "temperature" not in body
+
+
+def test_anthropic_temperature_included_when_set():
+    adapter = AnthropicAdapter()
+    _url, _headers, body = adapter.build_request(
+        "anthropic/claude-sonnet-4-6", [{"role": "user", "content": "hi"}], 0.3, 120.0, "k"
+    )
+    assert body["temperature"] == 0.3
+
+
+def test_anthropic_temperature_omitted_when_none():
+    adapter = AnthropicAdapter()
+    _url, _headers, body = adapter.build_request(
+        "anthropic/claude-sonnet-4-6", [{"role": "user", "content": "hi"}], None, 120.0, "k"
+    )
+    assert "temperature" not in body
+    # Required params are still present.
+    assert body["max_tokens"] == 4096
+
+
+def test_gemini_temperature_included_when_set():
+    adapter = GeminiAdapter()
+    _url, _headers, body = adapter.build_request(
+        "gemini/gemini-2.5-pro", [{"role": "user", "content": "hi"}], 0.4, 120.0, "k"
+    )
+    assert body["generationConfig"]["temperature"] == 0.4
+
+
+def test_gemini_temperature_omitted_when_none():
+    adapter = GeminiAdapter()
+    _url, _headers, body = adapter.build_request(
+        "gemini/gemini-2.5-pro", [{"role": "user", "content": "hi"}], None, 120.0, "k"
+    )
+    assert "temperature" not in body["generationConfig"]
+    # maxOutputTokens still set.
+    assert body["generationConfig"]["maxOutputTokens"] == 4096
