@@ -10,7 +10,7 @@
 - **Repo:** `/Users/ernestprovo/dev/conclave/`
 - **License:** MIT
 - **Author:** Data Science & Engineering Experts, Inc. (DSE)
-- **Last updated:** 2026-06-07
+- **Last updated:** 2026-06-09
 
 ---
 
@@ -357,48 +357,33 @@ Ordered roughly by strategic value to the origin use case and to mcp-warden.
 
 1. **`vote` mode** — structured majority with reported split. Needs a constrained
    answer schema so votes are comparable.
-2. ~~**Debate convergence/stop criteria** — today debate runs a fixed `--rounds`; add optional
-   early-stop when answers converge (and a configurable convergence signal).~~ **LANDED**
-   (issue #4): opt-in early-stop via `converge_threshold` (config field, `Council.debate`
-   param, and `--converge-threshold` / `--converge`/`--no-converge` CLI flags). The signal is
-   round-over-round answer stability — per-member `difflib.SequenceMatcher` ratio averaged
-   across members — deterministic, stdlib-only, offline-testable. Off by default (`None`),
-   preserving fixed-rounds behavior exactly. Recorded on `CouncilResult.converged` +
-   `convergence_score`; `converge_threshold` is part of the debate cache key so a converged
-   run and a fixed run never collide. Kept in the list, struck through, for traceability.
-3. ~~**More first-class providers** — additional friendly-name defaults (e.g. more OpenAI,
-   Anthropic, Google, and open-weights endpoints). New OpenAI-compatible vendors are already
-   config-only via `endpoints:`; this item is about promoting common ones to typed defaults
-   (and adding native adapters where a provider isn't OpenAI-compatible).~~ **LANDED**
-   (issue #5): promoted four direct-key, OpenAI-compatible vendors to typed first-class
-   defaults — `groq`, `deepseek`, `mistral`, `together` — each with a doc-verified completions
-   URL, key env-var, and default model id, registered in the single source of truth
-   (`registry.OPENAI_COMPAT_PROVIDERS`) so `PROVIDER_ENV_VARS`, the adapter URL table, the
-   import-time drift guard, `redact()` coverage, and `conclave providers` stay consistent. No
-   native adapter was needed (all four are OpenAI-compatible). Aggregators/routers were
-   intentionally excluded (config-only via `endpoints:`) to preserve no-middleman (§11). Further
-   defaults stay open under §12 #5. Struck through for traceability.
-4. **Caching** — optional result cache keyed on (prompt, council, mode, model ids) to make
-   repeated/eval runs cheap. Must remain off by default and never persist keys.
-5. ~~**Streaming** — stream member answers and/or the synthesis to the terminal/library.~~
-   **LANDED** (issue #7): streaming for the `synthesize`/`raw` path. Library API is the
-   `Council.ask_stream` async generator (plus `Council.stream_sync` for non-async callers),
-   yielding `StreamEvent`s (`member_delta`/`member_done`, `synthesis_delta`/`synthesis_done`,
-   terminal `done` carrying the full `CouncilResult`); CLI flag is `--stream`. The single
-   streaming network boundary is `transport.stream_sse` (`client.stream(...)`), reusing the
-   pooled client/timeout/`redact()` plumbing; each adapter parses its own SSE delta shape
-   (OpenAI-compat `choices[].delta.content` + `[DONE]` with `stream_options.include_usage`;
-   Anthropic `content_block_delta` text + `message_start`/`message_delta` usage +
-   `message_stop`; Gemini `streamGenerateContent?alt=sse` `parts[].text` + cumulative
-   `usageMetadata`). A non-streamable model or any mid-stream error degrades gracefully —
-   partial text preserved, error on `ModelAnswer`, never raises — and the assembled
-   `ModelAnswer` (text + usage) matches the buffered result, so synthesis/`CouncilResult`
-   are unaffected. Non-streaming remains the default and is byte-for-byte unchanged.
-   `--stream` + cache: a hit renders the cached final text in one shot (no fake token
-   stream). `debate`/`adversarial` streaming is intentionally **out of scope** (a later
-   issue may extend them). Struck through for traceability.
+2. ~~**Debate convergence/stop criteria**~~ **LANDED (issue #4):** opt-in early-stop via
+   `converge_threshold` (config field, `Council.debate` param, `--converge-threshold` /
+   `--converge`/`--no-converge`); signal is round-over-round answer stability
+   (`difflib.SequenceMatcher`, stdlib-only); off by default, recorded on
+   `CouncilResult.converged`/`convergence_score`, part of the debate cache key. (Detail:
+   DOCUMENTATION_INDEX version history.)
+3. ~~**More first-class providers**~~ **LANDED (issue #5):** promoted four direct-key,
+   OpenAI-compatible vendors to typed defaults — `groq`, `deepseek`, `mistral`, `together` —
+   in the single source of truth (`registry.OPENAI_COMPAT_PROVIDERS`); no native adapter
+   needed; aggregators/routers excluded to preserve no-middleman (§11). Further defaults stay
+   open under §12 #5.
+4. ~~**Caching** — optional result cache keyed on (prompt, council, mode, model ids).~~
+   **LANDED (issue #6):** opt-in (`config.cache` / `--cache`/`--no-cache`), off by default,
+   on-disk under `$XDG_CACHE_HOME/conclave`, keys never persisted (secret-free SHA-256 key),
+   corrupt entry = silent miss; hit signalled via `CouncilResult.cached`.
+5. ~~**Streaming** — stream member answers and/or the synthesis.~~ **LANDED (issue #7):**
+   streaming for the `synthesize`/`raw` path — `Council.ask_stream` async generator (+
+   `stream_sync`) yielding `StreamEvent`s, CLI `--stream`; single boundary
+   `transport.stream_sse`, per-adapter SSE parsing, never-raises + partial-text preserved,
+   non-streaming default byte-for-byte unchanged; `debate`/`adversarial` out of scope.
+   (Detail: DOCUMENTATION_INDEX version history.)
 6. **Local HTTP/server mode (under evaluation)** — a *local* server for convenience only;
-   must not become a hosted token path or violate the no-middleman non-goal.
+   must not become a hosted token path or violate the no-middleman non-goal. **Spike
+   evaluated (2026-06-09, #8): recommendation = no-go on HTTP** (even `127.0.0.1` carries
+   DNS-rebinding/CSRF surface and dilutes the "small" non-goal; the library already serves
+   in-process); if cross-process access is wanted, prefer a thin **stdio MCP server** (no
+   network bind). Final disposition is the maintainer's — see §12 archive.
 7. ~~**Key-leak hardening** — scrub/limit provider-originated error strings before they land
    in `ModelAnswer.error`.~~ **LANDED in v0.3** via `redact()` (`adapters/base.py`), applied
    to every provider/transport error before it reaches `ModelAnswer.error` (see §3). Kept in
@@ -490,28 +475,17 @@ resilient in general, which the category has caught up on.
 
 ## 12. Open Product Questions
 
-Decisions are recorded in place (resolved 2026-06-08 except where noted). Resolved items
-are kept here for traceability rather than deleted.
+**Open:**
 
-1. **Synthesizer-in-council policy.** ✅ **RESOLVED (2026-06-08): allow, document the
-   self-reinforcement caveat, no code gate.** The default synthesizer (`claude`) may also be
-   a council member in the same run; this mirrors the common "chairman" precedent and is
-   low-stakes. The self-reinforcement risk is documented, not enforced.
 2. **`vote` answer schema.** ⏸️ **DEFERRED** — does `vote` require a constrained/structured
    answer format (and therefore a prompt contract), or do we tally free-text answers post
    hoc? Pending decision. Note the hidden dependency: comparable votes need enforced
    structured-output support across all three adapters (none currently send
    `response_format`/`tool`/`responseSchema`) — that prerequisite must land before `vote`
    (#3) is scheduled.
-3. **Per-member model/temperature overrides.** ✅ **RESOLVED (2026-06-08): yes, at the
-   config level**, with the council-wide value as the default. Members may carry per-member
-   `model`/`temperature` overrides in config; call-args overrides are out of scope for now.
-4. **Server mode scope.** ✅ **RESOLVED (2026-06-08): localhost-bind only, no token-proxy
-   path, explicit no-middleman guard.** If a local HTTP mode ships (#8), it binds to
-   `127.0.0.1`, never becomes a hosted token path, and carries an explicit non-goal guard.
-   (Peer `llm-council-core` shipped MCP + HTTP, so precedent exists — but the no-middleman
-   non-goal §8 is load-bearing and overrides convenience.)
-5. **First-class provider expansion criteria.** ✅ **RESOLVED (2026-06-08): promote a
-   pass-through to a typed default when it is OpenAI-compatible (or a native adapter exists)
-   AND has a stable public API AND shows common demand.** The long tail stays config-only via
-   `endpoints:`.
+
+**Resolved (2026-06-08):** questions 1 (synthesizer-in-council), 3 (per-member overrides),
+4 (server-mode scope, plus the 2026-06-09 #8 spike outcome), and 5 (first-class provider
+criteria) are decided and archived for traceability in
+[`docs/archive/pdd-resolved-questions-2026-06-09.md`](archive/pdd-resolved-questions-2026-06-09.md).
+The numbering is preserved so the open Q2 keeps its identity.

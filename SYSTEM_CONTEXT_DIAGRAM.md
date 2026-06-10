@@ -41,12 +41,16 @@ flowchart TB
         end
     end
 
-    subgraph providers["Foundation model providers (BYO keys, no markup, no middleman)"]
+    subgraph providers["Foundation model providers (9 first-class, BYO keys, no markup, no middleman)"]
         grok["xAI · xai/grok-4.3"]
         gemini["Google · gemini/gemini-2.5-pro"]
         claude["Anthropic · anthropic/claude-sonnet-4-6"]
         perplexity["Perplexity · perplexity/sonar-pro"]
         openai["OpenAI · openai/gpt-4.1"]
+        groq["Groq · groq/llama-3.3-70b-versatile"]
+        deepseek["DeepSeek · deepseek/deepseek-chat"]
+        mistral["Mistral · mistral/mistral-large-latest"]
+        together["Together · together/Llama-3.3-70B-Instruct-Turbo"]
     end
 
     user -->|"prompt + council + mode"| cli
@@ -77,6 +81,10 @@ flowchart TB
     transport --> claude
     transport --> perplexity
     transport --> openai
+    transport --> groq
+    transport --> deepseek
+    transport --> mistral
+    transport --> together
     provider --> models
     models --> council
     council -->|"CouncilResult (no secrets)"| cli
