@@ -7,7 +7,7 @@ the canonical authority spec on top of those.
 
 - **Repo:** `/Users/ernestprovo/dev/conclave/`
 - **Version:** 0.3.0 · **License:** MIT
-- **Last updated:** 2026-06-08
+- **Last updated:** 2026-06-09
 
 ---
 
@@ -91,6 +91,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 
 | Date | Change |
 |------|--------|
+| 2026-06-09 | Roadmap features shipped: adversarial proposer resilience (#9), optional result cache (#6), debate convergence early-stop (#4), 4 first-class providers groq/deepseek/mistral/together (#5), streaming for synthesize/raw (#7); tests 121→191. #8 local-server-mode spike evaluated (no-go on HTTP). Doc sync: System Context diagram now shows all 9 providers; PDD §12 resolved questions archived to `docs/archive/pdd-resolved-questions-2026-06-09.md` (PDD back under 500 lines); `config.example.yml` stale "LiteLLM" comment fixed. |
 | 2026-06-08 | v0.3.0 version bump; CI foundation (Actions matrix, ruff, coverage floor, gitleaks, branch protection); redact() custom-endpoint key-leak fix (#14); status_error consolidation + conditional temperature (#16/#22); provider-metadata single-source + import-time drift guard + config memoization (#19/#15); CLI exit-code contract + httpx client lifecycle (#17/#20); transport/cli/logging test backfill (#18); public release + community files. |
 | 2026-06-08 | PDD §11 repositioned vs. new direct peers (`llm-council-core`, `the-llm-council`); §12 Q1/Q3/Q4/Q5 resolved. Index Tests table updated for the PR #2 split (`test_adapters.py`, `test_providers.py`). |
 | 2026-06-07 | v0.3 provider-highway refactor (LiteLLM removed → owned httpx transport + adapter registry); 3-core docs + PDD authored. |
