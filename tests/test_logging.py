@@ -19,6 +19,18 @@ import conclave.logging as logging_mod
 from conclave.logging import get_logger
 
 
+def _own_handlers(logger: logging.Logger) -> list[logging.Handler]:
+    """Return only conclave's own handlers, excluding pytest's log-capture ones.
+
+    pytest's logging plugin attaches ``_pytest.logging.LogCaptureHandler``
+    instances to loggers during a test (it subclasses ``StreamHandler``), so a
+    raw ``len(logger.handlers)`` count is inflated by the test runner and varies
+    across pytest versions. These tests care only about the single handler
+    ``get_logger`` installs, so filter the capture handlers out by class name.
+    """
+    return [h for h in logger.handlers if type(h).__name__ != "LogCaptureHandler"]
+
+
 @pytest.fixture
 def fresh_logging(monkeypatch):
     """Reset the one-shot logger config so a fresh get_logger() reconfigures.
@@ -54,8 +66,9 @@ def test_default_level_is_warning_when_env_unset(fresh_logging, monkeypatch):
     assert logger.name == "conclave"
     assert logger.level == logging.WARNING
     assert logger.propagate is False
-    assert len(logger.handlers) == 1
-    assert isinstance(logger.handlers[0], logging.StreamHandler)
+    own = _own_handlers(logger)
+    assert len(own) == 1
+    assert isinstance(own[0], logging.StreamHandler)
 
 
 def test_env_var_sets_level_case_insensitively(fresh_logging, monkeypatch):
@@ -95,7 +108,7 @@ def test_configuration_happens_once(fresh_logging, monkeypatch):
     monkeypatch.setenv("CONCLAVE_LOG_LEVEL", "ERROR")
 
     first = get_logger()
-    assert len(first.handlers) == 1
+    assert len(_own_handlers(first)) == 1
     assert logging_mod._CONFIGURED is True
 
     # Changing the env now must have no effect -- the guard short-circuits.
@@ -103,5 +116,5 @@ def test_configuration_happens_once(fresh_logging, monkeypatch):
     second = get_logger()
 
     assert second is first
-    assert len(second.handlers) == 1  # not duplicated
+    assert len(_own_handlers(second)) == 1  # not duplicated
     assert second.level == logging.ERROR  # unchanged from first config
