@@ -199,6 +199,45 @@ print("VERDICT:\n", adv.adversarial.verdict)   # also mirrored to adv.synthesis
 critiques populate `answers` and the verdict mirrors into `synthesis` — so code
 written against the v0.1 surface keeps working across every mode.
 
+## Synthesizer behavior
+
+The synthesizer is the single model that merges the council's answers (and is the
+**judge** in `adversarial` mode and the final consolidator in `debate`). It is
+chosen by this precedence, highest first:
+
+1. the `synthesizer=` argument to `Council` (CLI: `--synthesizer/-s`);
+2. the `synthesizer:` key in `~/.conclave/config.yml`;
+3. the built-in default — **`claude`** (`anthropic/claude-sonnet-4-6`).
+
+```bash
+conclave ask "..." --council grok,gemini --synthesizer openai   # override per run
+```
+
+**Degradation is observable, never silent.** Synthesis is skipped — and the
+reason is always surfaced on the result — in three cases:
+
+| Situation | What happens |
+|---|---|
+| No usable member answers (all errored/skipped) | `synthesis = None`, `synthesis_error = "no successful member answers…"` |
+| Synthesizer has no API key | `synthesis = None`, `synthesis_error = "…has no API key; returning raw answers only"`; member answers preserved |
+| Synthesizer call fails | `synthesis = None`, `synthesis_error =` the provider error |
+
+In every case the member answers are returned intact and a warning is logged, so
+a caller can reliably detect a non-synthesis with
+`result.synthesis is None and result.synthesis_error is not None`. There is **no
+path** where concatenated or partial output is silently returned as if it were a
+synthesis. In `adversarial` mode the same signal lands on
+`adversarial.verdict_error` (mirrored to `synthesis_error`).
+
+**The synthesis prompt is a versioned constant.** The synthesize-mode system
+prompt is fixed in code (not built per call); the debate/judge prompts live in
+`conclave.prompts`. The whole prompt set carries a version tag,
+`conclave.prompts.SYNTHESIS_PROMPT_VERSION`, stamped onto **every**
+`CouncilResult` as `result.prompt_version`. A downstream eval or regression suite
+can compare it across runs to detect that the synthesis wording changed, instead
+of silently attributing the shift to model drift. The test suite pins both the
+prompt text and the version, so changing one without the other fails CI.
+
 ## Config (optional)
 
 Create `~/.conclave/config.yml` to add models, define named councils, and set a

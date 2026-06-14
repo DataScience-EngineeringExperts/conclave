@@ -10,6 +10,17 @@ from __future__ import annotations
 
 from .models import ModelAnswer
 
+# Version identifier for the synthesis/judge prompt *set*. Bump this string
+# whenever ANY synthesizer-facing prompt changes -- the synthesize-mode system
+# prompt (``conclave.council._SYNTH_SYSTEM``), the debate consolidation prompt
+# (:data:`DEBATE_FINAL_SYSTEM`), or the adversarial judge prompt
+# (:data:`JUDGE_SYSTEM`). It is surfaced on :class:`conclave.models.CouncilResult`
+# (the ``prompt_version`` field) so a downstream eval or regression suite can
+# detect that the wording the synthesis was produced under has shifted, rather
+# than silently absorbing a prompt change as a quality regression. The value is
+# opaque (a date-stamped tag); only equality/inequality is meaningful.
+SYNTHESIS_PROMPT_VERSION = "2026-06-14"
+
 # Stable position-based labels used to anonymize peers in debate rounds 2..N.
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 

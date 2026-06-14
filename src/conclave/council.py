@@ -8,6 +8,45 @@ synthesize mode) asks a synthesizer model to merge the answers into one.
 The deliberation modes (``debate``, ``adversarial``) live in :mod:`conclave.modes`
 and reuse this class's :meth:`Council.fan_out` primitive so the partial-failure
 handling is written exactly once.
+
+Synthesizer selection and degradation (the "council" value prop)
+----------------------------------------------------------------
+
+**Which model synthesizes.** Synthesis is performed by one *synthesizer* model,
+separate from the council members (though a member may also be the synthesizer).
+Selection precedence, highest first:
+
+1. the ``synthesizer=`` argument to :class:`Council` (the CLI ``--synthesizer/-s``
+   flag wires straight through to this);
+2. the ``synthesizer:`` key in ``~/.conclave/config.yml``;
+3. the built-in default :data:`conclave.registry.DEFAULT_SYNTHESIZER` (``"claude"``,
+   i.e. ``anthropic/claude-sonnet-4-6``).
+
+The same model is the **judge** in ``adversarial`` mode and the final
+consolidator in ``debate`` mode -- one selection drives all three.
+
+**The fallback / degraded path is OBSERVABLE, never silent.** Synthesis can fail
+to run for three reasons, and each one is signaled on the result rather than
+silently swallowed:
+
+* *No usable member answers* (every member errored/skipped) -- nothing to merge;
+* *The synthesizer has no API key* in the environment;
+* *The synthesizer call itself fails* (provider error/timeout).
+
+In all three cases ``CouncilResult.synthesis`` stays ``None``, the member answers
+are still returned intact, a warning is logged, and an actionable reason is set
+on ``CouncilResult.synthesis_error`` (in ``adversarial`` mode the analogous
+``AdversarialResult.verdict_error``, mirrored to ``synthesis_error``). A caller
+can therefore always tell synthesis did **not** happen as expected by checking
+``synthesis is None and synthesis_error is not None`` -- there is no path where
+the council quietly returns concatenated/partial output dressed up as a synthesis.
+
+**The synthesis prompt is a versioned constant.** The synthesize-mode system
+prompt is :data:`_SYNTH_SYSTEM` (the debate/judge prompts live in
+:mod:`conclave.prompts`); the prompt *set* carries the version tag
+:data:`conclave.prompts.SYNTHESIS_PROMPT_VERSION`, stamped onto every
+:class:`~conclave.models.CouncilResult` as ``prompt_version`` so a prompt change
+is detectable downstream instead of being silently absorbed as model drift.
 """
 
 from __future__ import annotations
@@ -20,6 +59,7 @@ from . import transport
 from .config import ConclaveConfig, load_config
 from .logging import get_logger
 from .models import CouncilResult, ModelAnswer, StreamEvent
+from .prompts import SYNTHESIS_PROMPT_VERSION
 from .providers import call_model
 from .registry import key_present
 
@@ -30,6 +70,14 @@ logger = get_logger("council")
 # per member while sharing Council.fan_out's concurrency + partial-failure code.
 MessagesFor = Callable[[str, str], list[dict[str, str]]]
 
+# The synthesize-mode system prompt. It is a stable module constant -- never
+# built per-call -- so the wording the council synthesizes under is auditable and
+# diffable. Any change to it (or to the debate/judge prompts in
+# :mod:`conclave.prompts`) MUST be paired with a bump of
+# :data:`conclave.prompts.SYNTHESIS_PROMPT_VERSION`, which is stamped onto every
+# :class:`~conclave.models.CouncilResult` as ``prompt_version`` so a downstream
+# eval can detect the change rather than silently absorb it. ``test_synthesizer``
+# pins both this text and the version, so editing one without the other fails CI.
 _SYNTH_SYSTEM = (
     "You are the synthesizer of a council of AI models. You are given the same "
     "user prompt that was posed to several models, plus each model's answer. "
@@ -37,6 +85,9 @@ _SYNTH_SYSTEM = (
     "and adjudicate disagreements, and note any answer that is clearly wrong. "
     "Do not invent a model's position; rely only on the answers provided."
 )
+
+# Re-exported for callers that want the version without importing prompts.
+__all__ = ["Council", "SYNTHESIS_PROMPT_VERSION"]
 
 
 class Council:
@@ -358,7 +409,32 @@ class Council:
         return events
 
     async def _synthesize(self, result: CouncilResult) -> None:
-        """Run the synthesizer over the successful answers, mutating ``result``."""
+        """Run the synthesizer over the successful answers, mutating ``result``.
+
+        This is the buffered (non-streaming) synthesize path; the streaming
+        counterpart :func:`conclave.streaming._stream_synthesis` mirrors it
+        short-circuit for short-circuit. The synthesizer model is
+        ``self.synthesizer`` (resolved per the precedence documented in the module
+        docstring: constructor arg, else config, else the ``"claude"`` default).
+
+        Every degraded outcome is made observable on ``result`` -- none is
+        silent. On success ``result.synthesis`` holds the merged answer; on any
+        of the three short-circuits ``result.synthesis`` stays ``None`` and
+        ``result.synthesis_error`` carries the reason:
+
+        * **no usable answers** -- every member failed/was skipped, so there is
+          nothing to merge;
+        * **synthesizer unkeyed** -- ``self.synthesizer``'s API key is absent, so
+          the raw member answers are returned with an explanatory error;
+        * **synthesizer call failed** -- the synthesizer provider errored, and its
+          error text is surfaced verbatim.
+
+        The synthesizer identity (``synthesizer`` / ``synthesizer_model_id``) is
+        recorded on ``result`` before the key check so a consumer can see *which*
+        model was selected even when it could not run. The prompt used is the
+        versioned :data:`_SYNTH_SYSTEM`; the version tag already lives on
+        ``result.prompt_version``.
+        """
         usable = result.successful_answers
         if not usable:
             result.synthesis_error = "no successful member answers to synthesize"
