@@ -22,14 +22,25 @@ Vector map
 * **V4 provider 400/422 echo** -- a buffered HTTP error whose body echoes the
   submitted key is scrubbed in ``ModelAnswer.error`` (capture runs through
   ``redact()``).
-* **V5 transport debug logging** -- the opt-in ``guard_transport_logging`` helper
-  blocks httpx/httpcore DEBUG records (the only level that emits auth headers).
+* **V5 transport debug logging** -- the ``guard_transport_logging`` helper blocks
+  httpx/httpcore DEBUG records (the only level that emits auth headers).
+* **V8 transport cause-chain (RANK 1/5)** -- a ``TransportError`` surfaced from
+  ``post_json``/``stream_sse`` retains no reference to the underlying httpx
+  exception, whose ``.request.headers`` carries the live auth header; the chain is
+  dropped (``raise ... from None``) so the key cannot leak via
+  ``traceback.format_exception`` or a cause-chain repr.
+* **V9 transport guard default-on (RANK 6)** -- ``Council.__init__`` installs the
+  httpx/httpcore DEBUG guard by default; ``allow_transport_debug_logging=True``
+  opts out.
+* **V10 client close hygiene (RANK 8)** -- the pooled client closes cleanly with no
+  ``ResourceWarning`` (cheap close-wiring regression guard).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import traceback
 
 import httpx
 import pytest
@@ -565,3 +576,100 @@ def test_planted_secret_is_obviously_fake():
     """V6: the audit's planted secret is a synthetic, gitleaks-allowlisted token."""
     assert "FAKE" in PLANTED
     assert PLANTED.startswith("sk-FAKE")
+
+
+# --------------------------------------------------------------------------- #
+# V8 -- transport drops the httpx exception from the cause chain (RANK 1/5, HIGH)
+# --------------------------------------------------------------------------- #
+#
+# httpx exceptions carry a live ``.request`` whose ``.headers`` hold the
+# ``Authorization``/``x-api-key`` value. If the surfaced TransportError kept that
+# exception as ``__cause__``/``__context__``, the key would sit one cause-chain hop
+# away and leak under ``traceback.format_exception``, ``logging.exception``, or a
+# cause-chain repr. The transport raises ``... from None``; these tests pin that the
+# formatted traceback + repr/str of the surfaced error are key-free and the cause
+# chain is dropped.
+
+
+def _planted_header_request(url: str = "https://x/y") -> httpx.Request:
+    """A real httpx.Request carrying the planted auth header (so .request.headers populates)."""
+    return httpx.Request("POST", url, headers={"Authorization": f"Bearer {PLANTED}"})
+
+
+def _assert_cause_chain_key_free(err: transport.TransportError) -> None:
+    """Shared V8 assertions: the surfaced TransportError leaks the key nowhere.
+
+    The load-bearing guarantee is that ``traceback.format_exception`` (which honors
+    ``__suppress_context__``) renders neither the httpx exception nor its headers,
+    and that ``__cause__`` is dropped. The transport additionally clears
+    ``__context__`` at a boundary (see ``transport._raise_transport_error``), so a
+    *direct attribute walk* also finds no header-bearing httpx exception -- we pin
+    that too.
+    """
+    formatted = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+    assert PLANTED not in formatted, "planted key leaked via the formatted traceback"
+    assert PLANTED not in repr(err)
+    assert PLANTED not in str(err)
+    assert err.__cause__ is None
+    assert err.__suppress_context__ is True
+    # Explicit context-clear makes even a direct ``err.__context__`` walk key-free.
+    assert err.__context__ is None
+
+
+async def test_transport_error_drops_httpx_cause_chain(monkeypatch, mock_stream_client):
+    """V8 (buffered): post_json's TransportError keeps no header-bearing httpx cause.
+
+    The MockTransport handler raises ``httpx.ConnectError`` carrying a request whose
+    headers hold the planted Authorization token. ``post_json`` must raise a
+    ``TransportError`` whose formatted traceback, repr, and str are all key-free and
+    whose cause chain is dropped (audit RANK 1/5).
+    """
+    # Value-based redact would also mask the key in any *string* the transport built;
+    # the POINT here is the cause chain, asserted on the formatted traceback.
+    monkeypatch.setenv("OPENAI_API_KEY", PLANTED)
+    monkeypatch.setenv("XAI_API_KEY", PLANTED)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Raise a network error carrying a header-bearing request (httpx.HTTPError arm).
+        raise httpx.ConnectError("boom", request=_planted_header_request())
+
+    mock_stream_client(handler)
+
+    with pytest.raises(transport.TransportError) as excinfo:
+        await transport.post_json(
+            "https://x/y",
+            {"Authorization": f"Bearer {PLANTED}"},
+            {"hi": "there"},
+            timeout=5.0,
+        )
+    _assert_cause_chain_key_free(excinfo.value)
+
+
+async def test_stream_sse_error_drops_httpx_cause_chain(monkeypatch, mock_stream_client):
+    """V8 (streaming): stream_sse's TransportError keeps no header-bearing httpx cause.
+
+    Same guarantee at the streaming boundary: the handler raises an httpx error
+    carrying the planted auth header; iterating the async generator surfaces a
+    ``TransportError`` whose formatted traceback / repr / str are key-free and whose
+    cause chain is dropped (audit RANK 1/5).
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", PLANTED)
+    monkeypatch.setenv("XAI_API_KEY", PLANTED)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom", request=_planted_header_request())
+
+    mock_stream_client(handler)
+
+    async def drain() -> None:
+        async for _event in transport.stream_sse(
+            "https://x/y",
+            {"Authorization": f"Bearer {PLANTED}"},
+            {"hi": "there"},
+            timeout=5.0,
+        ):
+            pass  # pragma: no cover -- the handler raises before any event
+
+    with pytest.raises(transport.TransportError) as excinfo:
+        await drain()
+    _assert_cause_chain_key_free(excinfo.value)
