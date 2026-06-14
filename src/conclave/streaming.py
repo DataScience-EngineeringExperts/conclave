@@ -31,6 +31,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
+from .adapters.base import redact
 from .logging import get_logger
 from .models import CouncilResult, ModelAnswer, StreamEvent
 from .providers import call_model_stream
@@ -81,15 +82,16 @@ async def _drive_member(
                     )
                 )
     except Exception as exc:  # noqa: BLE001 -- a member must never wedge the run
-        logger.warning("%s streaming raised unexpectedly: %s", name, exc)
+        # call_model_stream already redacts and never raises, so this arm only
+        # fires on an UNEXPECTED escape. Redact the exception text anyway so the
+        # "every surfaced error string is scrubbed" invariant holds even on this
+        # defense-in-depth path (key-leak audit, vector 2).
+        message = redact(f"{type(exc).__name__}: {exc}")
+        logger.warning("%s streaming raised unexpectedly: %s", name, message)
         await queue.put(
             (
                 "answer",
-                ModelAnswer(
-                    name=name,
-                    model_id=model_id,
-                    error=f"{type(exc).__name__}: {exc}",
-                ),
+                ModelAnswer(name=name, model_id=model_id, error=message),
             )
         )
     finally:

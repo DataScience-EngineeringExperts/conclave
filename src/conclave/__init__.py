@@ -49,7 +49,7 @@ from .models import (
     StreamEvent,
     TokenUsage,
 )
-from .transport import aclose
+from .transport import aclose, guard_transport_logging
 
 __version__ = "0.3.0"
 
@@ -64,5 +64,6 @@ __all__ = [
     "ConclaveConfig",
     "load_config",
     "aclose",
+    "guard_transport_logging",
     "__version__",
 ]

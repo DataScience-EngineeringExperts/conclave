@@ -20,15 +20,18 @@ from conclave.logging import get_logger
 
 
 def _own_handlers(logger: logging.Logger) -> list[logging.Handler]:
-    """Return only conclave's own handlers, excluding pytest's log-capture ones.
+    """Return only the handlers conclave installs, excluding pytest's capture ones.
 
-    pytest's logging plugin attaches ``_pytest.logging.LogCaptureHandler``
-    instances to loggers during a test (it subclasses ``StreamHandler``), so a
-    raw ``len(logger.handlers)`` count is inflated by the test runner and varies
-    across pytest versions. These tests care only about the single handler
-    ``get_logger`` installs, so filter the capture handlers out by class name.
+    ``get_logger`` installs exactly one plain ``logging.StreamHandler`` on the
+    ``conclave`` root. Because that logger sets ``propagate = False``, pytest's
+    log-capture machinery attaches its own handlers (``LogCaptureHandler``, a
+    *subclass* of ``StreamHandler``) directly to it during a run -- the count of
+    which varies by pytest version. Selecting by exact type (``type(h) is
+    StreamHandler``) counts conclave's handler alone and ignores any injected
+    capture handler, so the one-shot-configuration assertions stay precise and
+    robust across pytest versions (pytest 9.x attaches more than older lines did).
     """
-    return [h for h in logger.handlers if type(h).__name__ != "LogCaptureHandler"]
+    return [h for h in logger.handlers if type(h) is logging.StreamHandler]
 
 
 @pytest.fixture
@@ -98,7 +101,8 @@ def test_named_logger_is_child_of_root(fresh_logging, monkeypatch):
     assert child.name == "conclave.transport"
     assert child.parent is logging.getLogger("conclave")
     # Child has no handler of its own; it propagates to the configured root.
-    assert child.handlers == []
+    # (pytest may attach a capture handler; exclude it -- conclave adds none.)
+    assert _own_handlers(child) == []
     # Effective level is inherited from the root we just configured at INFO.
     assert child.getEffectiveLevel() == logging.INFO
 
