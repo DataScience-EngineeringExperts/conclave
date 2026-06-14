@@ -19,6 +19,20 @@ import conclave.logging as logging_mod
 from conclave.logging import get_logger
 
 
+def _app_stream_handlers(logger: logging.Logger) -> list[logging.Handler]:
+    """Return only the handlers conclave itself installed on ``logger``.
+
+    Under pytest's logging plugin the captured loggers also carry one or more
+    ``LogCaptureHandler`` instances (a ``StreamHandler`` subclass) injected by the
+    harness -- their presence is a property of the test runner, not of conclave's
+    one-shot logger config. To assert on conclave's OWN handler set without
+    coupling to the pytest version, we exclude any handler whose class name
+    contains ``Capture``. What remains is exactly the ``StreamHandler``
+    ``get_logger`` adds.
+    """
+    return [h for h in logger.handlers if "Capture" not in type(h).__name__]
+
+
 @pytest.fixture
 def fresh_logging(monkeypatch):
     """Reset the one-shot logger config so a fresh get_logger() reconfigures.
@@ -54,8 +68,9 @@ def test_default_level_is_warning_when_env_unset(fresh_logging, monkeypatch):
     assert logger.name == "conclave"
     assert logger.level == logging.WARNING
     assert logger.propagate is False
-    assert len(logger.handlers) == 1
-    assert isinstance(logger.handlers[0], logging.StreamHandler)
+    app_handlers = _app_stream_handlers(logger)
+    assert len(app_handlers) == 1
+    assert isinstance(app_handlers[0], logging.StreamHandler)
 
 
 def test_env_var_sets_level_case_insensitively(fresh_logging, monkeypatch):
@@ -84,8 +99,9 @@ def test_named_logger_is_child_of_root(fresh_logging, monkeypatch):
 
     assert child.name == "conclave.transport"
     assert child.parent is logging.getLogger("conclave")
-    # Child has no handler of its own; it propagates to the configured root.
-    assert child.handlers == []
+    # Child has no handler of its OWN; it propagates to the configured root.
+    # (pytest may attach a capture handler; exclude it -- conclave adds none.)
+    assert _app_stream_handlers(child) == []
     # Effective level is inherited from the root we just configured at INFO.
     assert child.getEffectiveLevel() == logging.INFO
 
@@ -95,7 +111,7 @@ def test_configuration_happens_once(fresh_logging, monkeypatch):
     monkeypatch.setenv("CONCLAVE_LOG_LEVEL", "ERROR")
 
     first = get_logger()
-    assert len(first.handlers) == 1
+    assert len(_app_stream_handlers(first)) == 1
     assert logging_mod._CONFIGURED is True
 
     # Changing the env now must have no effect -- the guard short-circuits.
@@ -103,5 +119,5 @@ def test_configuration_happens_once(fresh_logging, monkeypatch):
     second = get_logger()
 
     assert second is first
-    assert len(second.handlers) == 1  # not duplicated
+    assert len(_app_stream_handlers(second)) == 1  # not duplicated
     assert second.level == logging.ERROR  # unchanged from first config
