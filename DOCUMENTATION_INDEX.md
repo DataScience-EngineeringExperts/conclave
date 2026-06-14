@@ -6,8 +6,8 @@ context diagram, and this index linking everything together. The Product Design 
 the canonical authority spec on top of those.
 
 - **Repo:** `/Users/ernestprovo/dev/conclave/`
-- **Version:** 0.3.0 · **License:** MIT
-- **Last updated:** 2026-06-09
+- **Version:** 1.0.0 · **License:** MIT
+- **Last updated:** 2026-06-14
 
 ---
 
@@ -77,6 +77,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 |------|------|---------|
 | Packaging | [`pyproject.toml`](pyproject.toml) | hatchling build, deps (httpx, pydantic, rich, typer, pyyaml — no LLM SDK), dev extras, console script, pytest config. License: MIT. **PyPI distribution name `conclave-cli`** (the name `conclave` is an unrelated project); command + import stay `conclave`. |
 | Release runbook | [`RELEASING.md`](RELEASING.md) | Operator runbook: one-time PyPI OIDC Trusted-Publisher setup for `conclave-cli`, cut-a-release checklist (bump→tag→publish Release), post-release verification (Sigstore bundle, PEP 740 attestations), rollback/yank. |
+| Changelog | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog history per release (SemVer). The 1.0.0 entry covers the distribution rename, key-leak hardening, synthesizer versioning, and release engineering; post-1.0 roadmap notes (vote mode, stdio MCP server). |
 | Dev lockfile | [`requirements-dev.lock`](requirements-dev.lock) | Hash-pinned dev + runtime tree for reproducible installs/CI. Regenerate via `uv pip compile --universal --generate-hashes --python-version 3.11 --extra dev pyproject.toml -o requirements-dev.lock`. |
 | License | [`LICENSE`](LICENSE) | MIT License. Copyright (c) 2026 Ernest Provo. Matches the `pyproject.toml` license field. |
 | Security policy | [`SECURITY.md`](SECURITY.md) | BYO-keys vulnerability reporting policy: how to report, scope, and the key-handling guarantees consumers can rely on. |
