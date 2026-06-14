@@ -9,6 +9,19 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+def _default_prompt_version() -> str:
+    """Resolve the current synthesis-prompt version without an import cycle.
+
+    ``conclave.prompts`` imports this module, so importing it at module load
+    would be circular. The import is deferred into this factory (run only when a
+    ``CouncilResult`` is constructed, by which point both modules are loaded), so
+    every result defaults to the live :data:`conclave.prompts.SYNTHESIS_PROMPT_VERSION`.
+    """
+    from .prompts import SYNTHESIS_PROMPT_VERSION
+
+    return SYNTHESIS_PROMPT_VERSION
+
+
 class TokenUsage(BaseModel):
     """Token accounting for a single model call."""
 
@@ -164,6 +177,13 @@ class CouncilResult(BaseModel):
         convergence_score: The convergence score (0.0--1.0) of the round that
             triggered an early stop, or ``None`` when no early stop occurred.
             Higher means more stable round-over-round (more converged).
+        prompt_version: The version tag of the synthesizer/judge prompt set used
+            for this run (:data:`conclave.prompts.SYNTHESIS_PROMPT_VERSION`).
+            Stamped on **every** result regardless of mode or whether synthesis
+            actually ran, so a downstream eval/regression suite can detect that
+            the synthesis prompt wording changed between two runs instead of
+            silently attributing the shift to model drift. Opaque string; only
+            equality is meaningful.
     """
 
     prompt: str
@@ -179,6 +199,7 @@ class CouncilResult(BaseModel):
     cached: bool = False
     converged: bool = False
     convergence_score: float | None = None
+    prompt_version: str = Field(default_factory=_default_prompt_version)
 
     @property
     def successful_answers(self) -> list[ModelAnswer]:

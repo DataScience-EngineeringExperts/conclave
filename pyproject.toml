@@ -3,8 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "conclave"
-version = "0.3.0"
+# PyPI distribution name is `conclave-cli` because the PyPI name `conclave` is
+# taken by an unrelated project (a blockchain client, not this one). The CLI
+# command (`conclave`), the import package (`conclave`), and the repo all stay
+# `conclave` — only the published *distribution* name differs. So users
+# `pip install conclave-cli`, then run `conclave ...` / `from conclave import Council`.
+name = "conclave-cli"
+version = "1.0.0"
 description = "Bring-your-own-keys multi-model council CLI + library. Fan a prompt to N foundation models concurrently and merge their answers."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,6 +24,12 @@ dependencies = [
     "typer>=0.12.0",
     "pyyaml>=6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ernestprovo23/conclave"
+Repository = "https://github.com/ernestprovo23/conclave"
+Issues = "https://github.com/ernestprovo23/conclave/issues"
+Changelog = "https://github.com/ernestprovo23/conclave/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [

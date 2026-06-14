@@ -19,6 +19,21 @@ import conclave.logging as logging_mod
 from conclave.logging import get_logger
 
 
+def _own_handlers(logger: logging.Logger) -> list[logging.Handler]:
+    """Return only the handlers conclave installs, excluding pytest's capture ones.
+
+    ``get_logger`` installs exactly one plain ``logging.StreamHandler`` on the
+    ``conclave`` root. Because that logger sets ``propagate = False``, pytest's
+    log-capture machinery attaches its own handlers (``LogCaptureHandler``, a
+    *subclass* of ``StreamHandler``) directly to it during a run -- the count of
+    which varies by pytest version. Selecting by exact type (``type(h) is
+    StreamHandler``) counts conclave's handler alone and ignores any injected
+    capture handler, so the one-shot-configuration assertions stay precise and
+    robust across pytest versions (pytest 9.x attaches more than older lines did).
+    """
+    return [h for h in logger.handlers if type(h) is logging.StreamHandler]
+
+
 @pytest.fixture
 def fresh_logging(monkeypatch):
     """Reset the one-shot logger config so a fresh get_logger() reconfigures.
@@ -54,8 +69,9 @@ def test_default_level_is_warning_when_env_unset(fresh_logging, monkeypatch):
     assert logger.name == "conclave"
     assert logger.level == logging.WARNING
     assert logger.propagate is False
-    assert len(logger.handlers) == 1
-    assert isinstance(logger.handlers[0], logging.StreamHandler)
+    own = _own_handlers(logger)
+    assert len(own) == 1
+    assert isinstance(own[0], logging.StreamHandler)
 
 
 def test_env_var_sets_level_case_insensitively(fresh_logging, monkeypatch):
@@ -85,7 +101,8 @@ def test_named_logger_is_child_of_root(fresh_logging, monkeypatch):
     assert child.name == "conclave.transport"
     assert child.parent is logging.getLogger("conclave")
     # Child has no handler of its own; it propagates to the configured root.
-    assert child.handlers == []
+    # (pytest may attach a capture handler; exclude it -- conclave adds none.)
+    assert _own_handlers(child) == []
     # Effective level is inherited from the root we just configured at INFO.
     assert child.getEffectiveLevel() == logging.INFO
 
@@ -95,7 +112,7 @@ def test_configuration_happens_once(fresh_logging, monkeypatch):
     monkeypatch.setenv("CONCLAVE_LOG_LEVEL", "ERROR")
 
     first = get_logger()
-    assert len(first.handlers) == 1
+    assert len(_own_handlers(first)) == 1
     assert logging_mod._CONFIGURED is True
 
     # Changing the env now must have no effect -- the guard short-circuits.
@@ -103,5 +120,5 @@ def test_configuration_happens_once(fresh_logging, monkeypatch):
     second = get_logger()
 
     assert second is first
-    assert len(second.handlers) == 1  # not duplicated
+    assert len(_own_handlers(second)) == 1  # not duplicated
     assert second.level == logging.ERROR  # unchanged from first config

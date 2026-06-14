@@ -1,0 +1,30 @@
+# gitleaks configuration for conclave.
+#
+# conclave is a bring-your-own-keys tool whose security tests deliberately plant
+# OBVIOUSLY-FAKE, key-SHAPED strings (e.g. "sk-FAKE...", "AIza-FAKE...") to prove
+# that redact() / the cache / streaming never let a real key escape. Those fake
+# fixtures are not secrets, but a key-shaped literal can trip gitleaks' generic
+# rules. This allowlist scopes that exception to the test tree ONLY, so a real
+# secret committed anywhere in the source or docs is still caught.
+#
+# We extend gitleaks' bundled default ruleset rather than replacing it, so every
+# upstream detector stays active outside the allowlisted paths.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake, key-shaped fixtures used by the key-leak regression tests are not secrets."
+# Restrict the allowance to the tests directory: production code, docs, and
+# config are still fully scanned.
+paths = [
+    '''tests/.*\.py''',
+]
+# Defense in depth: also allow the explicit fake-key marker tokens anywhere they
+# appear, so a fixture moved/quoted in a doc example is not flagged. These are
+# intentionally synthetic sentinels, never real credentials.
+regexes = [
+    '''FAKE-?[A-Za-z0-9_\-]*''',
+    '''sk-(test|FAKE|streamleak|CONCLAVE)[A-Za-z0-9_\-]*''',
+    '''AIza-?(dummy|test|FAKE)[A-Za-z0-9_\-]*''',
+]

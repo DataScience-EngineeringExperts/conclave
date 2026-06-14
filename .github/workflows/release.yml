@@ -1,0 +1,162 @@
+# =============================================================================
+# Release & publish workflow (conclave v1.0 — distribution + release-eng)
+#
+# !!! INERT UNTIL CONFIGURED — SAFE TO MERGE !!!
+#
+# This workflow does NOTHING until BOTH of the following are true:
+#   (a) a GitHub *Release* is published (a pushed git tag ALONE does not trigger
+#       it — the trigger is `release: published`, the explicit human gesture), AND
+#   (b) the `conclave-cli` PyPI project + its OIDC Trusted Publisher are configured
+#       by the owner (see RELEASING.md "One-time PyPI setup").
+#
+# Until (a) AND (b) hold, merging this file changes nothing at runtime: no tag is
+# cut here, no version is bumped here, nothing is published here. Cutting v1.0.0 is
+# then a single tag + GitHub Release away (the full runbook is in RELEASING.md).
+#
+# What it does WHEN a Release is published:
+#   build         — builds sdist + wheel with `python -m build`, uploads them as
+#                   workflow artifacts so publish + sign consume the exact same bytes.
+#   pypi-publish  — publishes those artifacts to PyPI via OIDC Trusted Publishing
+#                   (NO API token, NO stored secret), with PEP 740 attestations.
+#                   Fails CLOSED if the Trusted Publisher is not yet configured —
+#                   it never falls back to anything insecure.
+#   sign          — signs the sdist + wheel with Sigstore keyless (ambient OIDC ->
+#                   Fulcio) and attaches the `.sigstore` bundles to the GitHub
+#                   Release assets.
+#
+# Distribution-name note: the PyPI distribution name is `conclave-cli` (the name
+# `conclave` is taken by an unrelated project). The command + import package stay
+# `conclave`. The Trusted Publisher must therefore name PROJECT `conclave-cli`.
+#
+# Pin discipline: every `uses:` is pinned to a full 40-char commit SHA with a
+# `# vX.Y.Z` comment. conclave's other workflows (test.yml, gitleaks.yml) pin to
+# mutable major tags; this publish workflow holds elevated OIDC permissions, so it
+# is hardened one level further with full commit-SHA pins.
+# =============================================================================
+name: Release
+
+on:
+  # Primary, safe trigger: only fires once a GitHub Release is *published*.
+  # A pushed tag by itself does NOT publish a Release and therefore does NOT
+  # trigger this workflow.
+  release:
+    types: [published]
+
+# Least-privilege at the top level; each job widens scope locally only as needed.
+permissions:
+  contents: read
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Job 1: build sdist + wheel and publish them as workflow artifacts so the
+  # publish and sign jobs consume the exact same bytes (no rebuild drift).
+  # --------------------------------------------------------------------------
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build frontend
+        run: python -m pip install --upgrade "build==1.2.2.post1"
+
+      - name: Build sdist + wheel
+        run: python -m build --sdist --wheel --outdir dist/
+
+      - name: Show built artifacts
+        run: ls -l dist/
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------
+  # Job 2: publish to PyPI via OIDC Trusted Publishing.
+  #
+  # No API token, no stored secret: pypa/gh-action-pypi-publish mints a short-lived
+  # OIDC token from this job's `id-token: write` and exchanges it for a PyPI upload
+  # token. PyPI must have a Trusted Publisher (pending or active) for `conclave-cli`
+  # pointing at owner=ernestprovo23, repo=conclave, workflow=release.yml — see
+  # RELEASING.md. Until that exists, this job fails CLOSED (publish denied); it
+  # never falls back to anything insecure.
+  #
+  # PEP 740 attestations are generated + attached by default (the action's
+  # `attestations: true` default) since OIDC Trusted Publishing is in use.
+  # --------------------------------------------------------------------------
+  pypi-publish:
+    name: Publish to PyPI (OIDC Trusted Publishing)
+    needs: build
+    runs-on: ubuntu-latest
+    # id-token: write is scoped to THIS job only (never granted at workflow top level).
+    permissions:
+      id-token: write   # REQUIRED for OIDC Trusted Publishing — mints the token
+      contents: read
+
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist/
+
+      # Production PyPI via Trusted Publishing (OIDC). No `password:` — the action
+      # uses ambient OIDC. PEP 740 attestations are on by default.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          packages-dir: dist/
+          # No `password:` — OIDC Trusted Publishing is used (no stored secret).
+          # `attestations` defaults to true under Trusted Publishing -> PEP 740.
+
+  # --------------------------------------------------------------------------
+  # Job 3: sign the release artifacts with Sigstore keyless.
+  #
+  # The job's ambient OIDC mints a short-lived Fulcio cert (issuer
+  # https://token.actions.githubusercontent.com), signs each dist file, and
+  # attaches the resulting `.sigstore` bundle(s) to the GitHub Release assets
+  # (release-signing-artifacts, the action's default on a release event).
+  #
+  # We self-verify (`verify: true`) against THIS workflow's own identity so a
+  # broken run can never publish a bad bundle.
+  # --------------------------------------------------------------------------
+  sign:
+    name: Sign release artifacts (Sigstore keyless)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # REQUIRED for ambient OIDC -> Fulcio
+      contents: write   # REQUIRED to attach .sigstore bundles to the Release assets
+
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist/
+
+      - name: Sign sdist + wheel and attach bundles to the Release
+        uses: sigstore/gh-action-sigstore-python@5b79a39c381910c090341a2c9b0bf022c8b387e1 # v3.4.0
+        with:
+          inputs: ./dist/*.tar.gz ./dist/*.whl
+          # Self-check: verify what we just signed against THIS workflow's own
+          # identity so a broken run never publishes a bad bundle.
+          verify: true
+          verify-cert-identity: "https://github.com/ernestprovo23/conclave/.github/workflows/release.yml@${{ github.ref }}"
+          verify-oidc-issuer: "https://token.actions.githubusercontent.com"
+          # release-signing-artifacts defaults to true: on a release event the
+          # .sigstore bundles are attached to the Release assets automatically.
+          release-signing-artifacts: true
+          upload-signing-artifacts: true

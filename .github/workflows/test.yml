@@ -62,3 +62,39 @@ jobs:
 
       - name: ruff format --check
         run: ruff format --check .
+
+  audit:
+    name: "pip-audit"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-audit-${{ hashFiles('pyproject.toml') }}
+
+      # Install the project so its resolved runtime + dev deps are present in the
+      # environment, then audit that environment. conclave is security-positioned,
+      # so this gate is FAIL-CLOSED: a known vulnerability in any resolved
+      # dependency fails CI. The dep surface is tiny (httpx + a few well-maintained
+      # libs), so false-positive churn is low. If a transitive CVE with no fix
+      # blocks an unrelated PR, suppress it narrowly with
+      # `--ignore-vuln <GHSA/PYSEC id>` and a tracking note (see RELEASING.md).
+      - name: Install package with dev extras
+        run: pip install -e ".[dev]"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      # `--skip-editable` drops the local editable `conclave` install (it is not on
+      # PyPI and cannot be audited); every real dependency is still audited.
+      - name: Audit resolved dependencies for known vulnerabilities
+        run: pip-audit --skip-editable

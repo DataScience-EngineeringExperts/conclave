@@ -195,6 +195,17 @@ def store(key: str, result: CouncilResult) -> None:
     try:
         path = _entry_path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
+        # KEY-LEAK INVARIANT (audit vector 1): the cache only ever persists a
+        # CouncilResult that has ALREADY passed through redaction upstream. Every
+        # error string on the result (ModelAnswer.error, synthesis_error,
+        # verdict_error) is scrubbed by redact() at the point of capture in
+        # conclave.providers, BEFORE it is placed on the result and therefore long
+        # before it reaches this write. Member/synthesis answer TEXT is provider
+        # content, never key material. The cache KEY (make_key) is composed solely
+        # of prompt + mode + member/synthesizer NAMES + model ids + params -- no
+        # env var name or value is read here. Net: no raw key (name or value) can
+        # reach a cache file or filename. Do not move any un-redacted capture into
+        # the result after this contract -- it would persist a secret to disk.
         payload = result.model_dump(mode="json")
         payload["cached"] = False
         # Atomic-ish write: write to a temp sibling then replace, so a crash mid
