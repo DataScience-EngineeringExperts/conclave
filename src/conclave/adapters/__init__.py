@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 
 from ..registry import PROVIDER_ENV_VARS, provider_prefix
 from .anthropic import AnthropicAdapter
-from .base import ProviderAdapter, ProviderError, redact
+from .base import OutputContract, ProviderAdapter, ProviderError, redact
 from .gemini import GeminiAdapter
 from .openai_compat import OPENAI_COMPAT_URLS, OpenAICompatAdapter
 
@@ -35,6 +35,7 @@ if TYPE_CHECKING:  # avoid a config import cycle at runtime
 __all__ = [
     "ProviderAdapter",
     "ProviderError",
+    "OutputContract",
     "redact",
     "resolve_adapter",
     "OpenAICompatAdapter",

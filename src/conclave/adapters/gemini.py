@@ -22,7 +22,7 @@ import json
 
 from ..models import TokenUsage
 from ..registry import PROVIDER_ENV_VARS
-from .base import ProviderError, SSEDelta, status_error
+from .base import OutputContract, ProviderError, SSEDelta, status_error
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
@@ -59,6 +59,7 @@ class GeminiAdapter:
         temperature: float | None,
         timeout: float,
         api_key: str,
+        output_contract: OutputContract | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the generateContent POST.
 
@@ -66,6 +67,8 @@ class GeminiAdapter:
         passing ``None`` omits it so the model applies its own default. See
         :meth:`ProviderAdapter.build_request`.
         """
+        # output_contract: accepted; provider-native translation deferred to
+        # CAC-02-GEM (Gemini ``generationConfig.responseSchema``). No-op today.
         model = self._bare_model(model_id)
         url = f"{GEMINI_BASE}/{model}:generateContent"
         headers = {
@@ -128,6 +131,7 @@ class GeminiAdapter:
         temperature: float | None,
         timeout: float,
         api_key: str,
+        output_contract: OutputContract | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the streaming POST against ``streamGenerateContent?alt=sse``.
 
@@ -137,7 +141,11 @@ class GeminiAdapter:
         against the Gemini API streaming reference). See
         :meth:`ProviderAdapter.stream_request`.
         """
-        _url, headers, body = self.build_request(model_id, messages, temperature, timeout, api_key)
+        # output_contract: accepted; passed through to build_request (no-op
+        # today; provider-native translation deferred to CAC-02-GEM).
+        _url, headers, body = self.build_request(
+            model_id, messages, temperature, timeout, api_key, output_contract
+        )
         model = self._bare_model(model_id)
         url = f"{GEMINI_BASE}/{model}:streamGenerateContent?alt=sse"
         return url, headers, body

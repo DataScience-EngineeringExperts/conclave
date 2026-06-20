@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 
 from ..models import TokenUsage
-from .base import ProviderError, SSEDelta, status_error
+from .base import OutputContract, ProviderError, SSEDelta, status_error
 
 # Verified per-provider full completions URLs. Note Perplexity has NO ``/v1``
 # segment while xAI/OpenAI do, and Groq nests its OpenAI surface under
@@ -79,6 +79,7 @@ class OpenAICompatAdapter:
         temperature: float | None,
         timeout: float,
         api_key: str,
+        output_contract: OutputContract | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the OpenAI-style POST.
 
@@ -87,6 +88,8 @@ class OpenAICompatAdapter:
         reject an explicit ``temperature`` with a 400). See
         :meth:`ProviderAdapter.build_request`.
         """
+        # output_contract: accepted; provider-native translation deferred to
+        # CAC-02-OAI (OpenAI ``response_format``). No-op today.
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -135,6 +138,7 @@ class OpenAICompatAdapter:
         temperature: float | None,
         timeout: float,
         api_key: str,
+        output_contract: OutputContract | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the streaming POST: ``build_request`` + ``stream`` flags.
 
@@ -144,7 +148,11 @@ class OpenAICompatAdapter:
         (verified against the OpenAI chat-completions streaming reference). See
         :meth:`ProviderAdapter.stream_request`.
         """
-        url, headers, body = self.build_request(model_id, messages, temperature, timeout, api_key)
+        # output_contract: accepted; passed through to build_request (no-op
+        # today; provider-native translation deferred to CAC-02-OAI).
+        url, headers, body = self.build_request(
+            model_id, messages, temperature, timeout, api_key, output_contract
+        )
         body["stream"] = True
         body["stream_options"] = {"include_usage": True}
         return url, headers, body

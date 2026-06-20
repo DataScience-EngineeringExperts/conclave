@@ -24,8 +24,11 @@ from __future__ import annotations
 
 import os
 import re
+import warnings
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
+
+from pydantic import BaseModel, Field
 
 from ..models import TokenUsage
 from ..registry import PROVIDER_ENV_VARS
@@ -153,6 +156,61 @@ def redact(text: str) -> str:
     return cleaned
 
 
+# Pydantic v2 emits a definition-time UserWarning when a field is literally named
+# ``schema`` because it shadows the (deprecated) ``BaseModel.schema()`` classmethod.
+# The brief requires the literal ``.schema`` accessor to round-trip
+# (``OutputContract(schema={...}).schema``), so we keep the name and suppress only
+# this one cosmetic warning at the single class-definition site. We never call the
+# deprecated ``BaseModel.schema()`` (we use ``model_json_schema()`` everywhere), so
+# reclaiming the attribute name is safe. ``ConfigDict(protected_namespaces=())`` was
+# tried first and does NOT silence this shadow (that config governs ``model_*``), so
+# the scoped filter below is the minimal fix that keeps the required accessor.
+with warnings.catch_warnings():
+    warnings.filterwarnings(
+        "ignore",
+        message=r'Field name "schema" .* shadows an attribute',
+        category=UserWarning,
+    )
+
+    class OutputContract(BaseModel):
+        """Optional structured-output contract carried into an adapter request build.
+
+        A config carrier (Pydantic v2, consistent with :mod:`conclave.verdict`)
+        that tells an adapter to ask its provider for a JSON-Schema-constrained
+        answer instead of free prose. This is the conclave-side, provider-AGNOSTIC
+        shape; each adapter translates it into its provider-native surface (OpenAI
+        ``response_format``, Gemini ``responseSchema``, Anthropic tool
+        ``input_schema``) in the deferred CAC-02-OAI/ANT/GEM tickets. ``None``
+        everywhere (the default) means "no structured output" -- the current
+        free-prose behavior.
+
+        The field is literally named ``schema`` so it round-trips as
+        ``OutputContract(schema={"type": "object"}).schema == {"type": "object"}``
+        and serializes under the ``schema`` key; the shadow warning that name
+        triggers is suppressed at the class-definition site above.
+
+        Attributes:
+            schema: The JSON Schema dict the provider must conform its answer to,
+                or ``None`` for no structured output. Typically
+                :func:`conclave.verdict.member_answer_json_schema` or
+                :func:`conclave.verdict.verdict_json_schema`.
+            schema_name: Optional human/provider-facing name for the schema
+                (OpenAI's ``json_schema.name``); ``None`` lets the adapter pick a
+                default.
+            strict: Whether to request the provider's STRICT structured-output
+                mode (OpenAI ``strict: true``) when available. Defaults to
+                ``False``.
+            repair_attempts: How many times the caller may re-prompt to repair a
+                non-conforming/unparseable answer before giving up. Defaults to
+                ``1``.
+        """
+
+        schema: dict | None = Field(default=None)
+        schema_name: str | None = None
+        strict: bool = False
+        repair_attempts: int = 1
+
+
 @dataclass
 class SSEDelta:
     """The result of interpreting one Server-Sent Event from a stream (issue #7).
@@ -215,6 +273,7 @@ class ProviderAdapter(Protocol):
         temperature: float | None,
         timeout: float,
         api_key: str,
+        output_contract: OutputContract | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build ``(url, headers, json_body)`` for this provider.
 
@@ -226,6 +285,13 @@ class ProviderAdapter(Protocol):
                 reject an explicit ``temperature``).
             timeout: Per-call timeout in seconds (informational for body params).
             api_key: The resolved key VALUE, read at call time and never stored.
+            output_contract: Optional :class:`OutputContract` requesting
+                structured (JSON-Schema-constrained) output. ``None`` (default)
+                means no structured output -- the current free-prose behavior.
+                Provider-native translation (OpenAI ``response_format`` / Gemini
+                ``responseSchema`` / Anthropic tool ``input_schema``) is deferred
+                to the CAC-02-OAI/ANT/GEM tickets; today every adapter accepts and
+                ignores it.
 
         Returns:
             A ``(url, headers, json_body)`` tuple ready for ``post_json``.
@@ -255,6 +321,7 @@ class ProviderAdapter(Protocol):
         temperature: float | None,
         timeout: float,
         api_key: str,
+        output_contract: OutputContract | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build ``(url, headers, json_body)`` for a STREAMING request (issue #7).
 
@@ -265,7 +332,10 @@ class ProviderAdapter(Protocol):
         the provider call path then falls back to a buffered request and emits
         the text in one chunk.
 
-        Args and return mirror :meth:`build_request`.
+        Args and return mirror :meth:`build_request`, including the optional
+        ``output_contract`` (an :class:`OutputContract` for structured output;
+        ``None`` default = no structured output, current behavior). Provider-native
+        translation is likewise deferred to CAC-02-OAI/ANT/GEM.
         """
         ...
 

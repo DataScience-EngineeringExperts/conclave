@@ -20,7 +20,7 @@ import json
 
 from ..models import TokenUsage
 from ..registry import PROVIDER_ENV_VARS
-from .base import ProviderError, SSEDelta, status_error
+from .base import OutputContract, ProviderError, SSEDelta, status_error
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -53,6 +53,7 @@ class AnthropicAdapter:
         temperature: float | None,
         timeout: float,
         api_key: str,
+        output_contract: OutputContract | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the Messages POST, hoisting system out of the message array.
 
@@ -60,6 +61,8 @@ class AnthropicAdapter:
         omits it so the provider applies its own default (some models reject an
         explicit ``temperature``). See :meth:`ProviderAdapter.build_request`.
         """
+        # output_contract: accepted; provider-native translation deferred to
+        # CAC-02-ANT (Anthropic tool ``input_schema``). No-op today.
         headers = {
             "x-api-key": api_key,
             "anthropic-version": ANTHROPIC_VERSION,
@@ -123,6 +126,7 @@ class AnthropicAdapter:
         temperature: float | None,
         timeout: float,
         api_key: str,
+        output_contract: OutputContract | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the streaming POST: ``build_request`` + ``stream: true``.
 
@@ -130,7 +134,11 @@ class AnthropicAdapter:
         true``; no other body change is needed. See
         :meth:`ProviderAdapter.stream_request`.
         """
-        url, headers, body = self.build_request(model_id, messages, temperature, timeout, api_key)
+        # output_contract: accepted; passed through to build_request (no-op
+        # today; provider-native translation deferred to CAC-02-ANT).
+        url, headers, body = self.build_request(
+            model_id, messages, temperature, timeout, api_key, output_contract
+        )
         body["stream"] = True
         return url, headers, body
 
