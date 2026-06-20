@@ -50,6 +50,16 @@ from .models import (
     TokenUsage,
 )
 from .transport import aclose, guard_transport_logging
+from .verdict import (
+    VERDICT_SCHEMA_VERSION,
+    CouncilConflict,
+    CouncilPosition,
+    CouncilVerdict,
+    MinorityReport,
+    ProviderVote,
+    member_answer_json_schema,
+    verdict_json_schema,
+)
 
 __version__ = "1.0.0"
 
@@ -65,5 +75,14 @@ __all__ = [
     "load_config",
     "aclose",
     "guard_transport_logging",
+    # CAC-01 result contract v2 — verdict/member schema public surface.
+    "CouncilVerdict",
+    "CouncilConflict",
+    "CouncilPosition",
+    "ProviderVote",
+    "MinorityReport",
+    "VERDICT_SCHEMA_VERSION",
+    "verdict_json_schema",
+    "member_answer_json_schema",
     "__version__",
 ]

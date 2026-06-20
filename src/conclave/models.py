@@ -8,6 +8,13 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from .verdict import (
+    CouncilConflict,
+    CouncilVerdict,
+    MinorityReport,
+    ProviderVote,
+)
+
 
 def _default_prompt_version() -> str:
     """Resolve the current synthesis-prompt version without an import cycle.
@@ -40,6 +47,12 @@ class ModelAnswer(BaseModel):
         latency_s: Wall-clock seconds for the call.
         usage: Token usage if reported by the provider.
         error: Error message if the call failed, else ``None``.
+        answer_id: Stable id assigned by conclave (not emitted by the model), used
+            to back ``evidence_answer_ids`` on the verdict's positions/conflicts
+            (CAC-01 result contract v2). ``None`` until conclave assigns it.
+        warnings: Non-fatal notes about this answer (e.g. structured-output repair
+            applied). Empty by default. Distinct from ``error``, which marks the
+            whole call as failed.
     """
 
     name: str
@@ -48,11 +61,18 @@ class ModelAnswer(BaseModel):
     latency_s: float = 0.0
     usage: TokenUsage | None = None
     error: str | None = None
+    answer_id: str | None = None
+    warnings: list[str] = Field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         """True when the member returned a usable answer."""
         return self.error is None and self.answer is not None
+
+    @property
+    def latency_ms(self) -> float:
+        """Call latency in milliseconds, derived from :attr:`latency_s`."""
+        return self.latency_s * 1000.0
 
 
 class StreamEvent(BaseModel):
@@ -184,6 +204,32 @@ class CouncilResult(BaseModel):
             the synthesis prompt wording changed between two runs instead of
             silently attributing the shift to model drift. Opaque string; only
             equality is meaningful.
+        verdict: The synthesized adjudication of the run (CAC-01 result contract
+            v2), or ``None`` when no verdict applies — open-ended generation,
+            N<2 responding members, or structured extraction failed after one
+            repair (DD-2 verdict-absent rule). When absent, ``synthesis`` and
+            ``member_answers`` are still populated. Filled by CAC-05.
+        consensus_score: Position-cluster ratio in ``[0.0, 1.0]`` for the
+            verdict's primary recommendation (DD-1, ``position_cluster_ratio_v1``),
+            or ``None`` (N<2 or no positioned members). Distinct from
+            ``convergence_score`` (difflib text-stability); never conflated.
+            Filled by CAC-05.
+        consensus_method: The consensus method literal used
+            (``"position_cluster_ratio_v1"``), or ``None`` until computed.
+        consensus_label: Deterministic bucket derived from ``consensus_score``
+            (``unanimous``/``strong``/``majority``/``split``/``none``), or
+            ``None`` until computed.
+        conflicts: Disagreements between positions (DD-2); empty when <2 positions
+            or not yet computed. Filled by CAC-05.
+        provider_votes: Per-provider votes for positions (DD-2, GH #3); empty
+            until computed. Filled by CAC-05.
+        minority_reports: Dissenting views worth surfacing (DD-2); empty until
+            computed. Filled by CAC-05.
+
+    Properties:
+        member_answers: Read-only alias for ``answers`` (the per-member raw
+            responses), exposed under the contract-v2 name. Returns the same list
+            object as ``answers``; there is one underlying field.
     """
 
     prompt: str
@@ -200,6 +246,16 @@ class CouncilResult(BaseModel):
     converged: bool = False
     convergence_score: float | None = None
     prompt_version: str = Field(default_factory=_default_prompt_version)
+    # CAC-01 result contract v2 — adjudication layer. All default to None/empty;
+    # CAC-05 fills them (no consensus/disagreement computation happens here).
+    # NOTE: CAC-04 adds the `manifest: ModelHarnessManifest` field here.
+    verdict: CouncilVerdict | None = None
+    consensus_score: float | None = None
+    consensus_method: str | None = None
+    consensus_label: str | None = None
+    conflicts: list[CouncilConflict] = Field(default_factory=list)
+    provider_votes: list[ProviderVote] = Field(default_factory=list)
+    minority_reports: list[MinorityReport] = Field(default_factory=list)
 
     @property
     def successful_answers(self) -> list[ModelAnswer]:
@@ -211,8 +267,19 @@ class CouncilResult(BaseModel):
         """Members that were attempted but errored."""
         return [a for a in self.answers if not a.ok]
 
+    @property
+    def member_answers(self) -> list[ModelAnswer]:
+        """Contract-v2 alias for :attr:`answers` (the per-member raw responses)."""
+        return self.answers
+
 
 # ``StreamEvent.result`` forward-references ``CouncilResult`` (defined after it
 # under ``from __future__ import annotations``); resolve that ref now that the
 # class exists so ``StreamEvent`` validates correctly.
 StreamEvent.model_rebuild()
+
+# ``CouncilResult`` references the verdict types (imported at runtime from
+# ``.verdict``) only via string annotations under ``from __future__ import
+# annotations``. Rebuild it so Pydantic resolves those references eagerly rather
+# than on first validation — belt-and-suspenders for the CAC-01 additions.
+CouncilResult.model_rebuild()
