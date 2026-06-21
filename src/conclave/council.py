@@ -53,15 +53,17 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
+from uuid import uuid4
 
 from . import cache as cache_mod
 from . import transport
 from .adapters.base import redact
 from .config import ConclaveConfig, load_config
 from .logging import get_logger
-from .models import CouncilResult, ModelAnswer, StreamEvent
+from .manifest import ModelHarnessManifest, ProviderSkip, verified_secret_safety
+from .models import CouncilResult, ModelAnswer, StreamEvent, TokenUsage
 from .prompts import SYNTHESIS_PROMPT_VERSION
-from .providers import call_model
+from .providers import call_model, receipt_from_answer
 from .registry import key_present
 
 logger = get_logger("council")
@@ -310,21 +312,110 @@ class Council:
             prompt, mode, lambda: self._ask_uncached(prompt, synthesize=synthesize)
         )
 
-    async def _ask_uncached(self, prompt: str, synthesize: bool = True) -> CouncilResult:
-        """The live ask path (no cache consultation). See :meth:`ask`."""
-        members, skipped = self._available_members()
-        result = CouncilResult(
-            prompt=prompt,
-            mode="synthesize" if synthesize else "raw",
-            skipped=skipped,
+    def _build_manifest(
+        self,
+        *,
+        mode: str,
+        members: list[tuple[str, str]],
+        skipped: list[str],
+        answers: list[ModelAnswer],
+    ) -> ModelHarnessManifest:
+        """Assemble the auditable :class:`ModelHarnessManifest` for a run (CAC-04).
+
+        Builds the manifest from the resolved membership plus the collected
+        member ``answers`` (one execution receipt per answer via
+        :func:`conclave.providers.receipt_from_answer`). It works for both the
+        normal path (``answers`` populated) and the empty-members path
+        (``members``/``answers`` empty, ``skipped`` listing every requested name)
+        so every live ``ask`` returns a manifest.
+
+        The ``conclave_version`` is read via a deferred import: ``conclave``
+        imports this module at package init *before* it assigns ``__version__``,
+        so a top-level import would resolve too early. Deferring it into this
+        method (run only when a result is produced, by which point the package is
+        fully initialized) mirrors the ``models._default_prompt_version`` factory.
+
+        After assembly the manifest is scanned for secret material and its
+        ``secret_safety`` stamped VERIFIED only when provably clean
+        (:func:`conclave.manifest.verified_secret_safety`).
+
+        Args:
+            mode: Deliberation mode (``"synthesize"``/``"raw"``).
+            members: ``(friendly_name, model_id)`` pairs that were called.
+            skipped: Friendly names skipped for a missing key.
+            answers: The collected per-member answers (empty on the no-members path).
+
+        Returns:
+            A fully-assembled, secret-safety-stamped manifest.
+        """
+        from . import __version__
+
+        receipts = [
+            receipt_from_answer(a, temperature=self.temperature, timeout=self.timeout)
+            for a in answers
+        ]
+        manifest = ModelHarnessManifest(
+            request_id=uuid4().hex,
+            conclave_version=__version__,
+            mode=mode,
+            providers_considered=list(self.requested_models),
+            providers_called=[name for name, _model_id in members],
+            providers_skipped=[
+                ProviderSkip(name=name, reason="no API key in environment") for name in skipped
+            ],
+            model_ids=[model_id for _name, model_id in members],
+            generation_settings={"temperature": self.temperature, "timeout": self.timeout},
+            receipts=receipts,
+            total_latency_ms=sum(a.latency_ms for a in answers),
+            total_usage=self._sum_usage(answers),
+            redacted_errors=[a.error for a in answers if a.error],
         )
+        # Stamp VERIFIED only when the serialized manifest is provably clean
+        # (the load-bearing CAC-04 acceptance criterion).
+        manifest.secret_safety = verified_secret_safety(manifest)
+        return manifest
+
+    @staticmethod
+    def _sum_usage(answers: list[ModelAnswer]) -> TokenUsage | None:
+        """Sum token usage across answers, or ``None`` when none reported usage.
+
+        Returns ``None`` (not a zeroed :class:`~conclave.models.TokenUsage`) when
+        no member reported usage, so the manifest can distinguish "no usage data"
+        from "a real zero".
+        """
+        reported = [a.usage for a in answers if a.usage is not None]
+        if not reported:
+            return None
+        return TokenUsage(
+            prompt_tokens=sum(u.prompt_tokens for u in reported),
+            completion_tokens=sum(u.completion_tokens for u in reported),
+            total_tokens=sum(u.total_tokens for u in reported),
+        )
+
+    async def _ask_uncached(self, prompt: str, synthesize: bool = True) -> CouncilResult:
+        """The live ask path (no cache consultation). See :meth:`ask`.
+
+        A :class:`ModelHarnessManifest` is attached on **every** return, including
+        the zero-members early return, so a consumer can always audit what ran
+        (CAC-04). The empty-members manifest carries no receipts, the full skip
+        list, and a VERIFIED ``secret_safety`` stamp.
+        """
+        mode = "synthesize" if synthesize else "raw"
+        members, skipped = self._available_members()
+        result = CouncilResult(prompt=prompt, mode=mode, skipped=skipped)
 
         if not members:
             logger.warning("no council members have keys available; nothing to run")
+            result.manifest = self._build_manifest(
+                mode=mode, members=members, skipped=skipped, answers=[]
+            )
             return result
 
         base_messages = [{"role": "user", "content": prompt}]
         result.answers = await self.fan_out(members, lambda _name, _model_id: base_messages)
+        result.manifest = self._build_manifest(
+            mode=mode, members=members, skipped=skipped, answers=result.answers
+        )
 
         if synthesize:
             await self._synthesize(result)

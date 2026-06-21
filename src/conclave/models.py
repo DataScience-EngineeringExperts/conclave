@@ -15,6 +15,15 @@ from .verdict import (
     ProviderVote,
 )
 
+# NOTE: ``ModelHarnessManifest`` is imported at the BOTTOM of this module (just
+# before the ``model_rebuild()`` calls), not here. ``manifest`` imports
+# :class:`TokenUsage` from this module, so importing it before ``TokenUsage`` is
+# defined would be a circular import. Deferring the import until after the leaf
+# types exist breaks the cycle while still making the name available for the
+# ``CouncilResult.manifest`` annotation at rebuild time (the same reason the
+# verdict types could be imported eagerly is that ``verdict`` imports nothing
+# back from ``models``; ``manifest`` does, so it gets the late-import treatment).
+
 
 def _default_prompt_version() -> str:
     """Resolve the current synthesis-prompt version without an import cycle.
@@ -225,6 +234,16 @@ class CouncilResult(BaseModel):
             until computed. Filled by CAC-05.
         minority_reports: Dissenting views worth surfacing (DD-2); empty until
             computed. Filled by CAC-05.
+        manifest: The auditable execution + provenance receipt for the run
+            (CAC-04, :class:`conclave.manifest.ModelHarnessManifest`): what ran
+            (providers considered/called/skipped, resolved model ids, generation
+            settings, per-member receipts, latency, token usage) and how the
+            verdict was made (verdict-extraction provenance, ``verdict_type``,
+            ``consensus_method``, verdict-absent reason — the verdict-provenance
+            slots are populated later by CAC-05). ``None`` only on a result
+            constructed without one (e.g. a bare ``CouncilResult(prompt=...)``);
+            a live ``synthesize``/``raw`` council run always attaches one,
+            including the zero-members path. No secrets, ever.
 
     Properties:
         member_answers: Read-only alias for ``answers`` (the per-member raw
@@ -248,7 +267,6 @@ class CouncilResult(BaseModel):
     prompt_version: str = Field(default_factory=_default_prompt_version)
     # CAC-01 result contract v2 — adjudication layer. All default to None/empty;
     # CAC-05 fills them (no consensus/disagreement computation happens here).
-    # NOTE: CAC-04 adds the `manifest: ModelHarnessManifest` field here.
     verdict: CouncilVerdict | None = None
     consensus_score: float | None = None
     consensus_method: str | None = None
@@ -256,6 +274,10 @@ class CouncilResult(BaseModel):
     conflicts: list[CouncilConflict] = Field(default_factory=list)
     provider_votes: list[ProviderVote] = Field(default_factory=list)
     minority_reports: list[MinorityReport] = Field(default_factory=list)
+    # CAC-04 auditable manifest. Optional/backward-compatible: a bare
+    # CouncilResult(prompt=...) still validates with manifest=None; a live
+    # synthesize/raw council run always attaches one (assembled in council.py).
+    manifest: ModelHarnessManifest | None = None
 
     @property
     def successful_answers(self) -> list[ModelAnswer]:
@@ -272,6 +294,13 @@ class CouncilResult(BaseModel):
         """Contract-v2 alias for :attr:`answers` (the per-member raw responses)."""
         return self.answers
 
+
+# Late import (see the note near the top): ``manifest`` imports ``TokenUsage``
+# from this module, so it can only be imported once the leaf types above exist.
+# Importing it here makes ``ModelHarnessManifest`` available in this module's
+# namespace for the ``CouncilResult.manifest`` annotation resolved by
+# ``model_rebuild()`` below.
+from .manifest import ModelHarnessManifest  # noqa: E402 -- late import breaks an import cycle
 
 # ``StreamEvent.result`` forward-references ``CouncilResult`` (defined after it
 # under ``from __future__ import annotations``); resolve that ref now that the

@@ -23,10 +23,52 @@ from .adapters import ProviderError, resolve_adapter
 from .adapters.base import ProviderAdapter, redact
 from .config import ConclaveConfig, load_config
 from .logging import get_logger
+from .manifest import ProviderExecutionReceipt
 from .models import ModelAnswer, TokenUsage
+from .registry import provider_prefix
 from .transport import TransportError
 
 logger = get_logger("providers")
+
+
+def receipt_from_answer(
+    answer: ModelAnswer, *, temperature: float, timeout: float
+) -> ProviderExecutionReceipt:
+    """Map a collected :class:`ModelAnswer` to a :class:`ProviderExecutionReceipt`.
+
+    This is CAC-04's ``providers.py`` wiring: it produces one per-member receipt
+    without changing :func:`call_model`'s return type or its never-raises
+    contract. The council builds each receipt from an already-collected answer
+    plus the council's known generation settings (the same temperature/timeout it
+    threaded into :func:`call_model`), so the provider hot path is untouched and
+    the manifest internals stay CAC-04's concern (the CAC-01 ticket explicitly
+    assigns them here).
+
+    The ``provider`` prefix is derived from ``answer.model_id`` via
+    :func:`conclave.registry.provider_prefix`. The ``error`` is re-run through
+    :func:`redact` belt-and-suspenders: it is already redacted upstream (every
+    :class:`ModelAnswer.error` conclave produces is scrubbed), and ``redact`` is
+    idempotent and safe on clean text, so this re-application cannot leak a key
+    and cannot raise on the happy path -- preserving the redaction invariant even
+    on an unexpected error string.
+
+    Args:
+        answer: The collected member answer (success or failure).
+        temperature: The sampling temperature the council used for the call.
+        timeout: The per-call timeout (seconds) the council used.
+
+    Returns:
+        A :class:`ProviderExecutionReceipt` for this member.
+    """
+    return ProviderExecutionReceipt(
+        name=answer.name,
+        provider=provider_prefix(answer.model_id),
+        model_id=answer.model_id,
+        generation_settings={"temperature": temperature, "timeout": timeout},
+        latency_ms=answer.latency_ms,
+        usage=answer.usage,
+        error=redact(answer.error) if answer.error else None,
+    )
 
 
 def _resolve_key(adapter: ProviderAdapter) -> str | None:

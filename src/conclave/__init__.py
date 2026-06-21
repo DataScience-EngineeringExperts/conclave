@@ -41,6 +41,12 @@ from __future__ import annotations
 
 from .config import ConclaveConfig, load_config
 from .council import Council
+from .manifest import (
+    ModelHarnessManifest,
+    ProviderExecutionReceipt,
+    ProviderSkip,
+    VerdictExtraction,
+)
 from .models import (
     AdversarialResult,
     CouncilResult,
@@ -84,5 +90,10 @@ __all__ = [
     "VERDICT_SCHEMA_VERSION",
     "verdict_json_schema",
     "member_answer_json_schema",
+    # CAC-04 auditable manifest public surface.
+    "ModelHarnessManifest",
+    "ProviderExecutionReceipt",
+    "VerdictExtraction",
+    "ProviderSkip",
     "__version__",
 ]
