@@ -23,7 +23,6 @@ from conclave import agreement
 from conclave.adapters.anthropic import AnthropicAdapter
 from conclave.adapters.base import OutputContract
 from conclave.adapters.gemini import GeminiAdapter
-from conclave.adapters.openai_compat import OpenAICompatAdapter
 
 # --------------------------------------------------------------------------- #
 # consensus_score: ratio arithmetic (DD-1 position_cluster_ratio_v1)
@@ -217,17 +216,12 @@ def test_agreement_module_does_not_import_difflib():
 # --------------------------------------------------------------------------- #
 
 
-def _openai_adapter() -> OpenAICompatAdapter:
-    return OpenAICompatAdapter(
-        prefix="openai",
-        completions_url="https://api.openai.com/v1/chat/completions",
-        env_vars=("OPENAI_API_KEY",),
-    )
-
-
-# (adapter, model_id, key) tuples covering all three concrete adapters.
+# (adapter, model_id, key) tuples for the adapters whose OutputContract handling
+# is STILL a no-op pass-through. CAC-02-OAI implements capability-gated
+# response_format shaping for the OpenAI-compatible adapter, so its case moves
+# out of this no-op guard and into tests/test_openai_compat_structured.py;
+# CAC-02-ANT and CAC-02-GEM will likewise migrate their cases when they land.
 _ADAPTER_CASES = [
-    (_openai_adapter(), "openai/gpt-4.1", "sk-secret"),
     (AnthropicAdapter(), "anthropic/claude-sonnet-4-6", "sk-ant-secret"),
     (GeminiAdapter(), "gemini/gemini-2.5-pro", "AIza-secret"),
 ]

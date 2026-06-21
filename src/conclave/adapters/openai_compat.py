@@ -11,14 +11,32 @@ user-supplied OpenAI-compatible endpoint declared in config.
 Per-provider full URLs live in :data:`OPENAI_COMPAT_URLS` so the verified
 endpoints sit in one place. Env-var names are sourced from
 :data:`conclave.registry.PROVIDER_ENV_VARS` -- never duplicated here.
+
+Structured output (CAC-02-OAI): when an :class:`OutputContract` is supplied, the
+adapter translates it into the OpenAI ``response_format`` surface, capability-gated
+via :func:`conclave.provider_catalog.capabilities_for`. The 7 OpenAI-compatible
+providers are NOT identical (some do strict ``json_schema``, some only
+``json_object``, some neither), so the adapter never hardcodes per-provider
+branches -- it reads the capability flags and degrades to free prose (never raises)
+for models that support neither. See :meth:`OpenAICompatAdapter._apply_output_contract`.
 """
 
 from __future__ import annotations
 
 import json
 
+from ..logging import get_logger
 from ..models import TokenUsage
+from ..provider_catalog import capabilities_for
 from .base import OutputContract, ProviderError, SSEDelta, status_error
+
+logger = get_logger(__name__)
+
+# Default name stamped into ``response_format.json_schema.name`` when an
+# ``OutputContract`` carries no explicit ``schema_name``. OpenAI requires a
+# non-empty name for a ``json_schema`` response format; "verdict" matches the
+# council's primary structured-output use (the verdict/member schema).
+_DEFAULT_SCHEMA_NAME = "verdict"
 
 # Verified per-provider full completions URLs. Note Perplexity has NO ``/v1``
 # segment while xAI/OpenAI do, and Groq nests its OpenAI surface under
@@ -72,6 +90,86 @@ class OpenAICompatAdapter:
         """
         return model_id.split("/", 1)[1] if "/" in model_id else model_id
 
+    def _apply_output_contract(
+        self,
+        body: dict,
+        model_id: str,
+        output_contract: OutputContract | None,
+    ) -> None:
+        """Inject ``response_format`` into ``body`` per the contract + capabilities.
+
+        Capability-gated, in-place request shaping shared by ``build_request`` and
+        ``stream_request`` (``response_format`` is documented as compatible with
+        ``stream: true``, so the gating is identical for both paths). The body is
+        mutated only when a contract is supplied *and* the model's capabilities
+        permit a structured response; otherwise the body is left byte-for-byte
+        unchanged so non-contract requests keep their exact pre-CAC-02 shape.
+
+        The lookup uses the **full, provider-prefixed** ``model_id`` (e.g.
+        ``"openai/gpt-4.1"``) because :func:`conclave.provider_catalog.capabilities_for`
+        is keyed on the full id — this is why the contract is applied before
+        :meth:`_bare_model` strips the prefix for the ``model`` body field.
+
+        Capability tiers (most → least capable):
+
+        * ``supports_structured_output`` → strict schema:
+          ``{"type": "json_schema", "json_schema": {"name", "schema", "strict"}}``.
+        * else ``supports_json_mode`` → free-form JSON object:
+          ``{"type": "json_object"}`` (a warning notes the schema is NOT enforced).
+        * else / unknown caps → no injection (a non-fatal warning is logged).
+
+        Never raises: an unsupported model degrades to the current free-prose
+        behavior rather than aborting the council (Scope Plan §5).
+
+        Args:
+            body: The request body being assembled; mutated in place.
+            model_id: The FULL provider-prefixed model id used for the capability
+                lookup (NOT the bare wire id).
+            output_contract: The structured-output contract, or ``None`` to skip
+                injection entirely.
+        """
+        if output_contract is None:
+            return
+
+        caps = capabilities_for(model_id)
+        if caps is None:
+            # Unknown / custom endpoint: we cannot assert support, so we do not
+            # shape the request. Free-prose answer; caller (CAC-05) validates.
+            logger.warning(
+                "%s: no capability record for %s; structured output not requested "
+                "(free-prose answer)",
+                self.prefix,
+                model_id,
+            )
+            return
+
+        if caps.supports_structured_output:
+            name = output_contract.schema_name or _DEFAULT_SCHEMA_NAME
+            json_schema: dict = {"name": name, "strict": output_contract.strict}
+            # Omit a None schema rather than send ``"schema": null`` — a contract
+            # may set strict/name without a concrete schema dict.
+            if output_contract.schema is not None:
+                json_schema["schema"] = output_contract.schema
+            body["response_format"] = {
+                "type": "json_schema",
+                "json_schema": json_schema,
+            }
+        elif caps.supports_json_mode:
+            body["response_format"] = {"type": "json_object"}
+            logger.warning(
+                "%s: %s supports JSON mode only, not strict json_schema; "
+                "requesting json_object (schema NOT enforced by the provider)",
+                self.prefix,
+                model_id,
+            )
+        else:
+            logger.warning(
+                "%s: %s supports neither structured output nor JSON mode; "
+                "structured output not requested (free-prose answer)",
+                self.prefix,
+                model_id,
+            )
+
     def build_request(
         self,
         model_id: str,
@@ -88,8 +186,6 @@ class OpenAICompatAdapter:
         reject an explicit ``temperature`` with a 400). See
         :meth:`ProviderAdapter.build_request`.
         """
-        # output_contract: accepted; provider-native translation deferred to
-        # CAC-02-OAI (OpenAI ``response_format``). No-op today.
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -102,6 +198,11 @@ class OpenAICompatAdapter:
             body["temperature"] = temperature
         if self.max_tokens is not None:
             body["max_tokens"] = self.max_tokens
+        # Capability-gated ``response_format`` injection. Passes the FULL
+        # provider-prefixed ``model_id`` (NOT the bare wire id already stored in
+        # body["model"]) because the catalog is keyed on the full id. No-op when
+        # ``output_contract is None`` -> body stays byte-for-byte unchanged.
+        self._apply_output_contract(body, model_id, output_contract)
         return self.completions_url, headers, body
 
     def parse_response(self, status: int, payload: object) -> tuple[str, TokenUsage | None]:
@@ -148,8 +249,9 @@ class OpenAICompatAdapter:
         (verified against the OpenAI chat-completions streaming reference). See
         :meth:`ProviderAdapter.stream_request`.
         """
-        # output_contract: accepted; passed through to build_request (no-op
-        # today; provider-native translation deferred to CAC-02-OAI).
+        # output_contract is passed through to build_request, which applies the
+        # capability-gated ``response_format`` shaping (compatible with
+        # stream:true). Stream flags are layered on top of the shaped body.
         url, headers, body = self.build_request(
             model_id, messages, temperature, timeout, api_key, output_contract
         )
