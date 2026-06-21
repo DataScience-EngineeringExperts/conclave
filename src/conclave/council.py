@@ -109,6 +109,18 @@ class Council:
             identical repeat run is served from the on-disk cache instead of
             re-calling the providers. The cache never persists API keys --
             see :mod:`conclave.cache`.
+        extract_verdict: Whether to run the structured verdict-extraction step
+            (CAC-05) after a synthesize-mode run. Defaults to ``True`` -- the
+            auditable verdict (consensus score, conflicts, provider votes) is the
+            council's product, so it is on by default. **Cost note:** verdict
+            extraction makes a SECOND synthesizer call (one extra LLM round-trip
+            per ``ask``, plus one more on the single repair retry) distinct from
+            the prose ``synthesis`` call. Subsuming both into a single synthesizer
+            call is a future optimization; for now this flag is the single opt-out.
+            Set ``False`` to skip the verdict entirely (``CouncilResult.verdict``
+            stays ``None`` and the manifest's verdict-provenance slots stay at
+            their defaults). Verdict extraction never runs in ``raw`` mode
+            (``synthesize=False``) regardless of this flag.
         allow_transport_debug_logging: Opt **out** of the transport-logging guard.
             Defaults to ``False``, which means the guard is **ON**: constructing a
             ``Council`` installs :func:`conclave.transport.guard_transport_logging`
@@ -138,6 +150,7 @@ class Council:
         temperature: float = 0.7,
         timeout: float = 120.0,
         cache: bool | None = None,
+        extract_verdict: bool = True,
         allow_transport_debug_logging: bool = False,
     ) -> None:
         self.config = config or load_config()
@@ -147,6 +160,11 @@ class Council:
         self.timeout = timeout
         # Explicit override wins; otherwise defer to config (off by default).
         self.cache_enabled = self.config.cache if cache is None else cache
+        # Default-on verdict extraction (CAC-06). Named ``*_enabled`` to read
+        # unambiguously as a switch, never confused with the imported
+        # ``extract_verdict`` engine function. There is no per-call override --
+        # this constructor flag is the single resolution path (one opt-out).
+        self.extract_verdict_enabled = extract_verdict
         # Default-on transport-logging guard (key-leak audit, RANK 6): drop
         # httpx/httpcore DEBUG records (the only band that emits the auth header)
         # so a process holding a real key cannot leak it via verbose transport
@@ -418,7 +436,14 @@ class Council:
         )
 
         if synthesize:
+            # Prose synthesis first, then the structured verdict over the SAME
+            # answers. ``_apply_verdict`` runs after the manifest exists so it can
+            # populate the manifest's verdict-provenance slots; it is skipped in
+            # raw mode (no synthesizer call) and is opt-out via the constructor
+            # flag (resolved inside the helper). The no-members early return above
+            # never reaches here, so a memberless run carries no verdict.
             await self._synthesize(result)
+            await self._apply_verdict(result)
         return result
 
     async def ask_stream(self, prompt: str, synthesize: bool = True) -> AsyncIterator[StreamEvent]:
@@ -579,6 +604,92 @@ class Council:
             result.synthesis = answer.answer
         else:
             result.synthesis_error = answer.error
+
+    async def _apply_verdict(self, result: CouncilResult) -> None:
+        """Run verdict extraction over the answers and hoist it onto ``result``.
+
+        The SINGLE shared verdict-resolution path. Both the buffered
+        ``ask``/:meth:`_ask_uncached` path (here) and the streaming path
+        (CAC-06-STREAM) call this one method, so the rule "verdict object is
+        canonical, top-level fields are mirrors" is written exactly once and the
+        two paths cannot drift. It mutates ``result`` in place and returns
+        ``None``.
+
+        The verdict object (``result.verdict``) is the canonical adjudication; the
+        convenience fields (``consensus_score``/``method``/``label``,
+        ``conflicts``, ``provider_votes``, ``minority_reports``) are HOISTED
+        mirrors of the same values for callers that don't want to reach through
+        ``result.verdict``. They are populated only when a verdict is present;
+        when it is absent they stay at their ``None``/empty defaults.
+
+        Consensus is NEVER recomputed here: it is carried verbatim from
+        :func:`conclave.verdict_synthesis.extract_verdict`, which computes it
+        deterministically from the model's clustering (DD-1). This method only
+        delegates and copies fields.
+
+        **Opt-out & cost.** When ``self.extract_verdict_enabled`` is ``False`` this
+        is a no-op and every verdict field is left at its default. When enabled it
+        makes a SECOND synthesizer call (the extraction round-trip, plus one repair
+        retry on a malformed response) distinct from the prose synthesis call --
+        the documented cost of the default-on verdict.
+
+        ``extract_verdict`` owns the N<2 gate (it returns ``verdict=None`` with the
+        reason ``"fewer than 2 responding members"`` and makes NO LLM call in that
+        case), so this method delegates unconditionally rather than duplicating the
+        responder-counting logic; that keeps a single code path and lets the
+        manifest carry the N<2 reason. ``extract_verdict`` never raises, and this
+        method only assigns already-secret-free objects afterward, so no defensive
+        try/except is needed.
+
+        When ``result.manifest`` exists its verdict-provenance slots are populated
+        (extractor identity + prompt version, absent reason, consensus method,
+        verdict type) and the manifest's ``secret_safety`` stamp is RE-RUN over the
+        final content: the stamp was first computed in :meth:`_build_manifest`
+        before these fields existed, so re-stamping keeps the VERIFIED claim honest
+        over the manifest a consumer actually receives. The new fields (a resolved
+        model id, a prompt-version string, the ``verdict_type``/``consensus_method``
+        literals) are provably key-free, so the stamp stays VERIFIED.
+
+        Args:
+            result: The in-progress :class:`CouncilResult` (answers + manifest
+                already attached). Mutated in place.
+        """
+        if not self.extract_verdict_enabled:
+            return
+
+        # Lazy import mirrors this module's deferred-import style (``modes`` /
+        # ``streaming`` are imported inside methods) and sidesteps any import-cycle
+        # risk between council and the verdict engine.
+        from .verdict_synthesis import extract_verdict as extract_verdict_fn
+
+        synthesizer_name = self.synthesizer
+        synth_id = self.config.resolve_model_id(self.synthesizer)
+        vsr = await extract_verdict_fn(
+            result.prompt,
+            result.answers,
+            synthesizer_name=synthesizer_name,
+            synthesizer_model_id=synth_id,
+            config=self.config,
+        )
+
+        result.verdict = vsr.verdict
+        if vsr.verdict is not None:
+            # Hoist the canonical verdict's values to the top-level mirrors.
+            result.consensus_score = vsr.verdict.consensus_score
+            result.consensus_method = vsr.verdict.consensus_method
+            result.consensus_label = vsr.verdict.consensus_label
+            result.conflicts = vsr.verdict.conflicts
+            result.provider_votes = vsr.verdict.provider_votes
+            result.minority_reports = vsr.verdict.minority_reports
+
+        if result.manifest is not None:
+            result.manifest.verdict_extraction = vsr.extraction
+            result.manifest.verdict_absent_reason = vsr.verdict_absent_reason
+            result.manifest.consensus_method = vsr.verdict.consensus_method if vsr.verdict else None
+            result.manifest.verdict_type = vsr.verdict.verdict_type if vsr.verdict else None
+            # Re-stamp over the now-complete manifest so the VERIFIED claim covers
+            # the verdict-provenance fields just written (they are key-free).
+            result.manifest.secret_safety = verified_secret_safety(result.manifest)
 
     async def synthesize_blocks(self, system_prompt: str, user_content: str) -> ModelAnswer:
         """Call the synthesizer model with an arbitrary system + user message.
