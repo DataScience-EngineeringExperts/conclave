@@ -133,14 +133,32 @@ def test_json_schema_omits_schema_key_when_contract_schema_is_none():
 # --------------------------------------------------------------------------- #
 
 
-def test_json_object_for_json_mode_only_model(caplog):
+@pytest.fixture
+def conclave_caplog(caplog):
+    """caplog that reliably captures the non-propagating ``conclave`` logger.
+
+    ``get_logger`` sets ``conclave.propagate = False`` (a key-leak defense), so
+    pytest's root-attached caplog handler stops seeing these records once any
+    prior test in the suite has configured the logger. Attaching the capture
+    handler directly to the ``conclave`` logger makes capture order- and
+    propagation-independent.
+    """
+    logger = logging.getLogger("conclave")
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger="conclave")
+    try:
+        yield caplog
+    finally:
+        logger.removeHandler(caplog.handler)
+
+
+def test_json_object_for_json_mode_only_model(conclave_caplog):
     # deepseek/deepseek-chat: json_mode True, structured_output False (catalog).
-    with caplog.at_level(logging.WARNING, logger="conclave"):
-        body = _build(_deepseek(), "deepseek/deepseek-chat", OutputContract(schema=_SCHEMA))
+    body = _build(_deepseek(), "deepseek/deepseek-chat", OutputContract(schema=_SCHEMA))
     assert body["response_format"] == {"type": "json_object"}
     assert any(
         "json mode only" in rec.getMessage().lower() or "json_object" in rec.getMessage().lower()
-        for rec in caplog.records
+        for rec in conclave_caplog.records
     )
 
 
@@ -149,21 +167,19 @@ def test_json_object_for_json_mode_only_model(caplog):
 # --------------------------------------------------------------------------- #
 
 
-def test_no_injection_for_unsupported_model(caplog):
+def test_no_injection_for_unsupported_model(conclave_caplog):
     # perplexity/sonar-pro: both flags False in the catalog.
-    with caplog.at_level(logging.WARNING, logger="conclave"):
-        body = _build(_perplexity(), "perplexity/sonar-pro", OutputContract(schema=_SCHEMA))
+    body = _build(_perplexity(), "perplexity/sonar-pro", OutputContract(schema=_SCHEMA))
     assert "response_format" not in body
-    assert any("neither" in rec.getMessage().lower() for rec in caplog.records)
+    assert any("neither" in rec.getMessage().lower() for rec in conclave_caplog.records)
 
 
-def test_no_injection_for_unknown_endpoint(caplog):
+def test_no_injection_for_unknown_endpoint(conclave_caplog):
     # An id whose prefix is absent from the catalog -> capabilities_for() None.
     adapter = _adapter("custom", "https://llm.internal.example/v1/chat/completions", "CUSTOM_KEY")
-    with caplog.at_level(logging.WARNING, logger="conclave"):
-        body = _build(adapter, "custom/private-model", OutputContract(schema=_SCHEMA))
+    body = _build(adapter, "custom/private-model", OutputContract(schema=_SCHEMA))
     assert "response_format" not in body
-    assert any("no capability record" in rec.getMessage().lower() for rec in caplog.records)
+    assert any("no capability record" in rec.getMessage().lower() for rec in conclave_caplog.records)
 
 
 # --------------------------------------------------------------------------- #

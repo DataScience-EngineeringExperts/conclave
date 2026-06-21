@@ -6,10 +6,8 @@ Two pinned contracts:
   arithmetic, the label buckets and their exact boundaries, null-position
   exclusion, conditional-counts, case/whitespace-insensitive grouping, and the
   auditability-paradox guard (``00_SCOPE_PLAN.md`` §4.1: no difflib).
-* The :class:`conclave.adapters.base.OutputContract` no-op pass-through on all
-  three concrete adapters -- accepting the optional trailing param must not alter
-  the request body today (provider-native translation is deferred to
-  CAC-02-OAI/ANT/GEM).
+* The :class:`conclave.adapters.base.OutputContract` type defaults (per-adapter
+  request shaping is covered in test_{openai_compat,anthropic,gemini}_structured.py).
 
 All tests run offline; no keys required. Existing ``tests/test_adapters.py`` is
 left untouched.
@@ -20,9 +18,7 @@ from __future__ import annotations
 import pytest
 
 from conclave import agreement
-from conclave.adapters.anthropic import AnthropicAdapter
 from conclave.adapters.base import OutputContract
-from conclave.adapters.gemini import GeminiAdapter
 
 # --------------------------------------------------------------------------- #
 # consensus_score: ratio arithmetic (DD-1 position_cluster_ratio_v1)
@@ -212,59 +208,10 @@ def test_agreement_module_does_not_import_difflib():
 
 
 # --------------------------------------------------------------------------- #
-# CAC-02 adapter contract: OutputContract is a no-op pass-through today
+# CAC-02 adapter contract: OutputContract type defaults
+# (per-adapter request shaping now lives in
+#  test_{openai_compat,anthropic,gemini}_structured.py)
 # --------------------------------------------------------------------------- #
-
-
-# (adapter, model_id, key) tuples for the adapters whose OutputContract handling
-# is STILL a no-op pass-through. CAC-02-OAI implements capability-gated
-# response_format shaping for the OpenAI-compatible adapter, so its case moves
-# out of this no-op guard and into tests/test_openai_compat_structured.py;
-# CAC-02-ANT and CAC-02-GEM will likewise migrate their cases when they land.
-_ADAPTER_CASES = [
-    (AnthropicAdapter(), "anthropic/claude-sonnet-4-6", "sk-ant-secret"),
-    (GeminiAdapter(), "gemini/gemini-2.5-pro", "AIza-secret"),
-]
-
-_MESSAGES = [{"role": "user", "content": "hi"}]
-_REAL_CONTRACT = OutputContract(
-    schema={"type": "object", "properties": {"answer": {"type": "string"}}},
-    schema_name="MemberAnswer",
-    strict=True,
-)
-
-
-@pytest.mark.parametrize("adapter, model_id, api_key", _ADAPTER_CASES)
-def test_build_request_output_contract_is_noop_passthrough(adapter, model_id, api_key):
-    """Accepting output_contract must not change the built body today (no-op).
-
-    Three call forms must produce identical bodies: no arg, explicit ``None``,
-    and a real :class:`OutputContract`. This proves the param is accepted and
-    ignored (provider-native translation deferred to CAC-02-OAI/ANT/GEM).
-    """
-    _u0, _h0, body_default = adapter.build_request(model_id, _MESSAGES, 0.7, 120.0, api_key)
-    _u1, _h1, body_none = adapter.build_request(
-        model_id, _MESSAGES, 0.7, 120.0, api_key, output_contract=None
-    )
-    _u2, _h2, body_real = adapter.build_request(
-        model_id, _MESSAGES, 0.7, 120.0, api_key, output_contract=_REAL_CONTRACT
-    )
-    assert body_none == body_default
-    assert body_real == body_default
-
-
-@pytest.mark.parametrize("adapter, model_id, api_key", _ADAPTER_CASES)
-def test_stream_request_output_contract_is_noop_passthrough(adapter, model_id, api_key):
-    """Same no-op guarantee on the streaming path (param wired through, ignored)."""
-    _u0, _h0, body_default = adapter.stream_request(model_id, _MESSAGES, 0.7, 120.0, api_key)
-    _u1, _h1, body_none = adapter.stream_request(
-        model_id, _MESSAGES, 0.7, 120.0, api_key, output_contract=None
-    )
-    _u2, _h2, body_real = adapter.stream_request(
-        model_id, _MESSAGES, 0.7, 120.0, api_key, output_contract=_REAL_CONTRACT
-    )
-    assert body_none == body_default
-    assert body_real == body_default
 
 
 def test_output_contract_schema_field_roundtrips():
