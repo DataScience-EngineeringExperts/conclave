@@ -51,6 +51,14 @@ VERDICT_TYPES = ("decision", "review", "synthesis")
 # consensus arithmetic (DD-1: self-reported confidence is unreliable).
 CONFIDENCE_LEVELS = ("low", "medium", "high")
 
+# Version tag for the verdict-EXTRACTION prompt (CAC-05), distinct from the
+# synthesis prompt version (``conclave.prompts.SYNTHESIS_PROMPT_VERSION``). It is
+# recorded in the manifest's ``verdict_extraction`` provenance so a downstream
+# audit can tell WHICH extractor wording produced a given clustering. Opaque
+# string; only equality/inequality is meaningful. Bump on any change to the
+# extraction system prompt in :mod:`conclave.verdict_synthesis`.
+VERDICT_EXTRACTION_PROMPT_VERSION = "1"
+
 
 class CouncilPosition(BaseModel):
     """One clustered stance in the verdict (a ``positions[]`` element).
@@ -347,3 +355,119 @@ def verdict_json_schema() -> dict:
             "positions",
         ],
     }
+
+
+# Consensus fields the EXTRACTION schema strips out: the model must never emit
+# any of them (DD-1 — the number is deterministic arithmetic over the model's
+# clustering, computed by CAC-05, never asked of the model). Named once here so
+# :func:`verdict_extraction_json_schema` and a guard test share the exact set.
+_CONSENSUS_FIELDS = ("consensus_score", "consensus_method", "consensus_label")
+
+
+def verdict_extraction_json_schema() -> dict:
+    """Return the JSON Schema sent to the extractor model for verdict EXTRACTION.
+
+    Derived from :func:`verdict_json_schema` (the full LCD verdict schema) as a
+    template, then transformed for the CAC-05 extraction step so the model emits
+    only its *judgment*, never the consensus arithmetic:
+
+    * **ADDS** ``verdict_applies`` (``{"type": "boolean"}``) as a REQUIRED field —
+      the open-ended-vs-decision discriminator the engine reads to decide whether
+      a verdict applies at all (DD-2 verdict-absent rule).
+    * **REMOVES** every consensus field (:data:`_CONSENSUS_FIELDS`) from both
+      ``properties`` and ``required`` — the model must NEVER emit a consensus
+      number; CAC-05 computes it deterministically from ``provider_votes`` via
+      :mod:`conclave.agreement` (DD-1, the auditability-paradox fix).
+    * **KEEPS** the judgment fields the model owns: ``verdict_type`` (enum),
+      ``headline``, ``recommendation``, ``positions``, plus the optional
+      ``conflicts``, ``provider_votes``, ``minority_reports``, ``caveats``,
+      ``dissent_summary``. ``provider_votes[*].position_label`` is what the engine
+      maps each member to in order to build the per-member clustering sequence.
+
+    Inherits all LCD constraints from the template (object nesting ≤ 3, ``enum``
+    not ``oneOf``/``anyOf``/``allOf``, no ``$ref``/``$defs``,
+    ``additionalProperties: false`` on every object, optionality via
+    omission-from-required). The returned dict is a fresh object on each call so a
+    caller may mutate it freely.
+
+    Returns:
+        A draft-style JSON Schema ``dict`` for the verdict-extraction object.
+
+    Example:
+        >>> schema = verdict_extraction_json_schema()
+        >>> schema["properties"]["verdict_applies"]
+        {'type': 'boolean'}
+        >>> "consensus_score" in schema["properties"]
+        False
+        >>> "verdict_applies" in schema["required"]
+        True
+    """
+    schema = verdict_json_schema()
+    schema["title"] = "VerdictExtraction"
+
+    # ADD the discriminator (required) — the engine reads it to decide whether the
+    # prompt is a decision/review at all.
+    schema["properties"]["verdict_applies"] = {"type": "boolean"}
+
+    # REMOVE every consensus field — the model must never emit the number.
+    for field in _CONSENSUS_FIELDS:
+        schema["properties"].pop(field, None)
+
+    # Rebuild ``required``: drop the consensus fields, add ``verdict_applies``
+    # (optionality stays via omission-from-required; we only add the new gate).
+    schema["required"] = [r for r in schema["required"] if r not in _CONSENSUS_FIELDS]
+    schema["required"].append("verdict_applies")
+    return schema
+
+
+class VerdictExtractionModel(BaseModel):
+    """The validated structured output of the verdict-extraction step (CAC-05).
+
+    This is the Pydantic *validator* for what the extractor model returns —
+    Pydantic IS the validation gate (no ``jsonschema`` dependency). It mirrors the
+    judgment fields of :class:`CouncilVerdict` but, per DD-1, carries **no
+    consensus fields**: the engine computes ``consensus_score`` / ``method`` /
+    ``label`` deterministically from :attr:`provider_votes` and never reads them
+    off the model. Extra keys a model might smuggle in (e.g. a hallucinated
+    ``consensus_score``) are ignored — Pydantic's default ``extra="ignore"`` drops
+    unknown fields, so a smuggled number simply never reaches the assembled
+    verdict.
+
+    The reused element types (:class:`CouncilPosition`, :class:`CouncilConflict`,
+    :class:`ProviderVote`, :class:`MinorityReport`) are the same shapes the final
+    verdict carries, so the engine assembles a :class:`CouncilVerdict` directly
+    from these validated sub-objects plus its own computed consensus values.
+
+    See DD-2 (verdict schema) and DD-1 (consensus is never model-emitted).
+
+    Attributes:
+        verdict_applies: ``True`` when the prompt is a decision/review the council
+            can adjudicate; ``False`` for open-ended generation (→ verdict absent,
+            DD-2 verdict-absent rule). The single discriminator the engine reads
+            to gate verdict assembly.
+        verdict_type: One of :data:`VERDICT_TYPES`.
+        headline: One-line answer.
+        recommendation: Actionable synthesized answer.
+        positions: Clustered stances (the model's clustering — the one
+            LLM-assisted step, DD-1).
+        conflicts: Disagreements between positions; the engine recomputes each
+            ``consensus_score`` deterministically (any model-supplied value is
+            overwritten).
+        provider_votes: Per-provider votes. ``position_label`` on each is what the
+            engine maps every responding member to in order to build the
+            clustering sequence for :mod:`conclave.agreement`.
+        minority_reports: Dissenting views worth surfacing.
+        caveats: Cross-cutting caveats on the verdict.
+        dissent_summary: Optional prose summary of the dissent.
+    """
+
+    verdict_applies: bool
+    verdict_type: str
+    headline: str
+    recommendation: str
+    positions: list[CouncilPosition] = Field(default_factory=list)
+    conflicts: list[CouncilConflict] = Field(default_factory=list)
+    provider_votes: list[ProviderVote] = Field(default_factory=list)
+    minority_reports: list[MinorityReport] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
+    dissent_summary: str | None = None

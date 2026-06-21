@@ -57,14 +57,21 @@ from .models import (
 )
 from .transport import aclose, guard_transport_logging
 from .verdict import (
+    VERDICT_EXTRACTION_PROMPT_VERSION,
     VERDICT_SCHEMA_VERSION,
     CouncilConflict,
     CouncilPosition,
     CouncilVerdict,
     MinorityReport,
     ProviderVote,
+    VerdictExtractionModel,
     member_answer_json_schema,
+    verdict_extraction_json_schema,
     verdict_json_schema,
+)
+from .verdict_synthesis import (
+    VerdictSynthesisResult,
+    extract_verdict,
 )
 
 __version__ = "1.0.0"
@@ -90,6 +97,12 @@ __all__ = [
     "VERDICT_SCHEMA_VERSION",
     "verdict_json_schema",
     "member_answer_json_schema",
+    # CAC-05 disagreement extraction + verdict synthesis public surface.
+    "extract_verdict",
+    "VerdictSynthesisResult",
+    "VerdictExtractionModel",
+    "verdict_extraction_json_schema",
+    "VERDICT_EXTRACTION_PROMPT_VERSION",
     # CAC-04 auditable manifest public surface.
     "ModelHarnessManifest",
     "ProviderExecutionReceipt",
