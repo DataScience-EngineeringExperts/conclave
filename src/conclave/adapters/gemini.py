@@ -14,13 +14,32 @@ Gemini's wire format diverges from OpenAI in several ways this adapter handles:
 Response text is the concatenation of ``candidates[0].content.parts[*].text``;
 usage maps ``usageMetadata.promptTokenCount``/``candidatesTokenCount``/
 ``totalTokenCount``.
+
+**Structured output (CAC-02-GEM).** When an :class:`OutputContract` is supplied
+*and* the static capability catalog marks the model
+``supports_structured_output``, this adapter sets
+``generationConfig.responseMimeType = "application/json"`` and
+``generationConfig.responseSchema = <transformed schema>``. Gemini's
+``responseSchema`` is an OpenAPI-3.0 *subset* (the ``v1beta`` ``Schema`` proto),
+NOT full JSON Schema: it rejects ``additionalProperties`` (which the CAC-01
+schema sets ``false`` on every object), ``title``/``$schema``/``$defs``/``$ref``,
+and JSON-Schema union ``type`` arrays. :func:`_transform_schema_for_gemini`
+recursively strips the unsupported keywords, uppercases ``type`` to the OpenAPI
+enum (``OBJECT``/``ARRAY``/``STRING``/...), and maps a ``["string", "null"]``
+nullable-union to a single ``type`` plus ``nullable: true``. A construct that
+genuinely cannot be represented (a multi-type union or a composition keyword)
+degrades to ``responseMimeType`` only (JSON without a strict schema) with a
+non-fatal warning — an invalid schema is never sent, and the council never
+aborts.
 """
 
 from __future__ import annotations
 
 import json
+import warnings
 
 from ..models import TokenUsage
+from ..provider_catalog import capabilities_for
 from ..registry import PROVIDER_ENV_VARS
 from .base import OutputContract, ProviderError, SSEDelta, status_error
 
@@ -29,6 +48,156 @@ DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
 # OpenAI role -> Gemini role. system is handled separately (hoisted).
 _ROLE_MAP = {"user": "user", "assistant": "model"}
+
+# JSON-Schema keywords the Gemini ``responseSchema`` (OpenAPI-3.0 subset)
+# rejects; stripped at every node. ``additionalProperties`` is the load-bearing
+# one (CAC-01 sets it ``false`` on every object); the rest are stripped
+# defensively even though the CAC-01 schema should not emit them.
+_GEMINI_STRIP_KEYWORDS = frozenset(
+    {
+        "additionalProperties",
+        "title",
+        "$schema",
+        "$id",
+        "$comment",
+        "$defs",
+        "$ref",
+        "definitions",
+        "default",
+        "examples",
+        "patternProperties",
+        "const",
+    }
+)
+
+# Composition keywords with no representation in the OpenAPI-3.0 subset. Their
+# presence forces the mimeType-only fallback (we never emit an invalid schema).
+_GEMINI_UNSUPPORTED_KEYWORDS = frozenset({"anyOf", "oneOf", "allOf", "not", "if", "then", "else"})
+
+# JSON-Schema ``type`` string -> Gemini OpenAPI ``Type`` enum (uppercase).
+_GEMINI_TYPE_MAP = {
+    "object": "OBJECT",
+    "array": "ARRAY",
+    "string": "STRING",
+    "number": "NUMBER",
+    "integer": "INTEGER",
+    "boolean": "BOOLEAN",
+}
+
+# JSON-Schema keys whose VALUE is itself a schema and must be recursed into.
+_SCHEMA_VALUED_KEYS = frozenset({"items", "additionalItems", "contains"})
+
+
+class _UnrepresentableSchema(ValueError):
+    """A schema construct that the Gemini OpenAPI subset cannot express.
+
+    Raised internally by :func:`_transform_schema_for_gemini`; the adapter
+    catches it and degrades to ``responseMimeType``-only JSON with a warning
+    rather than sending an invalid ``responseSchema``.
+    """
+
+
+def _map_type(type_value: object) -> tuple[str, bool]:
+    """Map a JSON-Schema ``type`` to a ``(gemini_type, nullable)`` pair.
+
+    Handles the scalar form (``"string"``) and the CAC-01 nullable-union form
+    (``["string", "null"]`` -> ``("STRING", True)``). A union with more than one
+    non-null member has no single-``type`` OpenAPI representation and raises
+    :class:`_UnrepresentableSchema`.
+
+    Args:
+        type_value: The raw ``type`` value: a string or a list of strings.
+
+    Returns:
+        ``(gemini_type, nullable)`` where ``gemini_type`` is the uppercase
+        OpenAPI enum and ``nullable`` is ``True`` when ``"null"`` was in a union.
+
+    Raises:
+        _UnrepresentableSchema: On an unknown type name or a multi-type union.
+    """
+    if isinstance(type_value, str):
+        mapped = _GEMINI_TYPE_MAP.get(type_value)
+        if mapped is None:
+            raise _UnrepresentableSchema(f"unsupported type {type_value!r}")
+        return mapped, False
+    if isinstance(type_value, list):
+        non_null = [t for t in type_value if t != "null"]
+        nullable = len(non_null) != len(type_value)
+        if len(non_null) != 1:
+            raise _UnrepresentableSchema(f"non-representable type union {type_value!r}")
+        mapped = _GEMINI_TYPE_MAP.get(non_null[0])
+        if mapped is None:
+            raise _UnrepresentableSchema(f"unsupported type {non_null[0]!r}")
+        return mapped, nullable
+    raise _UnrepresentableSchema(f"unsupported type value {type_value!r}")
+
+
+def _transform_schema_for_gemini(schema: dict) -> dict:
+    """Transform a draft-style JSON Schema into a Gemini ``responseSchema`` dict.
+
+    Recursively rebuilds ``schema`` (never mutating the input) into the
+    OpenAPI-3.0 subset Gemini's ``generationConfig.responseSchema`` accepts:
+
+    * **Strips** every keyword in :data:`_GEMINI_STRIP_KEYWORDS` — chiefly
+      ``additionalProperties`` (CAC-01 sets it ``false`` everywhere), plus the
+      ``title``/``$schema``/``$defs``/``$ref`` family.
+    * **Maps** ``type`` to the uppercase OpenAPI ``Type`` enum and collapses a
+      ``["string", "null"]`` union into a single ``type`` + ``nullable: true``.
+    * **Recurses** into ``properties`` values, ``items`` (dict or list), and the
+      other schema-valued keys.
+    * **Carries through** ``enum``, ``required``, ``nullable``, ``format``,
+      ``description``, ``minItems``/``maxItems``, and other scalar OpenAPI fields
+      verbatim.
+
+    Args:
+        schema: A draft-style JSON Schema ``dict`` (e.g. the CAC-01
+            :func:`conclave.verdict.verdict_json_schema` output).
+
+    Returns:
+        A fresh ``dict`` safe to place in ``generationConfig.responseSchema``.
+
+    Raises:
+        _UnrepresentableSchema: When the schema contains a construct with no
+            OpenAPI-subset representation (a composition keyword such as
+            ``anyOf``/``oneOf``, or a multi-type ``type`` union). The adapter
+            catches this and falls back to mimeType-only JSON.
+    """
+    if not isinstance(schema, dict):
+        raise _UnrepresentableSchema(f"schema node is not an object: {type(schema).__name__}")
+
+    out: dict = {}
+    union_nullable = False
+
+    for key, value in schema.items():
+        if key in _GEMINI_STRIP_KEYWORDS:
+            continue
+        if key in _GEMINI_UNSUPPORTED_KEYWORDS:
+            raise _UnrepresentableSchema(f"unsupported composition keyword {key!r}")
+        if key == "type":
+            gemini_type, union_nullable = _map_type(value)
+            out["type"] = gemini_type
+        elif key == "properties":
+            if not isinstance(value, dict):
+                raise _UnrepresentableSchema("properties must be an object")
+            out["properties"] = {
+                prop: _transform_schema_for_gemini(sub) for prop, sub in value.items()
+            }
+        elif key in _SCHEMA_VALUED_KEYS:
+            if isinstance(value, list):
+                out[key] = [_transform_schema_for_gemini(sub) for sub in value]
+            else:
+                out[key] = _transform_schema_for_gemini(value)
+        else:
+            # enum / required / nullable / format / description / min*/max* and
+            # other scalar OpenAPI-subset fields pass through unchanged.
+            out[key] = value
+
+    # A ``["string", "null"]`` union contributed nullability; merge it with any
+    # explicit ``nullable`` already carried through (explicit True wins).
+    if union_nullable:
+        out["nullable"] = bool(out.get("nullable", False)) or True
+
+    return out
 
 
 class GeminiAdapter:
@@ -52,6 +221,67 @@ class GeminiAdapter:
         """Strip the ``gemini/`` prefix to the bare model name for the URL path."""
         return model_id.split("/", 1)[1] if "/" in model_id else model_id
 
+    def _apply_output_contract(
+        self,
+        generation_config: dict,
+        model_id: str,
+        output_contract: OutputContract | None,
+    ) -> None:
+        """Inject structured-output keys into ``generation_config`` in place.
+
+        Capability-gated and never-aborts. When ``output_contract`` is ``None``
+        this is a no-op so the legacy request body is byte-for-byte unchanged.
+        Otherwise, only when the static catalog marks the model
+        ``supports_structured_output``, sets ``responseMimeType`` to
+        ``"application/json"`` and ``responseSchema`` to the transformed schema.
+
+        Degradation ladder (each step warns, none raises):
+
+        * capability unknown / unsupported -> inject nothing (warn).
+        * contract present but ``schema is None`` -> ``responseMimeType`` only
+          (free-form JSON), no ``responseSchema`` (no warning — this is the
+          caller asking for JSON mode without a schema).
+        * schema present but unrepresentable in the OpenAPI subset ->
+          ``responseMimeType`` only + warn (JSON without strict schema), never an
+          invalid schema.
+
+        Args:
+            generation_config: The ``generationConfig`` dict to mutate in place.
+            model_id: The provider-prefixed model id (capability lookup key).
+            output_contract: The optional structured-output contract.
+        """
+        if output_contract is None:
+            return
+
+        caps = capabilities_for(model_id)
+        if caps is None or not caps.supports_structured_output:
+            warnings.warn(
+                f"gemini: structured output requested for {model_id!r} but the "
+                "capability catalog does not mark it supported; sending free prose.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return
+
+        # Caller wants JSON; mimeType is safe even without a schema.
+        generation_config["responseMimeType"] = "application/json"
+
+        schema = output_contract.schema
+        if schema is None:
+            # JSON mode without a strict schema — intentional, not an error.
+            return
+
+        try:
+            generation_config["responseSchema"] = _transform_schema_for_gemini(schema)
+        except _UnrepresentableSchema as exc:
+            # Never send an invalid schema; degrade to mimeType-only JSON.
+            warnings.warn(
+                f"gemini: output schema could not be mapped to responseSchema "
+                f"({exc}); falling back to JSON without a strict schema.",
+                UserWarning,
+                stacklevel=2,
+            )
+
     def build_request(
         self,
         model_id: str,
@@ -64,11 +294,13 @@ class GeminiAdapter:
         """Build the generateContent POST.
 
         ``temperature`` is added to ``generationConfig`` only when not ``None``;
-        passing ``None`` omits it so the model applies its own default. See
-        :meth:`ProviderAdapter.build_request`.
+        passing ``None`` omits it so the model applies its own default. When an
+        ``output_contract`` is supplied and the model is catalog-capable, the
+        structured-output keys (``responseMimeType`` + transformed
+        ``responseSchema``) are injected via :meth:`_apply_output_contract`; with
+        ``output_contract is None`` the body is byte-for-byte the legacy shape.
+        See :meth:`ProviderAdapter.build_request`.
         """
-        # output_contract: accepted; provider-native translation deferred to
-        # CAC-02-GEM (Gemini ``generationConfig.responseSchema``). No-op today.
         model = self._bare_model(model_id)
         url = f"{GEMINI_BASE}/{model}:generateContent"
         headers = {
@@ -91,6 +323,9 @@ class GeminiAdapter:
         generation_config: dict = {"maxOutputTokens": self.max_output_tokens}
         if temperature is not None:
             generation_config["temperature"] = temperature
+        # Conditional structured-output injection (no-op when contract is None,
+        # so the legacy request body is preserved exactly).
+        self._apply_output_contract(generation_config, model_id, output_contract)
         body: dict = {
             "contents": contents,
             "generationConfig": generation_config,
@@ -135,14 +370,15 @@ class GeminiAdapter:
     ) -> tuple[str, dict[str, str], dict]:
         """Build the streaming POST against ``streamGenerateContent?alt=sse``.
 
-        Same body as :meth:`build_request`, but the URL targets the streaming
+        Same body as :meth:`build_request` (including any structured-output
+        injection from an ``output_contract``), but the URL targets the streaming
         method with ``?alt=sse`` so Gemini emits standard SSE frames (without
         ``alt=sse`` it returns a single JSON array, not a stream -- verified
         against the Gemini API streaming reference). See
         :meth:`ProviderAdapter.stream_request`.
         """
-        # output_contract: accepted; passed through to build_request (no-op
-        # today; provider-native translation deferred to CAC-02-GEM).
+        # output_contract flows into build_request, which performs the
+        # capability-gated responseMimeType/responseSchema injection.
         _url, headers, body = self.build_request(
             model_id, messages, temperature, timeout, api_key, output_contract
         )

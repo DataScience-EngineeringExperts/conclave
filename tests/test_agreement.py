@@ -225,11 +225,16 @@ def _openai_adapter() -> OpenAICompatAdapter:
     )
 
 
-# (adapter, model_id, key) tuples covering all three concrete adapters.
+# (adapter, model_id, key) tuples for adapters whose OutputContract handling is
+# STILL a no-op pass-through (provider-native translation not yet landed for
+# them). Gemini was removed here by CAC-02-GEM: it now performs capability-gated
+# responseMimeType/responseSchema injection, so a real contract is no longer a
+# no-op on a structured-output-capable Gemini model. Its dedicated coverage lives
+# in tests/test_gemini_structured.py. CAC-02-OAI/ANT will likewise drop their own
+# rows as each per-adapter translation lands.
 _ADAPTER_CASES = [
     (_openai_adapter(), "openai/gpt-4.1", "sk-secret"),
     (AnthropicAdapter(), "anthropic/claude-sonnet-4-6", "sk-ant-secret"),
-    (GeminiAdapter(), "gemini/gemini-2.5-pro", "AIza-secret"),
 ]
 
 _MESSAGES = [{"role": "user", "content": "hi"}]
@@ -246,7 +251,8 @@ def test_build_request_output_contract_is_noop_passthrough(adapter, model_id, ap
 
     Three call forms must produce identical bodies: no arg, explicit ``None``,
     and a real :class:`OutputContract`. This proves the param is accepted and
-    ignored (provider-native translation deferred to CAC-02-OAI/ANT/GEM).
+    ignored (provider-native translation deferred to CAC-02-OAI/ANT; Gemini's
+    translation has landed and is exercised in tests/test_gemini_structured.py).
     """
     _u0, _h0, body_default = adapter.build_request(model_id, _MESSAGES, 0.7, 120.0, api_key)
     _u1, _h1, body_none = adapter.build_request(
@@ -271,6 +277,24 @@ def test_stream_request_output_contract_is_noop_passthrough(adapter, model_id, a
     )
     assert body_none == body_default
     assert body_real == body_default
+
+
+def test_gemini_output_contract_none_is_still_noop_passthrough():
+    """CAC-02-GEM: with no contract / explicit ``None``, Gemini's body is the
+    legacy shape byte-for-byte. Only a *real* contract on a capable model injects
+    structured-output keys (covered in tests/test_gemini_structured.py); the
+    no-contract path must remain a pure no-op so the legacy request is preserved.
+    """
+    adapter = GeminiAdapter()
+    _u0, _h0, body_default = adapter.build_request(
+        "gemini/gemini-2.5-pro", _MESSAGES, 0.7, 120.0, "AIza-secret"
+    )
+    _u1, _h1, body_none = adapter.build_request(
+        "gemini/gemini-2.5-pro", _MESSAGES, 0.7, 120.0, "AIza-secret", output_contract=None
+    )
+    assert body_none == body_default
+    assert "responseMimeType" not in body_default["generationConfig"]
+    assert "responseSchema" not in body_default["generationConfig"]
 
 
 def test_output_contract_schema_field_roundtrips():
