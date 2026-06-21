@@ -14,8 +14,16 @@ returns **structured results** (per-model latency, token usage, and error captur
 **bring-your-own**, referenced by environment-variable *name* only — never stored or
 logged. It ships four modes: **synthesize** (merge answers into one), **raw** (no merge),
 **debate** (multi-round, members revise after seeing peers' anonymized answers), and
-**adversarial** (propose → refute → verdict); `vote` is on the roadmap. conclave is
-intentionally lightweight — a small council primitive, not an agent framework.
+**adversarial** (propose → refute → verdict). conclave is intentionally lightweight — a
+small council primitive, not an agent framework.
+
+**The v1.1 wedge — the auditable council.** Every run also yields **a multi-model council
+verdict you can act on — structured, scored for agreement, fully auditable**: a
+`CouncilVerdict` exposing agreement, `conflicts`, `minority_reports`, and `provider_votes`;
+a deterministic `consensus_score` (arithmetic over the model's clustering, *never* an
+LLM-emitted number); and a redacted `ModelHarnessManifest` recording how the run executed and
+which model produced the disagreement analysis. The verdict is **default-on**. (A `vote` mode
+was once on the roadmap; it is **absorbed** by `provider_votes` — see below.)
 
 See the canonical spec and design docs:
 
@@ -155,6 +163,82 @@ for answer in result.answers:
 
 print("SYNTHESIS:\n", result.synthesis)
 ```
+
+## Auditable verdict
+
+On a decision- or review-style prompt with at least two responding members, conclave
+adjudicates the answers into a structured, agreement-scored, auditable **verdict**. It is
+**default-on** — no flag needed.
+
+From the CLI, a decision prompt renders a green `VERDICT` panel:
+
+```text
+$ conclave ask "Should we adopt a service mesh for 8 services?" -c grok,gemini,claude
+
+╭─ VERDICT (decision) ─────────────────────────────────────────────────────────╮
+│ A service mesh is not yet justified for 8 services.                            │
+│                                                                                │
+│ Start with library-level retries/timeouts and centralized metrics; revisit a   │
+│ mesh past ~20 services or when mTLS/traffic-splitting become hard requirements. │
+│                                                                                │
+│ consensus: strong (0.75) — heuristic: position_cluster_ratio_v1                │
+╰────────────────────────────────────────────────────────────────────────────────╯
+Conflicts
+  • operational cost: not-yet-worth-it (grok, claude) vs worth-it (gemini)
+Minority reports
+  • gemini: mesh pays off early if you need mTLS everywhere
+```
+
+The consensus line is framed as a **heuristic**, never authoritative: the number is plain
+arithmetic over the model's clustering of the answers, never a value the model emitted.
+
+The same structure is on the result object:
+
+```python
+from conclave import Council
+
+council = Council(models=["grok", "gemini", "claude"])   # verdict is default-on
+result = council.ask_sync("Should we adopt a service mesh for 8 services?")
+
+if result.verdict is not None:
+    print(result.verdict.verdict_type)        # "decision"
+    print(result.verdict.headline)
+    print(result.verdict.recommendation)
+    print(result.consensus_label, result.consensus_score)   # e.g. "strong" 0.75
+
+    for conflict in result.conflicts:
+        print("conflict:", conflict.topic, conflict.position_labels)
+    for position in result.verdict.positions:
+        print(position.label, "backed by answers:", position.evidence_answer_ids)
+    for vote in result.provider_votes:
+        print(vote.provider, "->", vote.position_label)     # who voted for what
+    for mr in result.minority_reports:
+        print("minority:", mr.providers, mr.claim)
+else:
+    # open-ended / fewer-than-2 members / extraction failure: synthesis is still returned
+    print("no verdict:", result.manifest.verdict_absent_reason)
+    print(result.synthesis)
+
+# the execution manifest rides on every result — first-class, secret-free
+print(result.manifest.verdict_extraction.model_id)   # which model produced the clustering
+print(result.manifest.secret_safety)                 # "verified_no_secrets"
+```
+
+To opt out (e.g. for cost-sensitive runs — the verdict adds one extra synthesizer call per
+run), construct with `Council(extract_verdict=False)`; then `result.verdict` stays `None`.
+`conclave ask ... --json` already carries the full structured `verdict` and `manifest`.
+
+**How the consensus number stays honest.** The single LLM-assisted step is *clustering* the
+members' stances; `consensus_score` is then deterministic arithmetic over that clustering
+(largest cluster / members with a position — no text-similarity, never model-emitted). Every
+cluster cites the member `answer_id`s backing it (`evidence_answer_ids`), and the manifest
+records which model + prompt version did the clustering, so the score is reproducible and
+traceable rather than a number to take on faith.
+
+**The verdict is optional.** It is absent — `result.verdict is None`, with the synthesis and
+member answers still returned — for an open-ended/creative prompt, for fewer than two
+responding members, or if extraction fails schema validation; the exact reason is on
+`result.manifest.verdict_absent_reason`.
 
 ### Streaming (synthesize/raw)
 

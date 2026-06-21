@@ -17,6 +17,10 @@ councils:
   frontier: [claude, gemini, openai]
 
 # Default synthesizer (friendly name). Overridable with `--synthesizer`.
+# The synthesizer also runs the default-on verdict extraction (one extra call per
+# run): on a decision/review prompt with >=2 responding members, conclave adjudicates
+# the answers into a scored, auditable verdict on `result.verdict`/`result.manifest`.
+# There is no config switch for it -- opt out in code via Council(extract_verdict=False).
 synthesizer: claude
 
 # Optional result cache (OFF by default). When true, an identical repeat run is

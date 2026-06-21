@@ -5,6 +5,64 @@ All notable changes to conclave are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - Unreleased
+
+The **auditable council**. Every run now produces a structured, agreement-scored,
+fully auditable verdict plus a redacted execution manifest, on top of the existing
+synthesize/raw/debate/adversarial modes. The verdict is the product wedge: a
+multi-model council answer you can act on, with the agreement number computed by
+reproducible arithmetic over the model's clustering — never an LLM-emitted figure.
+
+### Added
+
+- **CouncilResult v2.** New top-level fields, all backward-compatible (default
+  `None`/empty): `verdict` (`CouncilVerdict | None`), `consensus_score`,
+  `consensus_method`, `consensus_label`, `conflicts`, `provider_votes`,
+  `minority_reports`, and a first-class `manifest`. The verdict's values are
+  mirrored to these top-level fields; member answers remain on `result.answers`
+  (each `ModelAnswer` now carries a stable `answer_id`).
+- **Auditable `ModelHarnessManifest`** on every result (not behind a debug flag):
+  per-provider execution receipts (latency, usage, redacted error, `schema_valid`),
+  considered/called/skipped providers, verdict-extraction provenance (which model +
+  prompt version produced the disagreement analysis), and a `secret_safety` stamp
+  promoted to `verified_no_secrets` only after the serialized manifest is scanned
+  clean. `estimated_cost` is deliberately left `None` (no invented pricing).
+- **Deterministic consensus `position_cluster_ratio_v1`** (`agreement.py`):
+  `consensus_score` = largest cluster / members with a position; arithmetic over the
+  model's clustering, never LLM-emitted, never `difflib`. Deterministic
+  `consensus_label` buckets: `none` / `unanimous` / `strong` / `majority` / `split`.
+- **Native structured output** across OpenAI / Anthropic / Gemini via a new
+  `output_contract` threaded through `call_model` → `adapter.build_request`
+  (`response_format` json_schema / `responseSchema` / tool `input_schema`),
+  enforcing the lowest-common-denominator verdict/member JSON Schemas at decode
+  time, with the prompt-level parse-and-validate fallback retained for providers
+  without strict support.
+- **Verdict default-on**, with `Council(extract_verdict=False)` to opt out (one
+  extra synthesizer call per run). Applied identically on the buffered and streaming
+  paths.
+- **The verdict-optional rule.** A verdict is absent (with synthesis + member
+  answers still returned) for one of three reasons, recorded on
+  `manifest.verdict_absent_reason`: `"fewer than 2 responding members"`,
+  `"open-ended prompt (no decision/review to adjudicate)"`, or
+  `"verdict extraction failed schema validation"`.
+- **CLI verdict panel.** A green `VERDICT (<type>)` panel (headline, recommendation,
+  a `consensus: <label> (<score>) — heuristic: <method>` line, and optional
+  conflicts / minority-report blocks), or a dim `No verdict: <reason>` note when
+  absent. `conclave ask ... --json` carries the full `verdict` + `manifest`.
+- **New public exports:** `CouncilVerdict`, `CouncilConflict`, `CouncilPosition`,
+  `ProviderVote`, `MinorityReport`, `ModelHarnessManifest`, `ProviderExecutionReceipt`,
+  `ProviderSkip`, `VerdictExtraction`, `extract_verdict`, `VerdictSynthesisResult`,
+  `VerdictExtractionModel`, `verdict_json_schema`, `member_answer_json_schema`,
+  `verdict_extraction_json_schema`, `VERDICT_SCHEMA_VERSION`,
+  `VERDICT_EXTRACTION_PROMPT_VERSION`.
+
+### Note
+
+- **`vote` mode (council issue #3) is absorbed/superseded** by the verdict work:
+  `provider_votes` records which provider took which position (with evidence) and
+  `consensus_label`/`consensus_score` report the split deterministically — no separate
+  `vote` mode is shipped or planned.
+
 ## [1.0.0] - 2026-06-14
 
 First stable release. conclave is feature-complete for its 1.0 scope: a
@@ -77,5 +135,6 @@ on top of v0.3.0.
   exit-code contract and httpx client lifecycle hardening; transport/CLI/logging
   test backfill; first public release with community files.
 
+[1.1.0]: https://github.com/ernestprovo23/conclave/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/ernestprovo23/conclave/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/ernestprovo23/conclave/releases/tag/v0.3.0

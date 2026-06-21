@@ -1,16 +1,18 @@
 # conclave — Product Design Document
 
-> **Status:** v0.1.0 shipped; v0.2 (`debate` + `adversarial` modes) built; v0.3 dependency
-> refactor landed — **LiteLLM removed**, replaced by conclave's own httpx-based provider
-> highway (see §6). This is the **canonical authority document** for
-> conclave's product scope, design, and roadmap. When this document and any other doc
-> disagree, this document wins. Code is the source of truth for *current behavior*; this
-> document marks anything not yet in code as **Roadmap**.
+> **Status:** v1.0 stable (the BYO-keys multi-model council: synthesize/raw/debate/
+> adversarial, 9 providers, owned httpx provider highway, key-leak hardening, streaming,
+> cache). **v1.1 — the auditable council — SHIPPED:** every run now yields a structured,
+> agreement-scored, fully auditable **verdict** plus a redacted execution **manifest** (see
+> §4a). This is the **canonical authority document** for conclave's product scope, design,
+> and roadmap. When this document and any other doc disagree, this document wins. Code is the
+> source of truth for *current behavior*; this document marks anything not yet in code as
+> **Roadmap**.
 
 - **Repo:** `/Users/ernestprovo/dev/conclave/`
 - **License:** MIT
 - **Author:** Data Science & Engineering Experts, Inc. (DSE)
-- **Last updated:** 2026-06-09
+- **Last updated:** 2026-06-21
 
 ---
 
@@ -35,15 +37,27 @@ conclave is a small, sharp tool: **a council of foundation models you can call f
 CLI command or one Python import.** Fan a prompt out to several models concurrently — each
 through *your own* API keys, no markup, no middleman — and aggregate the answers. The
 v0.1 aggregation is a **synthesizer** that merges raw answers into one consolidated
-response. v0.2 adds a small set of **council modes** — **debate** (multi-round) and
-**adversarial** (propose → refute → verdict) — that turn a flat panel of opinions into a
-structured deliberation; `vote` remains on the roadmap.
+response; v0.2 adds **council modes** — **debate** (multi-round) and **adversarial**
+(propose → refute → verdict) — that turn a flat panel of opinions into structured
+deliberation.
+
+**The v1.1 wedge — the auditable council.** A synthesis paragraph is not enough to *act* on.
+v1.1 makes the product identity precise: **a multi-model council verdict you can act on —
+structured, scored for agreement, fully auditable.** Every run yields a `CouncilVerdict`
+exposing agreement, disagreement (`conflicts`), minority views (`minority_reports`), and
+per-provider votes (`provider_votes`); a deterministic `consensus_score` (arithmetic over the
+model's clustering, *never* an LLM-emitted number); and a redacted `ModelHarnessManifest`
+recording how the run executed and which model produced the disagreement analysis (§4a). The
+roadmapped `vote` mode is therefore **absorbed and superseded** — "show me who voted for what"
+is now `provider_votes`, with evidence, not a separate mode.
 
 conclave's first real use was an **adversarial design review**: a council of Grok, Gemini,
 Perplexity, and Claude critiquing a security-tool strategy and catching flaws a single
 model missed. That origin is why the adversarial and debate modes are first-class — they
-are now built, not a bolt-on. The product is opinionated about staying lightweight: a **library-first
-primitive with structured results**, not an agent framework.
+are now built, not a bolt-on. The product stays lightweight: a **library-first primitive
+with structured, auditable results**, not an agent framework and not a general AI SDK — it
+builds only what deepens the council wedge (the boundary vs. LiteLLM/Vercel/LangChain/
+Helicone is in §11).
 
 ---
 
@@ -56,9 +70,8 @@ primitive with structured results**, not an agent framework.
 | **The researcher / evaluator** | Someone comparing model behavior on a prompt set | Deterministic structure around answers, JSON output (`--json`) for downstream analysis, per-model latency and token accounting. |
 | **The cost-conscious power user** | Heavy LLM user who already pays each provider directly | BYO-keys with **no markup** and **no third party seeing the prompt**. conclave is a thin local orchestrator over the user's own accounts. |
 
-Non-personas (explicitly *not* who we build for): teams wanting a hosted multi-agent SaaS,
-or anyone needing a deterministic runtime adjudicator (see Non-Goals, §8, and the
-mcp-warden boundary, §10).
+Non-personas (*not* who we build for): teams wanting a hosted multi-agent SaaS, or anyone
+needing a deterministic runtime adjudicator (Non-Goals §8, mcp-warden boundary §10).
 
 ---
 
@@ -78,37 +91,33 @@ markup, no middleman) and a security property.
    by friendly name and model id only. There is no field in `ConclaveConfig` that can hold
    a secret. The example config in `config.py` is keys-free by construction.
 3. **The key value is read by name, at call time, and is transient in-process**
-   (`providers.py`). `call_model` reads the relevant env var *by name* at call time, passes
-   the value to the resolved adapter to build the auth header, and the httpx transport sends
-   it. The value is **never stored on any object** (not config, not the registry, not
-   `ModelAnswer`, not `CouncilResult`), **never logged, never serialized, and scrubbed from
-   error strings** via `redact()` (`adapters/base.py`). It never transits a conclave data
-   structure. (Honest framing: the value *is* read in-process to authenticate — conclave
-   does not magically avoid touching it — but its lifetime is a single request and it leaves
-   no trace on any persisted or returned object.)
-4. **Secrets never reach serialized output.** `CouncilResult.model_dump()` (used by
-   `--json`) contains prompts, answers, model ids, latency, token usage, and error strings
-   — no key material. The `providers` CLI command shows a check/cross and the env-var
-   *name*, never the value.
+   (`providers.py`). `call_model` reads the env var *by name*, hands the value to the adapter
+   to build the auth header, and the transport sends it. The value is **never stored on any
+   object** (config, registry, `ModelAnswer`, `CouncilResult`, or `ModelHarnessManifest`),
+   **never logged, never serialized, and scrubbed from error strings** via `redact()`
+   (`adapters/base.py`). Honest framing: it *is* read in-process to authenticate, but its
+   lifetime is a single request and it leaves no trace on any persisted/returned object.
+4. **Secrets never reach serialized output.** `CouncilResult.model_dump()` (`--json`) carries
+   prompts, answers, model ids, latency, usage, errors, the verdict, and the manifest — no
+   key material. The v1.1 manifest goes further: `secret_safety` is promoted to
+   `verified_no_secrets` only after `scan_for_secret_material()` proves the serialized
+   manifest clean (§4a). The `providers` CLI shows a check/cross and the env-var *name* only.
 5. **Missing keys degrade gracefully, they don't crash.** A requested member whose key is
    absent is skipped with a warning and recorded in `CouncilResult.skipped`. Unknown
    providers (no static env-var mapping) are *not* pre-emptively skipped — the live call is
    attempted and any auth error is captured as a `ModelAnswer.error`.
 
-**Residual considerations (worth a user's awareness):** error strings captured from a
-provider could in principle echo a key fragment. As of the v0.3 refactor this path is
-**hardened**: every provider/transport error is passed through `redact()` (`adapters/base.py`)
-before it lands in `ModelAnswer.error`, scrubbing known key material from the string. The
-residual risk is now limited to a provider emitting a secret in a shape `redact()` does not
-recognize; the verbatim-passthrough gap that previously existed is closed. (Was §9 hardening
-item 7 — now landed; see §9.)
+**Residual considerations:** a provider error could in principle echo a key fragment. Since
+v0.3 every provider/transport error is passed through `redact()` before it reaches
+`ModelAnswer.error`; the residual risk is limited to a secret in a shape `redact()` does not
+recognize. (Was §9 hardening item 7 — landed.)
 
 ---
 
 ## 4. Council Modes & Consensus Algorithms
 
-A **council mode** is the algorithm used to turn N independent model calls into a single
-useful output. v0.1 ships one true mode plus a pass-through.
+A **council mode** is the algorithm that turns N independent model calls into one useful
+output. The v1.1 verdict layer (§4a) sits on top of whichever mode produced the answers.
 
 | Mode | Status | What it does |
 |------|--------|--------------|
@@ -116,59 +125,142 @@ useful output. v0.1 ships one true mode plus a pass-through.
 | **raw** | **BUILT (v0.1)** | Fan out and return every member's raw answer with no synthesis. Not a deliberation mode — it is "synthesize off." Exposed as `--mode raw` / `ask(..., synthesize=False)`. |
 | **debate** | **BUILT (v0.2)** | N rounds (`--rounds`, default 2). Round 1 is an independent fan-out; rounds 2..N show each member its peers' **anonymized** prior-round answers (`Model A/B/C`) and ask it to revise or defend. A member that errors in a round drops out of later rounds; the debate continues with survivors. The synthesizer consolidates the final round. Exposed as `--mode debate` / `Council.debate()` / `debate_sync()`. |
 | **adversarial** | **BUILT (v0.2)** | Structured propose → refute → verdict. A `--proposer` (default: first member) answers; the remaining members are CRITICS explicitly prompted to refute it; the synthesizer acts as JUDGE, weighing proposal vs. critiques and issuing a verdict + strengthened answer. This is the mode conclave's origin story (the security design review) exercised by hand. Exposed as `--mode adversarial` / `Council.adversarial()` / `adversarial_sync()`. |
-| **vote** | **ROADMAP (v0.3+)** | Structured majority. Each model answers a constrained question; conclave tallies a structured vote and reports the majority plus the split. |
+| ~~**vote**~~ | **ABSORBED (v1.1)** | ~~Structured majority with reported split.~~ Superseded by the v1.1 verdict: `provider_votes` records which provider took which position (with evidence) and `consensus_label`/`consensus_score` report the split deterministically — no separate mode needed. See §4a. |
 
-### Synthesize algorithm (as built)
-1. Resolve requested friendly names to model ids via config.
-2. Partition members into *available* (key present) and *skipped* (no key).
-3. Fan out the prompt to all available members concurrently (`asyncio.gather`,
-   `return_exceptions=True` as a belt-and-suspenders guard).
-4. Each call returns a structured `ModelAnswer` (answer **or** error — `call_model` never
-   raises for provider failures), so partial results always survive.
-5. If `synthesize=True` and at least one member succeeded, build a synthesis prompt that
-   embeds the original prompt and each successful answer, and call the synthesizer model.
-6. If the synthesizer has no key, or no member succeeded, set `synthesis_error` and return
-   raw answers only. A run with zero available members returns an empty-answer result
-   rather than raising.
+**Mode algorithms (as built).** The step-by-step "as built" prose for synthesize / raw /
+debate / adversarial (fan-out + partial-results, peer anonymization + drop-out, proposer →
+critic → judge) is landed history and lives in
+[`docs/archive/pdd-v0.x-modes-detail.md`](archive/pdd-v0.x-modes-detail.md). In brief: every
+mode fans out concurrently, captures each call as a `ModelAnswer` (answer **or** redacted
+error — `call_model` never raises), and survives partial failure; the deliberation modes
+extend `CouncilResult` (`mode`, `rounds`, `adversarial`) backward-compatibly so v0.1
+`answers`/`synthesis` consumers keep working. The mode *text* output is a generative
+reconciliation, inherently stochastic (load-bearing for the mcp-warden boundary, §10); the
+v1.1 verdict (§4a) adds a *deterministic* agreement number on top, by arithmetic over a
+clustering, never lifted from that free text.
 
-**Consensus note:** synthesize is a *generative* reconciliation, not a deterministic vote.
-It is inherently stochastic. This matters for the mcp-warden boundary in §10.
+---
 
-### Debate algorithm (as built)
-1. Resolve + partition members (same as synthesize). Assign each member a stable
-   position-based letter label (`Model A`, `Model B`, …).
-2. **Round 1:** independent fan-out of the bare prompt (reuses `Council.fan_out`).
-3. **Rounds 2..N:** each surviving member is shown its own prior answer (told which
-   letter is "you") plus its peers' prior answers, **anonymized by letter, not brand**,
-   and asked to revise or defend. Anonymization reduces brand-bias (a model deferring to
-   or attacking another *by name*) while preserving the cross-pollination that makes
-   debate useful. The answer *body* is passed verbatim; only the attribution is relabeled.
-4. **Drop-out:** a member that errors in a round is removed from subsequent rounds; the
-   debate continues with survivors. If every member fails a round, the debate ends there.
-5. The synthesizer consolidates the final round's surviving answers (same call path as
-   synthesize, with a debate-specific system prompt).
+## 4a. The Auditable Verdict (v1.1)
 
-### Adversarial algorithm (as built)
-1. Resolve + partition members. Pick the proposer: `--proposer` if given, else the first
-   requested member; if that member has no key, fall back to the first available member.
-2. **Propose:** the proposer answers the prompt (single-member `fan_out`).
-3. **Refute:** every other available member is a CRITIC, explicitly prompted to find the
-   strongest flaws in the proposal (not to agree). One critic failing never aborts the run.
-   If the proposal itself failed, critics are skipped.
-4. **Verdict:** the synthesizer acts as JUDGE — given the prompt, proposal, and critiques —
-   accepting correct critiques, rejecting overstated ones, and issuing a verdict plus the
-   strengthened final answer.
+The verdict layer turns a council run's answers into a structured, agreement-scored,
+auditable adjudication — on top of any mode, default-on, never breaking the v0.1 surface
+(every new field defaults to `None`/empty).
 
-### Result-model extension (backward-compatible)
-The deliberation modes extend `CouncilResult` **without breaking** synthesize/raw consumers:
-- New `mode` field (`"synthesize" | "raw" | "debate" | "adversarial"`).
-- New `rounds: list[DebateRound]` (debate) and `adversarial: AdversarialResult | None`.
-- For **debate**, the final round is mirrored into the existing `answers`, and the
-  consolidated answer into the existing `synthesis`. For **adversarial**, the proposal +
-  critiques populate `answers` and the verdict mirrors into `synthesis`. Any existing
-  consumer that reads `answers`/`synthesis`/`successful_answers` keeps working unchanged;
-  new consumers read `rounds`/`adversarial` for the full structure. All fields are
-  keys-free and serialize cleanly via `model_dump()` (`--json`).
+### CouncilResult v2 surface
+`CouncilResult` gains these top-level fields, all backward-compatible:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `verdict` | `CouncilVerdict \| None` | The canonical adjudication object (`None` when no verdict applies). The fields below are convenience **mirrors** of the verdict; the verdict object is canonical. |
+| `consensus_score` | `float \| None` | Position-cluster ratio in `[0.0, 1.0]`. |
+| `consensus_method` | `str \| None` | The method literal `"position_cluster_ratio_v1"`. |
+| `consensus_label` | `str \| None` | One of `unanimous \| strong \| majority \| split \| none`. |
+| `conflicts` | `list[CouncilConflict]` | Disagreements, each with a per-conflict ratio. |
+| `provider_votes` | `list[ProviderVote]` | Who took which position (absorbs GH #3 "who voted for what"). |
+| `minority_reports` | `list[MinorityReport]` | Dissenting views worth surfacing (for adversarial = unrefuted critic points). |
+| `manifest` | `ModelHarnessManifest \| None` | First-class execution + provenance receipt on every real run. |
+
+Member answers stay exposed as `result.answers`; each `ModelAnswer` carries a stable
+`answer_id`. The verdict types (public-exported Pydantic v2 models in `verdict.py`):
+`CouncilVerdict{verdict_type ∈ decision|review|synthesis, headline, recommendation,
+consensus_score/method/label, positions, conflicts, provider_votes, minority_reports,
+caveats, dissent_summary, schema_version}`; `CouncilPosition{label, summary, providers,
+evidence_answer_ids}`; `CouncilConflict{topic, position_labels, summary, consensus_score}`;
+`ProviderVote{provider, position_label, confidence}`; `MinorityReport{providers, claim,
+evidence_answer_ids, why_it_matters}`.
+
+**Evidence is the product, not a nicety.** Every clustered stance cites `evidence_answer_ids`
+(the member `answer_id`s backing it) and every conflict names the positions in tension — a
+conflict that just says "models disagreed about cost" without pointing at answers is a
+*failure*. `ProviderVote.confidence` is recorded but **never used in arithmetic**.
+
+### Deterministic consensus — the auditability fix
+The consensus number is **arithmetic over the model's clustering, never LLM-emitted**
+(`agreement.py`, method `position_cluster_ratio_v1`).
+
+- `consensus_score(positions)` = `|largest cluster| / |members with a non-null position|`.
+  Returns `None` when fewer than 2 members expressed a position (N<2 → agreement undefined).
+  A `None` position is excluded from numerator *and* denominator; `"conditional"`/`"it
+  depends"` is a valid cluster and counts.
+- `consensus_label(score)` is a deterministic bucket:
+
+| Label | Range |
+|-------|-------|
+| `none` | score is `None` |
+| `unanimous` | score == 1.0 (N ≥ 2) |
+| `strong` | 0.75 ≤ score < 1.0 |
+| `majority` | 0.5 < score < 0.75 |
+| `split` | score ≤ 0.5 (no majority); a 1-of-2 tie is `0.5` = `split`, never "50% consensus" |
+
+**Why it is auditable, not theater.** The extraction schema carries *no* consensus field —
+`verdict_extraction_json_schema()` strips it and `VerdictExtractionModel` ignores extra keys,
+so a model that smuggles a number in is dropped by the validator. The module deliberately
+does **not** import `difflib`: text-similarity is the debate `convergence_score` (a
+*forbidden* consensus measure), never conflated with agreement. The single LLM-assisted step
+is the **semantic clustering** of stances; the number is reproducible arithmetic over it,
+each cluster cites its `evidence_answer_ids`, and the manifest records which model + prompt
+version did the clustering — so the score is traceable.
+
+### Verdict extraction + native structured output
+`extract_verdict(prompt, member_answers, *, synthesizer_name, synthesizer_model_id,
+config=None) -> VerdictSynthesisResult(verdict, extraction, verdict_absent_reason)`
+(`verdict_synthesis.py`) makes **one** extraction call asking the synthesizer model to
+*cluster* stances (not to re-answer, not to emit a number), validates, repairs once, falls
+back gracefully — never raises.
+
+It builds an `OutputContract(schema=verdict_extraction_json_schema(),
+schema_name="VerdictExtraction", strict=True)` (CAC-06-PLUMB threaded `output_contract`
+through `call_model` → `adapter.build_request`), passed to both the initial call and the
+repair retry. Capable providers **enforce the schema at decode time** — OpenAI
+`response_format` json_schema, Gemini `responseSchema`, Anthropic tool `input_schema`. The
+three public schemas (`verdict_json_schema`/`member_answer_json_schema`/
+`verdict_extraction_json_schema`) are a deliberate **lowest-common-denominator** shape
+(shallow nesting ≤3, enums not `oneOf`, no `$ref`, `additionalProperties:false`, optionality
+by omission) so one schema spans all three native surfaces. A **prompt-level fallback**
+(schema in messages → JSON parsed → Pydantic-validated → repair-once) is retained for
+providers without strict support; the native contract is *additive*, failure behavior
+unchanged.
+
+### The verdict-optional rule
+A verdict is not always meaningful. In three cases `result.verdict is None` while `synthesis`
++ member answers stay populated, `consensus_score = None`, and the exact reason is recorded on
+`result.manifest.verdict_absent_reason` (provenance — extractor model id + prompt version — is
+recorded on **every** return path, including these three):
+
+- `"fewer than 2 responding members"` (N<2 → no LLM call at all).
+- `"open-ended prompt (no decision/review to adjudicate)"` (creative/open-ended generation).
+- `"verdict extraction failed schema validation"` (extraction failed after one repair).
+
+### Default-on, with an opt-out
+Verdict extraction is **default-on** (`Council(..., extract_verdict=True)`) — it is the
+council's product. Opt out with `Council(extract_verdict=False)` (then `result.verdict` stays
+`None` and the manifest's verdict-provenance slots stay `None`). It is a constructor flag
+(`self.extract_verdict_enabled`), no per-call override. Buffered (`ask`) and streaming
+(`stream_ask`) both run the same `_apply_verdict` helper *after* the manifest exists, so the
+verdict appears identically in the buffered result and the streaming `done` event and the
+`secret_safety` stamp is re-run over the final content. **Cost:** default-on adds exactly
+**one** extra synthesizer call per run; the opt-out exists for cost-sensitive callers.
+
+### ModelHarnessManifest — first-class, secret-free
+The `ModelHarnessManifest` (`manifest.py`) rides on every `CouncilResult` — *not* behind a
+debug flag. It records `request_id`, `conclave_version`, `mode`, `providers_considered/
+called/skipped` (each skip a `ProviderSkip{name, reason}`), `model_ids`,
+`generation_settings`, `receipts` (each a `ProviderExecutionReceipt{name, provider,
+model_id, generation_settings, latency_ms, usage, error(redacted), schema_valid}`),
+`total_latency_ms`, `total_usage`, `schema_valid`, `redacted_errors`. Verdict-provenance
+slots: `verdict_extraction: VerdictExtraction{model_id, prompt_version}` (which model + prompt
+version produced the disagreement analysis — *the* auditability hook), `verdict_type`,
+`consensus_method`, `verdict_absent_reason`. Two deliberate honesty choices:
+
+- **No invented pricing.** `estimated_cost` is `None` (a wrong number in an audit receipt is
+  worse than none); `pricing_snapshot_date` is the dated-estimate slot, `None` until a real
+  pricing table exists. Usage (tokens) is recorded; cost is not guessed.
+- **Proven secret-safety.** `secret_safety` defaults to `unverified`, promoted to
+  `verified_no_secrets` **only** after `scan_for_secret_material()` proves the serialized
+  manifest free of forbidden substrings (`sk-`, `bearer`, `authorization`, `api_key`,
+  `x-api-key`). Key *values* never appear; errors are redacted upstream and re-redacted on
+  construction.
 
 ---
 
@@ -192,19 +284,14 @@ live in `registry.DEFAULT_MODELS` / `registry.PROVIDER_ENV_VARS` and are overrid
 | *(any provider known to an adapter)* | *raw id as name* | *passed through verbatim* | *adapter's provider env var* | SUPPORTED (untyped) |
 | *(any OpenAI-compatible endpoint)* | *config `endpoints:` entry* | *your model id* | *the endpoint's `api_key_env`* | SUPPORTED (config-only) |
 
-All nine first-class providers are **direct vendor key -> direct vendor endpoint** (no
-aggregator/router), per §11. The Groq/DeepSeek/Mistral/Together additions (issue #5) are
-OpenAI-compatible, each served by `OpenAICompatAdapter` with a verified URL and key env-var
-(no native adapter required). Aggregators/routers (e.g. OpenRouter) are deliberately *not*
-promoted — they stay config-only via `endpoints:`, keeping no-middleman intact.
-
-**Default synthesizer:** `claude`. **Default council:** all nine known providers when none is
-configured. Because `resolve_model_id()` passes unknown names through verbatim, a user
-can already add a council member by raw id whose prefix an adapter recognizes (e.g.
-`openai/gpt-4o`) without a code change; it just won't have a static key-presence check
-(treated as "attempt and catch"). A wholly new OpenAI-compatible vendor needs no code at all
-— a `config.yml` `endpoints:` entry (base URL + `api_key_env`) makes it a first-class member
-via `OpenAICompatAdapter` (see §6). Further first-class defaults remain Roadmap, §9 #3.
+All nine first-class providers are **direct vendor key → direct vendor endpoint** (no
+aggregator/router, per §11). Groq/DeepSeek/Mistral/Together (issue #5) are OpenAI-compatible,
+served by `OpenAICompatAdapter`; aggregators/routers (e.g. OpenRouter) are deliberately *not*
+promoted — they stay config-only via `endpoints:`, keeping no-middleman intact. **Default
+synthesizer:** `claude`. **Default council:** all nine. Unknown names pass through verbatim
+(adapter-recognized prefix, "attempt and catch"); a wholly new OpenAI-compatible vendor needs
+no code — a `config.yml` `endpoints:` entry (base URL + `api_key_env`) makes it a first-class
+member (§6). Further first-class defaults remain Roadmap, §9.
 
 ---
 
@@ -213,199 +300,137 @@ via `OpenAICompatAdapter` (see §6). Further first-class defaults remain Roadmap
 conclave is a thin, layered orchestrator over its **own provider highway** — an httpx
 transport behind a per-provider adapter registry, with **no LLM-SDK dependency**. Each
 module has one job; the data models are the stable contract between layers and downstream
-consumers.
-
-```
-CLI (cli.py, typer+rich)   Library (from conclave import Council)
-            \                         /
-             v                       v
-                 Council (council.py)
-   fan_out · synthesize_blocks · skip-no-key · partial-results · synthesis
-                 |                              |
-   modes.py (debate · adversarial)      prompts.py (role templates)
-                 |
-              call_model (providers.py)
-   resolve adapter · read key by name at call time · latency · usage · redacted error
-                          |
-              resolve_adapter (adapters/__init__.py)
-        OpenAICompatAdapter   AnthropicAdapter   GeminiAdapter
-         (openai·xai·         (/v1/messages)     (generateContent)
-          perplexity·custom)         |                |
-                          \          |               /
-                           v         v              v
-                        transport.post_json (single httpx async boundary)
-                          |
-        xai · gemini · anthropic · perplexity · openai · (custom OpenAI-compatible)
-```
+consumers. The end-to-end flow — `CLI/Library → Council → call_model → adapters → transport
+→ providers`, plus `_apply_verdict → extract_verdict → agreement → CouncilVerdict`, with the
+`ModelHarnessManifest` riding on the result — is drawn in `SYSTEM_CONTEXT_DIAGRAM.md`.
 
 **Module responsibilities (ground truth):**
 
 | Module | Responsibility |
 |--------|----------------|
-| `council.py` | `Council` — primary importable entry point. Resolves names, partitions members, and exposes two reusable primitives: `fan_out` (the single concurrent + partial-failure call loop) and `synthesize_blocks` (the single synthesizer/judge call path). Hosts the public mode API: `ask`/`ask_sync` (synthesize/raw), `debate`/`debate_sync`, `adversarial`/`adversarial_sync`. Sync wrappers guard against being called inside a running event loop. |
+| `council.py` | `Council` — primary importable entry point. Resolves names, partitions members, and exposes two reusable primitives: `fan_out` (the single concurrent + partial-failure call loop) and `synthesize_blocks` (the single synthesizer/judge call path). Hosts the public mode API: `ask`/`ask_sync` (synthesize/raw), `debate`/`debate_sync`, `adversarial`/`adversarial_sync`. Sync wrappers guard against a running event loop. Runs `_apply_verdict` (default-on; `extract_verdict=False` opts out) on both buffered + streaming paths after the manifest exists. |
+| `verdict.py` | Public verdict/member Pydantic types (`CouncilVerdict`, `CouncilPosition`, `CouncilConflict`, `ProviderVote`, `MinorityReport`) + the LCD JSON Schemas (`verdict_json_schema`/`member_answer_json_schema`/`verdict_extraction_json_schema`) usable across all three native structured-output surfaces; `VERDICT_SCHEMA_VERSION`. |
+| `agreement.py` | Deterministic consensus: `consensus_score` (`position_cluster_ratio_v1` — largest cluster / positioned members; `None` for N<2) + `consensus_label` buckets. Pure arithmetic, no `difflib`, never LLM-emitted. |
+| `verdict_synthesis.py` | `extract_verdict` engine: one extraction call (clusters stances, never emits a number), native `output_contract` enforcement + prompt-level fallback, validate → repair-once → graceful `verdict=None`; the three verdict-absent reasons; provenance on every return path. |
+| `manifest.py` | `ModelHarnessManifest` (first-class on every result), `ProviderExecutionReceipt`/`ProviderSkip`/`VerdictExtraction`, and `scan_for_secret_material()` → `secret_safety` stamp. No key values; `estimated_cost` left `None`. |
 | `modes.py` | Deliberation orchestration: `run_debate` (multi-round, anonymized peers, drop-out) and `run_adversarial` (propose → refute → verdict). Built entirely on `Council.fan_out` + `synthesize_blocks` — no duplicated concurrency or synthesizer code. |
 | `prompts.py` | Role/template strings for debate and adversarial (member, critic, judge, debate-final system prompts) and the anonymized peer-block builder. Separates *what each role is told* from *when to call whom*. |
-| `providers.py` | `call_model` — the single async call path. Resolves the adapter for a model id, reads the key value *by name at call time*, calls the adapter+transport, parses the reply, and captures latency, token usage, and any (redacted) error into a `ModelAnswer`; never raises for provider-side failures. Signature and never-raises contract unchanged from v0.1/v0.2. |
-| `transport.py` | The single async network boundary: `post_json` (buffered) + `stream_sse` (SSE via `client.stream(...)`, issue #7) — the only two httpx call sites for the whole highway. Nothing else in conclave touches the network. |
-| `streaming.py` | Council-level streaming engine (issue #7): `stream_ask` fans members out concurrently (interleaved via an `asyncio.Queue`), optionally streams the synthesizer, and emits `StreamEvent`s ending with a `done` event whose `CouncilResult` matches the buffered shape. Behind `Council.ask_stream`/`stream_sync`. synthesize/raw only. |
-| `adapters/__init__.py` | `resolve_adapter(model_id, config)` — the provider registry and **extension seam**. Maps a model-id prefix (or a config `endpoints:` entry) to the adapter that serves it. Adding a provider family = one registration here; adding an OpenAI-compatible endpoint = config-only. |
-| `adapters/base.py` | The `ProviderAdapter` protocol, `ProviderError`, and `redact()` — the secret-scrubber applied to every error string before it reaches `ModelAnswer.error`. |
-| `adapters/openai_compat.py` | `OpenAICompatAdapter` — serves openai / xai / perplexity / groq / deepseek / mistral / together and any custom OpenAI-compatible endpoint. Per-provider full completions URL (note: Perplexity has no `/v1` segment; Groq nests its OpenAI surface under `/openai/v1`). |
-| `adapters/anthropic.py` | `AnthropicAdapter` — native `POST /v1/messages` (`x-api-key` + `anthropic-version`); system prompt hoisted to the top-level `system` field; `max_tokens` required (default 4096); parses `content[].text` and `input_tokens`/`output_tokens`. |
-| `adapters/gemini.py` | `GeminiAdapter` — native `generateContent` (`x-goog-api-key`); OpenAI roles mapped (assistant→model), `systemInstruction` hoisted, `generationConfig.{temperature,maxOutputTokens}`; parses `usageMetadata`. |
-| `registry.py` | Single source of truth for friendly-name → model-id defaults and provider → env-var mapping. Key *presence* logic only — never key values. |
-| `config.py` | Loads/merges `~/.conclave/config.yml` over built-in defaults (`CONCLAVE_CONFIG` env var overrides path). Resolves model ids and named/CSV councils, and parses the `endpoints:` section (custom OpenAI-compatible providers). Keys-free by construction (endpoints carry a URL + key-env-var *name*, never a value). |
-| `models.py` | Pydantic contract: `TokenUsage`, `ModelAnswer`, `CouncilResult` (+ `successful_answers`/`failed_answers`/`ok` helpers). The stable importable surface for downstream consumers. |
-| `cli.py` | `conclave ask` and `conclave providers`. Rich panels for humans, `--json` for machines. Never prints key values. |
+| `providers.py` | `call_model` (+ `call_model_stream`) — the single async call path: resolve adapter, read key *by name at call time*, call adapter+transport (with an optional `output_contract`), parse, capture latency/usage/redacted-error into a `ModelAnswer`; never raises for provider-side failures. |
+| `transport.py` | The single async network boundary: `post_json` (buffered) + `stream_sse` (issue #7) — the only two httpx call sites in the highway. |
+| `streaming.py` | Streaming engine (issue #7): `stream_ask` interleaves members via an `asyncio.Queue`, optionally streams the synthesizer, ends with a `done` event whose `CouncilResult` (incl. verdict) matches the buffered shape. synthesize/raw only. |
+| `adapters/__init__.py` | `resolve_adapter(model_id, config)` — the provider registry + **extension seam**: one registration per family; config-only for OpenAI-compatible endpoints. |
+| `adapters/base.py` | `ProviderAdapter` protocol, `OutputContract` (native-structured-output request), `ProviderError`, and `redact()` (error-string secret scrubber). |
+| `adapters/openai_compat.py` | `OpenAICompatAdapter` — openai/xai/perplexity/groq/deepseek/mistral/together + custom endpoints; per-provider completions URL (Perplexity no `/v1`; Groq under `/openai/v1`); `response_format` json_schema when an `output_contract` is set. |
+| `adapters/anthropic.py` | `AnthropicAdapter` — native `/v1/messages` (system-hoist, `max_tokens` required); `input_schema` tool for an `output_contract`. |
+| `adapters/gemini.py` | `GeminiAdapter` — native `generateContent` (role-map, `systemInstruction` hoist, `usageMetadata`); `responseSchema` for an `output_contract`. |
+| `registry.py` | Single source of truth for name→model-id defaults + provider→env-var mapping. Key *presence* only — never values. |
+| `config.py` | Loads/merges `~/.conclave/config.yml` over defaults; resolves model ids + named/CSV councils; parses `endpoints:`. Keys-free by construction. |
+| `models.py` | Pydantic contract: `TokenUsage`, `ModelAnswer` (stable `answer_id`), `CouncilResult` v2 — adds top-level `verdict`/`consensus_score`/`consensus_method`/`consensus_label`/`conflicts`/`provider_votes`/`minority_reports`/`manifest` (all backward-compatible). The stable importable surface for downstream consumers. |
+| `cli.py` | `conclave ask` and `conclave providers`. Rich panels for humans (incl. the green `VERDICT (<type>)` panel + consensus/conflicts/minority blocks, or a dim `No verdict: <reason>` note when absent), `--json` for machines (carries verdict + manifest). Never prints key values. |
 | `logging.py` | One logger factory, stderr, verbosity via `CONCLAVE_LOG_LEVEL` (default `WARNING`). |
 
-**Key design properties:**
-- **Library-first.** The CLI is a thin shell over the same `Council` any consumer imports.
-- **Partial-failure resilience is structural,** not optional: failures become data
-  (`ModelAnswer.error`), never exceptions that abort the run.
-- **Structured results.** Every run yields per-model latency, token usage, and error
-  capture — the differentiator vs. text-only multi-model tools.
-- **Stable contract.** `models.py` field names are intentionally stable for downstream
-  consumers (e.g. mcp-warden) to depend on.
+**Key design properties:** library-first (the CLI is a thin shell over the same `Council`);
+partial-failure resilience is structural (failures become `ModelAnswer.error` data, never
+run-aborting exceptions); structured + stable results (`models.py` field names are a
+deliberate downstream contract, e.g. for mcp-warden). **Extension is cheap:** a new provider
+family is one registration in `adapters/__init__.py`; a new OpenAI-compatible endpoint is
+config-only (`endpoints:` entry — base URL + key-env-var *name*), served by
+`OpenAICompatAdapter` with no code change. The key value is read by name at call time and
+never stored, logged, or serialized (§3).
 
-**Provider highway & extension model (v0.3):** conclave owns its provider layer instead of
-depending on an LLM SDK. `resolve_adapter` (`adapters/__init__.py`) maps each model id to a
-`ProviderAdapter`; every adapter serializes its provider's request shape and hands it to the
-**one** network call site, `transport.post_json` (`transport.py`). Three adapters cover the
-nine first-class providers: `OpenAICompatAdapter`
-(openai/xai/perplexity/groq/deepseek/mistral/together, OpenAI-style `/chat/completions`),
-`AnthropicAdapter` (native `/v1/messages`, system-prompt hoist, required `max_tokens`), and
-`GeminiAdapter` (native `generateContent`, role mapping, `usageMetadata`). Extension is
-deliberately cheap: a **new provider family** is one
-registration in `adapters/__init__.py`; a **new OpenAI-compatible endpoint** (local server,
-gateway, another vendor) is **config-only** — a `~/.conclave/config.yml` `endpoints:` entry
-giving a base URL and the env-var *name* of its key, served by `OpenAICompatAdapter` with no
-code change. The key value is read by name at call time, passed to the adapter to build the
-auth header, and never stored, logged, or serialized (see §3); error strings are scrubbed by
-`redact()` (`adapters/base.py`).
-
-**Stack:** Python 3.11+, `httpx` (async transport — the only network dependency), `asyncio`
-(concurrency), Pydantic v2 (config + results), Typer + Rich (CLI), PyYAML (config). **No
-LLM-SDK dependency.** Packaged with hatchling; console script `conclave = conclave.cli:app`.
+**Stack:** Python 3.11+, `httpx` (the only network dependency), `asyncio`, Pydantic v2,
+Typer + Rich, PyYAML. **No LLM-SDK dependency.** hatchling build; console script
+`conclave = conclave.cli:app`.
 
 ---
 
 ## 7. Scope
 
-**Shipped in v0.1:**
-- `synthesize` and `raw` modes (fan-out, partial results, synthesizer merge).
-- First-class providers (5 at v0.1; 9 since issue #5) + pass-through for any model id an
-  adapter recognizes.
-- BYO-keys via env-var name only; graceful skip of missing-key members.
-- Concurrent fan-out with per-call timeout and temperature.
-- Structured `CouncilResult` with latency, token usage, per-model error capture.
-- CLI (`ask`, `providers`) with human and `--json` output.
-- Config file: named models, named councils, default synthesizer.
-- Importable library API with sync and async entry points.
-- Test suite that mocks the httpx transport (no network, no keys required).
+Condensed history (v0.x mode-detail archived per §4, per-release changelog in `CHANGELOG.md`, verdict layer in §4a):
 
-**Added in v0.2:**
-- `debate` mode — multi-round (`--rounds`), anonymized peers, per-member drop-out on
-  failure, final synthesis. Per-round structure preserved in `CouncilResult.rounds`.
-- `adversarial` mode — `--proposer` → critics refute → synthesizer judges. Structure in
-  `CouncilResult.adversarial` (proposal / critiques / verdict).
-- Backward-compatible `CouncilResult` extension (`mode`, `rounds`, `adversarial`); existing
-  `answers`/`synthesis` consumers unaffected.
-- Both modes exposed on the `Council` library API (async + sync) and the CLI, with rich
-  per-round / proposal-critique-verdict rendering and `--json`.
-
-**Added in v0.3 (dependency refactor):**
-- **LiteLLM removed.** Replaced by conclave's own provider highway: an `httpx` async
-  transport (`transport.py`) behind a per-provider adapter registry (`adapters/`). `httpx`
-  is now the only network dependency; there is no LLM-SDK dependency (see §6).
-- Three adapters cover the first-class providers (`OpenAICompatAdapter` for
-  openai/xai/perplexity and the issue-#5 additions groq/deepseek/mistral/together, native
-  `AnthropicAdapter`, native `GeminiAdapter`); `resolve_adapter` is the extension seam.
-- **Custom OpenAI-compatible endpoints** via a config `endpoints:` section — config-only, no
-  code change.
-- **Key-leak hardening landed:** provider/transport error strings are scrubbed by `redact()`
-  before reaching `ModelAnswer.error` (was Roadmap §9 item 7).
-- `call_model`'s signature and never-raises contract are unchanged; the result contract
-  (`CouncilResult`/`ModelAnswer`) is unchanged, so existing consumers are unaffected.
+- **v0.1:** `synthesize` + `raw` modes; first-class providers (5, now 9) + adapter
+  pass-through; BYO-keys by env-var name with graceful skip; concurrent fan-out;
+  structured `CouncilResult` (latency, usage, per-model error); CLI (`ask`/`providers`,
+  `--json`); config (named models/councils, default synthesizer); sync + async library
+  API; transport-mocked test suite (no network, no keys).
+- **v0.2:** `debate` (multi-round, anonymized peers, drop-out, `CouncilResult.rounds`) and
+  `adversarial` (proposer → critics → judge, `CouncilResult.adversarial`); backward-
+  compatible `CouncilResult` extension; both on the library API + CLI with rich rendering.
+- **v0.3:** **LiteLLM removed** → owned `httpx` provider highway + adapter registry (§6),
+  the only network dependency; three adapters cover all nine providers; custom
+  OpenAI-compatible `endpoints:` (config-only); key-leak hardening via `redact()` (was §9
+  item 7); `call_model` signature + never-raises contract unchanged.
+- **v1.0 (stable):** distribution name `conclave-cli`; OIDC Trusted-Publishing release
+  workflow + Sigstore + PEP 740; key-leak threat model (`SECURITY.md`, cause-chain fix,
+  transport-logging guard default-on); versioned synthesis prompt
+  (`SYNTHESIS_PROMPT_VERSION` → `result.prompt_version`); streaming (synthesize/raw) +
+  optional result cache + debate convergence early-stop.
+- **v1.1 (the auditable council):** `CouncilResult` v2 — `verdict` + `consensus_*` +
+  `conflicts`/`provider_votes`/`minority_reports` + first-class `manifest`; deterministic
+  `position_cluster_ratio_v1` consensus; native + fallback structured output across
+  OpenAI/Anthropic/Gemini; the verdict-optional rule; verdict default-on with
+  `Council(extract_verdict=False)` opt-out. The `vote` mode is **absorbed** by
+  `provider_votes`. Full detail in §4a.
 
 ---
 
 ## 8. Non-Goals (v0.1, and some permanent)
 
-- **Not a runtime adjudicator.** conclave is stochastic; it must not be used as a
-  deterministic decision gate. (See mcp-warden boundary, §10.) This is a **permanent**
-  non-goal for the synthesize/debate/adversarial modes.
-- **Not an agent framework.** No tool-calling graphs, no long-running stateful agents, no
-  orchestration DSL. We compete by being *small*. (Permanent.)
-- **Not a key manager / secrets vault.** conclave reads env vars; it does not provision,
-  rotate, store, or proxy keys. (Permanent.)
-- **No hosted/proxied token path.** No conclave-operated endpoint that sees user prompts or
-  takes a margin. BYO-keys, direct-to-provider, always. (Permanent.)
-- **No persistence/caching of results** in v0.1 (caching is Roadmap, §9).
-- **No streaming** in v0.1 (Roadmap, §9 — **LANDED for synthesize/raw in v0.3**, issue #7;
-  `debate`/`adversarial` streaming still out of scope).
-- **No server mode** in v0.1 (possible Roadmap, §9).
-- **No `vote` mode** yet (Roadmap, §9 — flagged for build, not for removal). `debate` and
-  `adversarial` shipped in v0.2.
+- **Not a runtime adjudicator.** conclave is stochastic; it must not be a deterministic
+  decision gate (§10). **Permanent** for synthesize/debate/adversarial — *and* for the v1.1
+  verdict: the verdict's *clustering* is LLM-assisted (stochastic), so even the deterministic
+  `consensus_score` is not a reproducible security gate. The number is auditable, not authoritative.
+- **Not an agent framework.** No tool-calling graphs, stateful agents, or orchestration DSL — we compete by being *small*. (Permanent.)
+- **Not a key manager / secrets vault.** conclave reads env vars; it does not provision, rotate, store, or proxy keys. (Permanent.)
+- **No hosted/proxied token path.** No conclave-operated endpoint that sees prompts or takes a margin — BYO-keys, direct-to-provider, always. (Permanent.)
+- **No streaming for debate/adversarial** (synthesize/raw streaming landed in v0.3, #7).
+- **No server mode** (possible Roadmap, §9).
+- ~~**No `vote` mode** yet.~~ **Absorbed in v1.1** — `provider_votes` + `consensus_label`/`consensus_score` deliver "who voted for what, and the split" with evidence (§4a).
 
 ---
 
-## 9. Roadmap (v0.3+, NOT yet built)
+## 9. Roadmap
 
-Ordered roughly by strategic value to the origin use case and to mcp-warden.
-(`adversarial` and `debate` shipped in v0.2 — see §4/§7.)
+`adversarial`/`debate` shipped in v0.2; streaming/cache/convergence in v1.0; the **auditable
+council shipped in v1.1** (§4a — the wedge).
 
-1. **`vote` mode** — structured majority with reported split. Needs a constrained
-   answer schema so votes are comparable.
-2. ~~**Debate convergence/stop criteria**~~ **LANDED (issue #4):** opt-in early-stop via
-   `converge_threshold` (config field, `Council.debate` param, `--converge-threshold` /
-   `--converge`/`--no-converge`); signal is round-over-round answer stability
-   (`difflib.SequenceMatcher`, stdlib-only); off by default, recorded on
-   `CouncilResult.converged`/`convergence_score`, part of the debate cache key. (Detail:
-   DOCUMENTATION_INDEX version history.)
-3. ~~**More first-class providers**~~ **LANDED (issue #5):** promoted four direct-key,
-   OpenAI-compatible vendors to typed defaults — `groq`, `deepseek`, `mistral`, `together` —
-   in the single source of truth (`registry.OPENAI_COMPAT_PROVIDERS`); no native adapter
-   needed; aggregators/routers excluded to preserve no-middleman (§11). Further defaults stay
-   open under §12 #5.
-4. ~~**Caching** — optional result cache keyed on (prompt, council, mode, model ids).~~
-   **LANDED (issue #6):** opt-in (`config.cache` / `--cache`/`--no-cache`), off by default,
-   on-disk under `$XDG_CACHE_HOME/conclave`, keys never persisted (secret-free SHA-256 key),
-   corrupt entry = silent miss; hit signalled via `CouncilResult.cached`.
-5. ~~**Streaming** — stream member answers and/or the synthesis.~~ **LANDED (issue #7):**
-   streaming for the `synthesize`/`raw` path — `Council.ask_stream` async generator (+
-   `stream_sync`) yielding `StreamEvent`s, CLI `--stream`; single boundary
-   `transport.stream_sse`, per-adapter SSE parsing, never-raises + partial-text preserved,
-   non-streaming default byte-for-byte unchanged; `debate`/`adversarial` out of scope.
-   (Detail: DOCUMENTATION_INDEX version history.)
-6. **Local HTTP/server mode (under evaluation)** — a *local* server for convenience only;
-   must not become a hosted token path or violate the no-middleman non-goal. **Spike
-   evaluated (2026-06-09, #8): recommendation = no-go on HTTP** (even `127.0.0.1` carries
-   DNS-rebinding/CSRF surface and dilutes the "small" non-goal; the library already serves
-   in-process); if cross-process access is wanted, prefer a thin **stdio MCP server** (no
-   network bind). Final disposition is the maintainer's — see §12 archive.
-7. ~~**Key-leak hardening** — scrub/limit provider-originated error strings before they land
-   in `ModelAnswer.error`.~~ **LANDED in v0.3** via `redact()` (`adapters/base.py`), applied
-   to every provider/transport error before it reaches `ModelAnswer.error` (see §3). Kept in
-   the list, struck through, to preserve roadmap traceability rather than deleting it.
+### v1.2 — the "Operable Council" (DEMAND-GATED, not scheduled)
+v1.2 is held behind a **prove-it gate**: put the auditable verdict in front of real users
+first; observed pull authorizes the build. This substrate is demoted from the old
+"engagement-modes-first" plan and only builds if demand appears — **engagement modes**
+(regular/smart) on a generation-settings substrate; **thin task profiles**
+(cheap/balanced/frontier/critic); **profile compilation + routing**
+(`parallel_synthesize`, `sequential_fallback`, `cheap_then_smart`); a **capability cache**
+with explicit refresh/discovery; `conclave doctor` + `providers` subcommands; a minimal
+mock/replay transport; and a narrow eval harness. The `cheap_then_smart` soft-triggers (low
+confidence / high disagreement) are gated behind **proven scoring** — flag-only until the
+score is validated against real runs.
 
-**Roadmap discipline:** items are added and reprioritized freely; items are not *removed*
-on the strength of a single data point — flag for discussion first. Completed items are
-**marked done in place** (struck through with a "LANDED" note), not deleted.
+### Landed history (kept struck-through for traceability)
+
+1. ~~**`vote` mode**~~ **ABSORBED in v1.1** — `provider_votes` + `consensus_label`/`consensus_score` deliver "who voted for what + the split" with evidence; the structured-answer-schema prerequisite is satisfied by the LCD schemas + native structured output (§4a).
+2. ~~**Debate convergence/stop criteria**~~ **LANDED (#4)** — opt-in `converge_threshold` early-stop on round-over-round text stability (`difflib`); off by default; recorded on `CouncilResult.converged`/`convergence_score`. (NB: text-stability ≠ the verdict `consensus_score`, §4a.)
+3. ~~**More first-class providers**~~ **LANDED (#5)** — `groq`/`deepseek`/`mistral`/`together` promoted to typed defaults (`registry.OPENAI_COMPAT_PROVIDERS`); no native adapter; aggregators excluded (§11).
+4. ~~**Caching**~~ **LANDED (#6)** — opt-in result cache (`config.cache` / `--cache`), off by default, on-disk, secret-free SHA-256 key, corrupt = silent miss; hit on `CouncilResult.cached`.
+5. ~~**Streaming**~~ **LANDED (#7)** — `synthesize`/`raw` streaming via `Council.ask_stream` + CLI `--stream` over `transport.stream_sse`; never-raises + partial text preserved; non-streaming default byte-for-byte unchanged.
+6. **Local HTTP/server mode (open)** — a *local* server for convenience only; must not become a hosted token path. **Spike #8 (2026-06-09): no-go on HTTP** (`127.0.0.1` still carries DNS-rebinding/CSRF surface; the library already serves in-process); if cross-process access is wanted, prefer a thin **stdio MCP server**. Final disposition is the maintainer's.
+7. ~~**Key-leak hardening**~~ **LANDED in v0.3** via `redact()` on every provider/transport error before `ModelAnswer.error` (§3).
+
+**Roadmap discipline:** items are reprioritized freely but not *removed* on a single data
+point; completed items are **marked done in place** (struck through with a "LANDED" note).
 
 ---
 
 ## 10. Downstream Boundary: conclave ↔ mcp-warden
 
-**mcp-warden** is a sibling project: an MCP-server security "integrity gateway." It will
-**import conclave as a DEV-TIME dependency only** — for things like adversarial design
-review of warden's own strategy and taxonomy/label brainstorming during development.
+**mcp-warden** (sibling MCP-server security gateway) **imports conclave as a DEV-TIME
+dependency only** — adversarial design review of warden's strategy, taxonomy brainstorming.
 
 **mcp-warden will NOT use conclave as a RUNTIME dependency.** Security findings require
-**determinism and reproducibility**; a stochastic council is the wrong tool for runtime
-adjudication of security events. The same property that makes conclave valuable for design
-review (diverse, generative, multi-model reconciliation) makes it unsuitable as a runtime
-gate. This boundary is deliberate and load-bearing:
+determinism and reproducibility; a stochastic council is the wrong tool for runtime
+adjudication. The v1.1 verdict does **not** change this: its `consensus_score` is
+deterministic *arithmetic*, but the *clustering* it scores is LLM-assisted, so the verdict
+is auditable, not a reproducible gate (§8). This boundary is deliberate and load-bearing:
 
 | | conclave (this project) | mcp-warden runtime |
 |---|---|---|
@@ -420,72 +445,52 @@ design smell — re-read this section.
 
 ## 11. Licensing & Positioning
 
-**License:** MIT (`pyproject.toml`). Permissive on purpose: conclave is meant to be a
-small primitive others embed (starting with mcp-warden).
+**License:** MIT (`pyproject.toml`) — permissive on purpose: a small primitive others embed.
 
-**Market reality (refreshed 2026-06-08).** Since this section was first written, the
-"ask N models and reconcile" category got crowded, and two PyPI packages now occupy
-conclave's original niche directly:
+**Market reality.** The "ask N models and reconcile" category is crowded — `llm-council-core`
+(closest peer: library-first, direct-provider mode, anonymized ranking, structured verdicts,
+`doctor`) and `the-llm-council` (library + CLI, adversarial critique, JSON-schema-validated
+output) occupy the original niche directly. So **library-first + structured-result +
+partial-failure-resilient + Model A/B/C anonymization are table-stakes, not a moat**, and we
+no longer market them as distinctive. conclave is also **not** a general AI SDK — it does not
+chase LiteLLM (routing/budgets), Vercel AI SDK (provider abstraction), LangChain/promptfoo
+(evals), or Helicone (observability); it builds only what deepens the council wedge.
 
-- **`llm-council-core`** (`llm-council.dev`) — library-first (`from llm_council import
-  Council`), partial-results-on-timeout, direct-provider mode, anonymized peer ranking,
-  structured verdicts, and a `doctor` health check reporting `key_source`. **Closest peer.**
-- **`the-llm-council`** (PyPI) — library + CLI + agent skill, adversarial critique,
-  graceful degradation (retry/fallback/skip), JSON-schema-validated structured output.
+**Where we are *now* distinct** (re-anchored on what competitors have not replicated):
 
-The honest consequence: **library-first + structured-result + partial-failure-resilient is
-now table-stakes, not a moat.** Debate brand-anonymization (Model A/B/C) is likewise
-**commodity** — shipped by `ai-council-mcp`, `cognition-wheel`, and `llm-council-core` —
-so we no longer market it as distinctive.
-
-**Positioning vs. prior art:**
-
-| | conclave | `llm-council-core` (closest peer) | `llm-consortium` | LangGraph / AutoGen |
-|---|---|---|---|---|
-| Primary surface | **Library-first** (CLI is a thin shell) | Library + MCP + HTTP | CLI/plugin first | Framework/runtime first |
-| Result shape | **Telemetry-grade typed contract** (`CouncilResult`: per-model latency, token usage, typed error capture — stable for downstream like mcp-warden) | Structured verdicts (content-oriented) | XML envelope / JSON dump (content-oriented) | Rich but framework-coupled |
-| Failure model | **Partial-failure resilient by construction** (failures become data) | Partial results on timeout | Plugin-dependent | App must handle |
-| Provider access | **Direct-to-provider only — no aggregator** | OpenRouter default; direct mode optional | via `llm` plugins | SDK/integration-dependent |
-| Provider layer | **Owned, zero-LLM-SDK** — single httpx transport + adapter registry; OpenAI-compatible vendors config-only | provider SDKs / OpenRouter | `llm` per-provider plugins | SDK-dependent |
-| Keys | **Name-only, never stored/logged/serialized; provider errors `redact()`-scrubbed** | BYOK incl. encrypted keychain storage | BYO via `llm` key store | BYO, app-managed |
-| Modes | synthesize/raw/**debate**/**adversarial** now; vote planned | council + ranking | consortium (iterate-to-consensus) | arbitrary graphs you author |
-
-**Where we are *now* distinct** (re-anchored on the parts competitors have not replicated):
-
-1. **Owned, zero-LLM-SDK provider highway** — a single hand-owned httpx transport + adapter
-   registry, no provider SDKs, no OpenRouter. Competitors lean on aggregators or vendor SDKs;
-   none advertise an SDK-free transport they fully control. This is the most defensible claim.
-2. **Direct-keys / no-middleman as a headline, not a footnote** — conclave never requires an
-   aggregator and never proxies tokens. This is a sharper wedge than "library-first" against
-   OpenRouter-locked tools (karpathy `llm-council`) and OpenRouter-default peers.
-3. **Name-only key rigor + `redact()` scrubbing** — the value never transits any data
-   structure, is never serialized, and is scrubbed from provider error strings. (Peers offer
-   BYOK and even encrypted keychains — a different, valid posture; ours is minimal-surface.)
+1. **The auditable verdict (the v1.1 wedge).** A council answer you can *act on*: structured
+   positions, `conflicts` and `minority_reports` that cite `evidence_answer_ids`,
+   `provider_votes`, a **deterministic** `consensus_score` (arithmetic over the model's
+   clustering, never an LLM-emitted number), and a redacted `ModelHarnessManifest` recording
+   which model + prompt version produced the disagreement analysis. Peers ship "structured
+   verdicts" as synthesizer *content*; conclave's verdict is a reproducible, evidence-cited,
+   provenance-stamped object. **This is now the most defensible claim.**
+2. **Owned, zero-LLM-SDK provider highway** — a single hand-owned httpx transport + adapter
+   registry, no provider SDKs, no OpenRouter. Competitors lean on aggregators or vendor SDKs.
+3. **Direct-keys / no-middleman + name-only key rigor** — never an aggregator, never a token
+   proxy; the value never transits a data structure, is never serialized, is `redact()`-
+   scrubbed from errors, and the manifest is proven secret-free (minimal-surface vs. BYOK).
 4. **A telemetry-grade `CouncilResult` contract** — per-model latency + token usage + typed
-   error capture as a *stable downstream contract* (the mcp-warden dev-time dependency story),
-   not just content structure from a synthesizer.
+   error capture as a *stable downstream contract* (the mcp-warden dev-time story).
 
-We are not trying to beat LangGraph/AutoGen at general agent orchestration — we are the
-small, embeddable council primitive. Against the new direct peers (`llm-council-core`,
-`the-llm-council`) we differentiate on the owned provider layer, the no-aggregator posture,
-the key-handling rigor, and the stable result contract — **not** on library-first/structured/
-resilient in general, which the category has caught up on.
+We are the small, embeddable, **auditable** council primitive — not a LangGraph/AutoGen
+rival. Against the direct peers (`llm-council-core`, `the-llm-council`) we differentiate on
+the auditable verdict, the owned provider layer, the no-aggregator posture, and key rigor.
 
 ---
 
 ## 12. Open Product Questions
 
-**Open:**
+**Open:** none currently.
 
-2. **`vote` answer schema.** ⏸️ **DEFERRED** — does `vote` require a constrained/structured
-   answer format (and therefore a prompt contract), or do we tally free-text answers post
-   hoc? Pending decision. Note the hidden dependency: comparable votes need enforced
-   structured-output support across all three adapters (none currently send
-   `response_format`/`tool`/`responseSchema`) — that prerequisite must land before `vote`
-   (#3) is scheduled.
+2. ~~**`vote` answer schema.**~~ **RESOLVED in v1.1** — the question (constrained answer
+   format vs. post-hoc tally, and its structured-output prerequisite) is moot: the verdict
+   ships the LCD verdict/member JSON Schemas enforced via native structured output across
+   all three adapters, and `provider_votes` records the per-provider positions. The
+   structured-output prerequisite this question flagged is now landed (§4a).
 
 **Resolved (2026-06-08):** questions 1 (synthesizer-in-council), 3 (per-member overrides),
 4 (server-mode scope, plus the 2026-06-09 #8 spike outcome), and 5 (first-class provider
 criteria) are decided and archived for traceability in
 [`docs/archive/pdd-resolved-questions-2026-06-09.md`](archive/pdd-resolved-questions-2026-06-09.md).
-The numbering is preserved so the open Q2 keeps its identity.
+The numbering is preserved so the resolved Q2 keeps its identity.
