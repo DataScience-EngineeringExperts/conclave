@@ -113,44 +113,41 @@ def test_build_request_no_tool_when_contract_is_none():
     }
 
 
-def test_build_request_no_tool_for_unsupported_model_and_warns(caplog):
+def test_build_request_no_tool_for_unsupported_model_and_warns(conclave_caplog):
     """An incapable model degrades to free prose with a non-fatal warning."""
     adapter = AnthropicAdapter()
     contract = OutputContract(schema=SCHEMA)
     # perplexity/sonar-pro: supports_structured_output=False in the catalog.
-    with caplog.at_level("WARNING", logger="conclave"):
-        _url, _headers, body = adapter.build_request(
-            "perplexity/sonar-pro", _MESSAGES, 0.2, 120.0, "k", contract
-        )
+    _url, _headers, body = adapter.build_request(
+        "perplexity/sonar-pro", _MESSAGES, 0.2, 120.0, "k", contract
+    )
     assert "tools" not in body
     assert "tool_choice" not in body
-    assert any("unsupported/unknown" in r.getMessage() for r in caplog.records)
+    assert any("unsupported/unknown" in r.getMessage() for r in conclave_caplog.records)
 
 
-def test_build_request_no_tool_for_unknown_provider_and_warns(caplog):
+def test_build_request_no_tool_for_unknown_provider_and_warns(conclave_caplog):
     """An unknown provider (capabilities_for -> None) degrades, never raises."""
     adapter = AnthropicAdapter()
     contract = OutputContract(schema=SCHEMA)
-    with caplog.at_level("WARNING", logger="conclave"):
-        _url, _headers, body = adapter.build_request(
-            "anthropic/some-unknown-future-model",
-            _MESSAGES,
-            0.2,
-            120.0,
-            "k",
-            contract,
-        )
+    _url, _headers, body = adapter.build_request(
+        "anthropic/some-unknown-future-model",
+        _MESSAGES,
+        0.2,
+        120.0,
+        "k",
+        contract,
+    )
     # anthropic/ prefix falls back to a capable record, so the tool IS injected
     # here -- prove the *unknown-provider* branch with a non-anthropic prefix.
     assert "tools" in body  # sanity: anthropic prefix is catalog-capable
 
     adapter2 = AnthropicAdapter()
-    with caplog.at_level("WARNING", logger="conclave"):
-        _u, _h, body2 = adapter2.build_request(
-            "nosuchprovider/model", _MESSAGES, 0.2, 120.0, "k", contract
-        )
+    _u, _h, body2 = adapter2.build_request(
+        "nosuchprovider/model", _MESSAGES, 0.2, 120.0, "k", contract
+    )
     assert "tools" not in body2
-    assert any("unsupported/unknown" in r.getMessage() for r in caplog.records)
+    assert any("unsupported/unknown" in r.getMessage() for r in conclave_caplog.records)
 
 
 def test_build_request_no_tool_when_contract_has_no_schema():

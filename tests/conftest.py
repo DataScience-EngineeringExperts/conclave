@@ -19,6 +19,7 @@ Transport-level tests (in ``test_providers.py``) instead patch
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -100,3 +101,22 @@ def clear_keys(monkeypatch) -> None:
         "TOGETHER_API_KEY",
     ):
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture
+def conclave_caplog(caplog):
+    """caplog that reliably captures the non-propagating ``conclave`` logger.
+
+    ``get_logger`` sets ``conclave.propagate = False`` (a key-leak defense), so
+    pytest's root-attached caplog handler stops seeing these records once any
+    prior test in the suite has configured the logger. Attaching the capture
+    handler directly to the ``conclave`` logger makes capture order- and
+    propagation-independent.
+    """
+    logger = logging.getLogger("conclave")
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger="conclave")
+    try:
+        yield caplog
+    finally:
+        logger.removeHandler(caplog.handler)

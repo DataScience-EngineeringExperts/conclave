@@ -21,8 +21,6 @@ Free-prose / parse behavior and the non-structured body shape live in
 
 from __future__ import annotations
 
-import logging
-
 import pytest
 
 from conclave.adapters.base import OutputContract
@@ -131,25 +129,6 @@ def test_json_schema_omits_schema_key_when_contract_schema_is_none():
 # --------------------------------------------------------------------------- #
 # Tier 2: json_mode only -> json_object + warning
 # --------------------------------------------------------------------------- #
-
-
-@pytest.fixture
-def conclave_caplog(caplog):
-    """caplog that reliably captures the non-propagating ``conclave`` logger.
-
-    ``get_logger`` sets ``conclave.propagate = False`` (a key-leak defense), so
-    pytest's root-attached caplog handler stops seeing these records once any
-    prior test in the suite has configured the logger. Attaching the capture
-    handler directly to the ``conclave`` logger makes capture order- and
-    propagation-independent.
-    """
-    logger = logging.getLogger("conclave")
-    logger.addHandler(caplog.handler)
-    caplog.set_level(logging.WARNING, logger="conclave")
-    try:
-        yield caplog
-    finally:
-        logger.removeHandler(caplog.handler)
 
 
 def test_json_object_for_json_mode_only_model(conclave_caplog):
