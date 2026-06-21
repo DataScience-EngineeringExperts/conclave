@@ -77,12 +77,127 @@ def _print_synthesis(result: CouncilResult, title: str = "SYNTHESIS") -> None:
         err_console.print(f"[yellow]No {title.lower()}: {result.synthesis_error}[/yellow]")
 
 
+def _consensus_line(verdict) -> str:
+    """Format the consensus as a single heuristic-labeled line (never authoritative).
+
+    The score is a deterministic heuristic over the model's position clustering
+    (``position_cluster_ratio_v1``), not a confidence number, so the rendered line
+    flags it as a heuristic by name. A ``None`` score (N<2 responders or no
+    positioned members) degrades to ``n/a`` rather than printing a bogus 0.0.
+    """
+    label = verdict.consensus_label or "n/a"
+    if verdict.consensus_score is None:
+        score = "n/a"
+    else:
+        score = f"{verdict.consensus_score:.2f}"
+    method = verdict.consensus_method or "n/a"
+    # No square brackets here: the panel content is rendered with Rich markup
+    # enabled, and a literal "[heuristic: ...]" reads as an (unknown) markup tag
+    # and is silently dropped. "heuristic:" prose keeps the meaning without the
+    # collision; the score is explicitly framed as a heuristic, never authoritative.
+    return f"consensus: {label} ({score}) — heuristic: {method}"
+
+
+def _conflict_providers(verdict, label: str) -> list[str]:
+    """Resolve a position label to the providers holding it, from the verdict.
+
+    A conflict references positions by ``label``; the provider lists live on the
+    verdict's ``positions``. Returns the first matching position's providers, or
+    an empty list when the label has no clean mapping (then the caller shows the
+    label alone rather than inventing a provider list).
+    """
+    for pos in verdict.positions:
+        if pos.label == label:
+            return pos.providers
+    return []
+
+
+def _print_verdict_absent_note(result: CouncilResult) -> None:
+    """Print a single dim note explaining WHY no verdict was produced (stderr).
+
+    Only fires when the verdict is absent AND the manifest carries a reason
+    (open-ended prompt, N<2 responders, or extraction failure). Routed to
+    ``err_console`` (stderr) and styled ``[dim]`` so it is purely informational
+    and never disrupts an existing stdout assertion (e.g. test_cli.py's
+    human-render checks read ``result.output`` which CliRunner mixes, but the note
+    is dim and additive — it adds no panel/header those tests assert on).
+    """
+    if result.verdict is not None:
+        return
+    manifest = result.manifest
+    if manifest is None or not manifest.verdict_absent_reason:
+        return
+    err_console.print(f"[dim]No verdict: {manifest.verdict_absent_reason}[/dim]")
+
+
+def _print_verdict(result: CouncilResult) -> None:
+    """Print the verdict section (headline, recommendation, consensus, conflicts).
+
+    A no-op when ``result.verdict is None`` (raw mode and verdict-absent runs):
+    nothing is rendered so the human output is byte-identical to the pre-verdict
+    behavior. When a verdict is present it is rendered as a single green-bordered
+    :class:`~rich.panel.Panel`, mirroring :func:`_print_synthesis`, so the verdict
+    sits visually beside the synthesis rather than as a parallel renderer.
+
+    Each block degrades gracefully: a ``None`` consensus score shows ``n/a``
+    (:func:`_consensus_line`); empty ``conflicts`` / ``minority_reports`` are
+    simply omitted; a conflict whose position labels do not map to providers shows
+    the labels alone (:func:`_conflict_providers`).
+    """
+    verdict = result.verdict
+    if verdict is None:
+        return
+
+    lines: list[str] = [
+        f"[bold]{verdict.headline}[/bold]",
+        "",
+        verdict.recommendation,
+        "",
+        f"[dim]{_consensus_line(verdict)}[/dim]",
+    ]
+
+    if verdict.conflicts:
+        lines.append("")
+        lines.append("[bold]Conflicts[/bold]")
+        for conflict in verdict.conflicts:
+            held_by: list[str] = []
+            for pos_label in conflict.position_labels:
+                providers = _conflict_providers(verdict, pos_label)
+                if providers:
+                    held_by.append(f"{pos_label} ({', '.join(providers)})")
+                else:
+                    held_by.append(pos_label)
+            tension = " vs ".join(held_by) if held_by else "(positions unmapped)"
+            lines.append(f"  • [yellow]{conflict.topic}[/yellow]: {tension}")
+            if conflict.summary:
+                lines.append(f"    {conflict.summary}")
+
+    if verdict.minority_reports:
+        lines.append("")
+        lines.append("[bold]Minority reports[/bold]")
+        for report in verdict.minority_reports:
+            who = ", ".join(report.providers) if report.providers else "unattributed"
+            lines.append(f"  • [magenta]{who}[/magenta]: {report.claim}")
+            if report.why_it_matters:
+                lines.append(f"    [dim]{report.why_it_matters}[/dim]")
+
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title=f"[bold green]VERDICT[/bold green] ({verdict.verdict_type})",
+            border_style="green",
+        )
+    )
+
+
 def _render_human(result: CouncilResult) -> None:
-    """Render raw answers + synthesis to the terminal with rich."""
+    """Render raw answers + synthesis + verdict (when present) to the terminal."""
     _print_skipped(result)
     for ans in result.answers:
         console.print(_answer_panel(ans))
     _print_synthesis(result)
+    _print_verdict(result)
+    _print_verdict_absent_note(result)
 
 
 def _render_debate(result: CouncilResult) -> None:
