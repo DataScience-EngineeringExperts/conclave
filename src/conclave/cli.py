@@ -225,7 +225,7 @@ def _render_vote(result: CouncilResult) -> None:
         return
 
     labels = [chr(65 + i) for i in range(len(vote.choices))]
-    label_to_choice = dict(zip(labels, vote.choices))
+    label_to_choice = dict(zip(labels, vote.choices, strict=False))
 
     table = Table(title="Vote Tally", show_header=True)
     table.add_column("Choice", style="bold")

@@ -11,8 +11,8 @@ import pytest
 
 from conclave import Council
 from conclave.config import ConclaveConfig
-from conclave.modes import run_vote, _vote_summary
 from conclave.models import VoteResult
+from conclave.modes import _vote_summary, run_vote
 from conclave.prompts import VOTE_SYSTEM, vote_user
 from tests.conftest import make_response
 
@@ -329,6 +329,7 @@ class TestCLIVoteMode:
 
     def test_vote_mode_requires_choices(self, monkeypatch):
         from typer.testing import CliRunner
+
         from conclave.cli import app
 
         _set_keys(monkeypatch)
@@ -339,6 +340,7 @@ class TestCLIVoteMode:
 
     def test_vote_mode_renders_winner(self, monkeypatch, patch_call_model):
         from typer.testing import CliRunner
+
         from conclave.cli import app
 
         _set_keys(monkeypatch)

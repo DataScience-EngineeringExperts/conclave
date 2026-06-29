@@ -72,7 +72,7 @@ async def run_vote(
         return result
 
     labels = [chr(65 + i) for i in range(len(choices))]
-    label_to_choice = dict(zip(labels, choices))
+    label_to_choice = dict(zip(labels, choices, strict=False))
 
     messages_for = _vote_messages_for(prompt, choices)
     result.answers = await council.fan_out(members, messages_for)
