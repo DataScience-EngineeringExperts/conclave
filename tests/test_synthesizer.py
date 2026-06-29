@@ -362,7 +362,7 @@ def test_prompt_version_is_pinned():
     bumping ``SYNTHESIS_PROMPT_VERSION`` leaves this assertion (and the prompt-text
     pins) inconsistent, so the change cannot land silently.
     """
-    assert SYNTHESIS_PROMPT_VERSION == "2026-06-14"
+    assert SYNTHESIS_PROMPT_VERSION == "2026-06-29"
 
 
 def test_synthesis_prompt_text_is_pinned():

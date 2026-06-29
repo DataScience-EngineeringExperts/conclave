@@ -85,6 +85,7 @@ def make_key(
     rounds: int | None = None,
     proposer: str | None = None,
     converge_threshold: float | None = None,
+    choices: list[str] | None = None,
 ) -> str:
     """Build the stable cache key (sha256 hex) for a council run.
 
@@ -133,6 +134,8 @@ def make_key(
         payload["converge_threshold"] = converge_threshold
     if mode == "adversarial":
         payload["proposer"] = proposer
+    if mode == "vote":
+        payload["choices"] = choices or []
 
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

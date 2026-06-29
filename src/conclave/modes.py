@@ -22,18 +22,138 @@ Design notes:
 
 from __future__ import annotations
 
+import re
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING
 
 from . import prompts
 from .logging import get_logger
-from .models import AdversarialResult, CouncilResult, DebateRound, ModelAnswer
+from .models import AdversarialResult, CouncilResult, DebateRound, ModelAnswer, VoteResult
 from .registry import key_present
 
 if TYPE_CHECKING:  # avoid a circular import at runtime; only needed for typing
     from .council import Council
 
 logger = get_logger("modes")
+
+
+async def run_vote(
+    council: Council,
+    prompt: str,
+    choices: list[str],
+) -> CouncilResult:
+    """Run a constrained-choice vote and return a :class:`CouncilResult`.
+
+    Each council member is shown the prompt and a fixed option set labelled A,
+    B, C, ... and asked to respond with a single letter. Responses are tallied;
+    the plurality winner (if any) is stored in ``result.vote.winner``. A tie
+    sets ``result.vote.split = True`` and ``result.vote.winner = None``.
+
+    Args:
+        council: The :class:`Council` providing fan-out and config.
+        prompt: The user question to vote on.
+        choices: Two or more option strings (e.g. ``["Option 1", "Option 2"]``).
+            Each choice is assigned a consecutive uppercase letter starting at A.
+
+    Returns:
+        A :class:`CouncilResult` with ``mode="vote"`` and ``vote`` populated.
+        ``synthesis`` carries a human-readable summary of the tally.
+        Zero available members yields an empty result, not an error.
+    """
+    if len(choices) < 2:
+        raise ValueError("vote mode requires at least 2 choices")
+
+    members, skipped = council._available_members()
+    result = CouncilResult(prompt=prompt, mode="vote", skipped=skipped)
+
+    if not members:
+        logger.warning("no council members have keys available; nothing to vote")
+        result.vote = VoteResult(choices=choices)
+        return result
+
+    labels = [chr(65 + i) for i in range(len(choices))]
+    label_to_choice = dict(zip(labels, choices))
+
+    messages_for = _vote_messages_for(prompt, choices)
+    result.answers = await council.fan_out(members, messages_for)
+
+    # Parse each member's response into a label.
+    member_votes: dict[str, str | None] = {}
+    for ans in result.answers:
+        if not ans.ok or not ans.answer:
+            member_votes[ans.name] = None
+            continue
+        raw = ans.answer.strip().upper()
+        # Accept the first standalone label letter (word-boundary match).
+        # A letter buried inside a word (e.g. "cANnot") is not accepted.
+        chosen: str | None = None
+        for m in re.finditer(r"\b([A-Z])\b", raw):
+            if m.group(1) in label_to_choice:
+                chosen = m.group(1)
+                break
+        member_votes[ans.name] = chosen
+
+    # Tally votes.
+    tally: dict[str, int] = {lbl: 0 for lbl in labels}
+    for chosen in member_votes.values():
+        if chosen is not None:
+            tally[chosen] = tally.get(chosen, 0) + 1
+
+    # Remove labels with zero votes for a cleaner tally.
+    tally = {lbl: cnt for lbl, cnt in tally.items() if cnt > 0}
+
+    # Determine winner (plurality = most votes; None on tie).
+    winner: str | None = None
+    split = False
+    if tally:
+        max_votes = max(tally.values())
+        leaders = [lbl for lbl, cnt in tally.items() if cnt == max_votes]
+        if len(leaders) == 1:
+            winner = leaders[0]
+        else:
+            split = True
+
+    vote_result = VoteResult(
+        choices=choices,
+        votes=member_votes,
+        tally=tally,
+        winner=winner,
+        split=split,
+    )
+    result.vote = vote_result
+
+    # Build a human-readable synthesis summarising the outcome.
+    result.synthesis = _vote_summary(vote_result, label_to_choice, len(result.answers))
+    return result
+
+
+def _vote_messages_for(prompt: str, choices: list[str]):
+    """Build the per-member message factory for a vote round."""
+    messages = [
+        {"role": "system", "content": prompts.VOTE_SYSTEM},
+        {"role": "user", "content": prompts.vote_user(prompt, choices)},
+    ]
+    return lambda _name, _model_id: messages
+
+
+def _vote_summary(vote_result: VoteResult, label_to_choice: dict[str, str], n_members: int) -> str:
+    """Build a brief text summary of the vote outcome."""
+    lines = [f"Vote result ({n_members} member(s) polled):"]
+    for lbl, cnt in sorted(vote_result.tally.items(), key=lambda x: -x[1]):
+        choice_text = label_to_choice.get(lbl, lbl)
+        lines.append(f"  {lbl}. {choice_text}: {cnt} vote(s)")
+    unparsed = sum(1 for v in vote_result.votes.values() if v is None)
+    if unparsed:
+        lines.append(f"  (unrecognised/failed responses: {unparsed})")
+    if vote_result.winner is not None:
+        winner_text = label_to_choice.get(vote_result.winner, vote_result.winner)
+        lines.append(f"\nWinner: {vote_result.winner}. {winner_text}")
+    elif vote_result.split:
+        tied = [f"{lbl}. {label_to_choice.get(lbl, lbl)}" for lbl in sorted(vote_result.tally)]
+        lines.append(f"\nTie: {' vs '.join(tied)}")
+    else:
+        lines.append("\nNo votes cast.")
+    return "\n".join(lines)
 
 
 async def run_debate(

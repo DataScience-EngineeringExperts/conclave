@@ -19,7 +19,7 @@ from .models import ModelAnswer
 # detect that the wording the synthesis was produced under has shifted, rather
 # than silently absorbing a prompt change as a quality regression. The value is
 # opaque (a date-stamped tag); only equality/inequality is meaningful.
-SYNTHESIS_PROMPT_VERSION = "2026-06-14"
+SYNTHESIS_PROMPT_VERSION = "2026-06-29"
 
 # Stable position-based labels used to anonymize peers in debate rounds 2..N.
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -58,6 +58,25 @@ JUDGE_SYSTEM = (
     "single strengthened final answer that survives the critiques. Rely only on "
     "the material provided; do not invent positions."
 )
+
+
+VOTE_SYSTEM = (
+    "You are a voting member of a multi-model council. You will be given a "
+    "question and a fixed set of labelled choices. You MUST respond with ONLY "
+    "the single uppercase letter label of your chosen option (e.g. 'A' or 'B'). "
+    "Do not write anything else — no explanation, no punctuation, no extra text. "
+    "Just the single letter."
+)
+
+
+def vote_user(prompt: str, choices: list[str]) -> str:
+    """User-role content for a constrained vote."""
+    choice_block = "\n".join(f"{chr(65 + i)}. {c}" for i, c in enumerate(choices))
+    return (
+        f"Question:\n{prompt}\n\n"
+        f"Choices:\n{choice_block}\n\n"
+        "Respond with only the single letter of your chosen option."
+    )
 
 
 def anonymized_peer_block(

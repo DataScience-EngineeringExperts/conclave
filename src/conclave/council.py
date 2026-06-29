@@ -202,6 +202,7 @@ class Council:
         rounds: int | None = None,
         proposer: str | None = None,
         converge_threshold: float | None = None,
+        choices: list[str] | None = None,
     ) -> str:
         """Build the cache key for a run from the resolved, secret-free identity.
 
@@ -223,6 +224,7 @@ class Council:
             rounds=rounds,
             proposer=proposer,
             converge_threshold=converge_threshold,
+            choices=choices,
         )
 
     async def _cached_run(
@@ -234,6 +236,7 @@ class Council:
         rounds: int | None = None,
         proposer: str | None = None,
         converge_threshold: float | None = None,
+        choices: list[str] | None = None,
     ) -> CouncilResult:
         """Serve ``run`` from the result cache when caching is enabled.
 
@@ -251,6 +254,7 @@ class Council:
             rounds=rounds,
             proposer=proposer,
             converge_threshold=converge_threshold,
+            choices=choices,
         )
         hit = cache_mod.load(key)
         if hit is not None:
@@ -880,4 +884,30 @@ class Council:
         """Synchronous wrapper around :meth:`adversarial`."""
         return self._run_sync(
             lambda: self.adversarial(prompt, proposer=proposer), "adversarial_sync"
+        )
+
+    async def vote(self, prompt: str, choices: list[str]) -> CouncilResult:
+        """Run a constrained-choice vote. See :func:`conclave.modes.run_vote`.
+
+        Each member receives the prompt and a labelled option set (A, B, C, ...)
+        and must respond with a single letter. Results are tallied and a winner
+        (plurality) or split is reported on ``result.vote``.
+
+        Args:
+            prompt: The question to vote on.
+            choices: Two or more option strings. At least 2 required.
+        """
+        from .modes import run_vote
+
+        return await self._cached_run(
+            prompt,
+            "vote",
+            lambda: run_vote(self, prompt, choices=choices),
+            choices=choices,
+        )
+
+    def vote_sync(self, prompt: str, choices: list[str]) -> CouncilResult:
+        """Synchronous wrapper around :meth:`vote`."""
+        return self._run_sync(
+            lambda: self.vote(prompt, choices=choices), "vote_sync"
         )

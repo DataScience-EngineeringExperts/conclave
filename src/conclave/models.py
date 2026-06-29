@@ -173,13 +173,35 @@ class AdversarialResult(BaseModel):
         return [c for c in self.critiques if c.ok]
 
 
+class VoteResult(BaseModel):
+    """The tally from a constrained-choice vote run.
+
+    Attributes:
+        choices: The fixed option labels offered to members.
+        votes: Map of member friendly name → the label they chose (or ``None``
+            when a member's answer could not be parsed to a valid choice).
+        tally: Map of label → vote count across all members that returned a
+            parseable vote. Members that errored or returned an unrecognised
+            response are excluded from the tally.
+        winner: The label with the most votes, or ``None`` on a tie.
+        split: ``True`` when no single choice won an outright plurality (tie).
+    """
+
+    choices: list[str] = Field(default_factory=list)
+    votes: dict[str, str | None] = Field(default_factory=dict)
+    tally: dict[str, int] = Field(default_factory=dict)
+    winner: str | None = None
+    split: bool = False
+
+
 class CouncilResult(BaseModel):
     """The full outcome of a council run.
 
     Attributes:
         prompt: The original user prompt.
         mode: The run mode that produced this result
-            (``"synthesize"`` | ``"raw"`` | ``"debate"`` | ``"adversarial"``).
+            (``"synthesize"`` | ``"raw"`` | ``"debate"`` | ``"adversarial"``
+            | ``"vote"``).
         answers: One ``ModelAnswer`` per attempted council member. For
             ``debate`` this mirrors the final round so existing consumers that
             read ``answers``/``synthesis`` keep working unchanged.
@@ -261,6 +283,7 @@ class CouncilResult(BaseModel):
     skipped: list[str] = Field(default_factory=list)
     rounds: list[DebateRound] = Field(default_factory=list)
     adversarial: AdversarialResult | None = None
+    vote: VoteResult | None = None
     cached: bool = False
     converged: bool = False
     convergence_score: float | None = None

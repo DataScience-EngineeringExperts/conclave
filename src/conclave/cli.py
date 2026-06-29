@@ -216,6 +216,61 @@ def _render_debate(result: CouncilResult) -> None:
     _print_synthesis(result, title="FINAL SYNTHESIS")
 
 
+def _render_vote(result: CouncilResult) -> None:
+    """Render a vote run: tally table then winner/split line."""
+    _print_skipped(result)
+    vote = result.vote
+    if vote is None:
+        err_console.print("[yellow]No vote result produced.[/yellow]")
+        return
+
+    labels = [chr(65 + i) for i in range(len(vote.choices))]
+    label_to_choice = dict(zip(labels, vote.choices))
+
+    table = Table(title="Vote Tally", show_header=True)
+    table.add_column("Choice", style="bold")
+    table.add_column("Label", justify="center")
+    table.add_column("Votes", justify="right")
+    table.add_column("Voters")
+
+    for lbl in labels:
+        choice_text = label_to_choice.get(lbl, lbl)
+        cnt = vote.tally.get(lbl, 0)
+        voters = [name for name, v in vote.votes.items() if v == lbl]
+        voters_str = ", ".join(voters) if voters else "—"
+        style = "green" if lbl == vote.winner else ""
+        table.add_row(choice_text, lbl, str(cnt), voters_str, style=style)
+
+    console.print(table)
+
+    unparsed = [name for name, v in vote.votes.items() if v is None]
+    if unparsed:
+        err_console.print(
+            f"[yellow]Unrecognised/failed responses: {', '.join(unparsed)}[/yellow]"
+        )
+
+    if vote.winner is not None:
+        winner_text = label_to_choice.get(vote.winner, vote.winner)
+        console.print(
+            Panel(
+                f"[bold]{vote.winner}. {winner_text}[/bold]",
+                title="[bold green]WINNER[/bold green]",
+                border_style="green",
+            )
+        )
+    elif vote.split:
+        tied = [f"{lbl}. {label_to_choice.get(lbl, lbl)}" for lbl in sorted(vote.tally)]
+        console.print(
+            Panel(
+                f"[yellow]Tie: {' vs '.join(tied)}[/yellow]",
+                title="[bold yellow]SPLIT[/bold yellow]",
+                border_style="yellow",
+            )
+        )
+    else:
+        err_console.print("[yellow]No votes were cast.[/yellow]")
+
+
 def _render_adversarial(result: CouncilResult) -> None:
     """Render an adversarial run: proposal, critiques, then the verdict."""
     _print_skipped(result)
@@ -303,10 +358,11 @@ _RENDERERS = {
     "raw": _render_human,
     "debate": _render_debate,
     "adversarial": _render_adversarial,
+    "vote": _render_vote,
 }
 
 
-_VALID_MODES = {"synthesize", "raw", "debate", "adversarial"}
+_VALID_MODES = {"synthesize", "raw", "debate", "adversarial", "vote"}
 
 # Threshold used when --converge is passed without an explicit --converge-threshold.
 # High by design: an early stop should require answers that are nearly stable
@@ -390,6 +446,14 @@ def ask(
         "-p",
         help="Proposer model name (adversarial mode; defaults to first member).",
     ),
+    choices: str | None = typer.Option(
+        None,
+        "--choices",
+        help=(
+            "Comma-separated list of options for vote mode "
+            "(e.g. 'Option A,Option B,Option C'). Required for --mode vote."
+        ),
+    ),
     as_json: bool = typer.Option(
         False, "--json", help="Emit the full result as JSON instead of panels."
     ),
@@ -436,6 +500,12 @@ def ask(
         )
         raise typer.Exit(code=2)
 
+    if mode_lower == "vote" and not choices:
+        err_console.print(
+            "[red]--mode vote requires --choices (e.g. --choices 'Yes,No,Abstain').[/red]"
+        )
+        raise typer.Exit(code=2)
+
     cfg = load_config()
     members = cfg.resolve_council(council)
     if not members:
@@ -463,6 +533,9 @@ def ask(
         result = c.debate_sync(prompt, rounds=rounds, converge_threshold=threshold)
     elif mode_lower == "adversarial":
         result = c.adversarial_sync(prompt, proposer=proposer)
+    elif mode_lower == "vote":
+        choice_list = [ch.strip() for ch in (choices or "").split(",") if ch.strip()]
+        result = c.vote_sync(prompt, choices=choice_list)
     else:
         result = c.ask_sync(prompt, synthesize=(mode_lower == "synthesize"))
 
