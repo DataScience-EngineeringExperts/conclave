@@ -29,7 +29,7 @@ flowchart TB
         cli["CLI · conclave ask / providers (cli.py)"]
         lib["Library API · from conclave import Council (__init__.py)"]
         council["Council orchestrator<br/>fan_out · synthesize_blocks · skip-no-key (council.py)"]
-        modes["Deliberation modes<br/>debate · adversarial (modes.py + prompts.py)"]
+        modes["Deliberation modes<br/>debate · adversarial · vote (modes.py + prompts.py)"]
         registry["Registry · name to model-id<br/>key PRESENCE only, never values (registry.py)"]
         config["Config loader · custom endpoints (config.py)"]
         models["Result contract · CouncilResult v2<br/>answers · verdict · consensus · manifest (models.py)"]
@@ -147,7 +147,11 @@ flowchart TB
   with a prompt-level fallback for providers without strict support. The **`ModelHarnessManifest`**
   (`manifest.py`) rides on **every** result — first-class, not a debug flag — recording which
   model + prompt version produced the clustering (provenance) and stamping `secret_safety`
-  only after the serialized manifest is scanned clean. A verdict is *optional*: open-ended
+  only after the serialized manifest is scanned clean. This is enforced as a true invariant at
+  the single chokepoint `Council._cached_run` → `_ensure_manifest`: **all five modes**
+  (`synthesize`, `raw`, `debate`, `adversarial`, `vote`) funnel through it, so a result can
+  never escape without a manifest — including the zero-members early return and cache hits.
+  A verdict is *optional*: open-ended
   prompts, fewer than two responding members, or extraction failure leave `verdict = None`
   with the synthesis and member answers intact and the reason recorded on the manifest.
 - **Streaming shares the same boundary (PDD §9 #5).** A `--stream` run (and the library

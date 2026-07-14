@@ -244,9 +244,18 @@ class Council:
         and the providers are not called. On a miss (or when caching is off) the
         live ``run`` executes; a successful live run is stored best-effort. Cache
         read/write failures never propagate -- they degrade to a normal live run.
+
+        This is the single chokepoint every mode funnels through, so it is also
+        where the manifest-on-every-result invariant is enforced: each returned
+        result passes through :meth:`_ensure_manifest` (a no-op for the
+        synthesize/raw path, which builds its own richer manifest in
+        :meth:`_ask_uncached`; a fill for ``debate``/``adversarial``/``vote`` and
+        for a cache hit stored before the manifest existed).
         """
         if not self.cache_enabled:
-            return await run()
+            result = await run()
+            self._ensure_manifest(result, mode)
+            return result
 
         key = self._cache_key(
             prompt,
@@ -259,11 +268,51 @@ class Council:
         hit = cache_mod.load(key)
         if hit is not None:
             logger.info("cache hit for %s run (%s)", mode, key[:12])
+            self._ensure_manifest(hit, mode)
             return hit
 
         result = await run()
+        self._ensure_manifest(result, mode)
         cache_mod.store(key, result)
         return result
+
+    def _ensure_manifest(self, result: CouncilResult, mode: str) -> None:
+        """Guarantee the manifest-on-every-result invariant at the single chokepoint.
+
+        Every mode funnels through :meth:`_cached_run`, so attaching the auditable
+        :class:`ModelHarnessManifest` here makes it a true invariant rather than a
+        per-mode responsibility that can silently drift (the drift this method
+        fixes: ``debate``/``adversarial``/``vote`` used to return with
+        ``manifest is None``).
+
+        A no-op when ``result.manifest`` already exists: the synthesize/raw path
+        builds its own manifest inside :meth:`_ask_uncached` so it can populate the
+        verdict-provenance slots and re-stamp secret-safety over them, and this
+        method must not overwrite that richer manifest. The
+        ``debate``/``adversarial``/``vote`` wrappers return a result with
+        ``manifest is None`` -- this fills it from the resolved membership and the
+        collected answers, including the zero-members early-return path and a stale
+        cache hit stored before this invariant existed, so no result ever escapes
+        without an audit manifest.
+
+        Membership is re-resolved via :meth:`_available_members` (the same
+        resolution :meth:`_cache_key` already performs) rather than threaded back
+        through every mode's return value; this keeps ``providers_called`` /
+        ``model_ids`` reflecting the full resolved membership even for debate rounds
+        where a member later dropped out, while the per-answer receipts are built
+        from ``result.answers``. :meth:`_build_manifest` stamps ``secret_safety``
+        VERIFIED when the assembled manifest is provably clean.
+
+        Args:
+            result: The result to attach a manifest to. Mutated in place.
+            mode: The deliberation mode string recorded on the manifest.
+        """
+        if result.manifest is not None:
+            return
+        members, skipped = self._available_members()
+        result.manifest = self._build_manifest(
+            mode=mode, members=members, skipped=skipped, answers=result.answers
+        )
 
     async def fan_out(
         self,
@@ -349,7 +398,10 @@ class Council:
         :func:`conclave.providers.receipt_from_answer`). It works for both the
         normal path (``answers`` populated) and the empty-members path
         (``members``/``answers`` empty, ``skipped`` listing every requested name)
-        so every live ``ask`` returns a manifest.
+        so every live run returns a manifest. It is called for the synthesize/raw
+        path directly in :meth:`_ask_uncached` and for ``debate``/``adversarial``/
+        ``vote`` via :meth:`_ensure_manifest`, so the ``mode`` argument spans every
+        deliberation mode.
 
         The ``conclave_version`` is read via a deferred import: ``conclave``
         imports this module at package init *before* it assigns ``__version__``,
@@ -362,7 +414,8 @@ class Council:
         (:func:`conclave.manifest.verified_secret_safety`).
 
         Args:
-            mode: Deliberation mode (``"synthesize"``/``"raw"``).
+            mode: Deliberation mode (``"synthesize"``/``"raw"``/``"debate"``/
+                ``"adversarial"``/``"vote"``).
             members: ``(friendly_name, model_id)`` pairs that were called.
             skipped: Friendly names skipped for a missing key.
             answers: The collected per-member answers (empty on the no-members path).

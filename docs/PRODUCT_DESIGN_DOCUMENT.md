@@ -46,10 +46,10 @@ v1.1 makes the product identity precise: **a multi-model council verdict you can
 structured, scored for agreement, fully auditable.** Every run yields a `CouncilVerdict`
 exposing agreement, disagreement (`conflicts`), minority views (`minority_reports`), and
 per-provider votes (`provider_votes`); a deterministic `consensus_score` (arithmetic over the
-model's clustering, *never* an LLM-emitted number); and a redacted `ModelHarnessManifest`
-recording how the run executed and which model produced the disagreement analysis (§4a). The
-roadmapped `vote` mode is therefore **absorbed and superseded** — "show me who voted for what"
-is now `provider_votes`, with evidence, not a separate mode.
+model's clustering, *never* an LLM-emitted number); and a redacted `ModelHarnessManifest` (how
+the run executed + which model produced the analysis) riding on **every** result across all five
+modes (one chokepoint, §4a). A constrained-choice **`vote` mode** also **shipped** (CAC-09 / #3,
+`--mode vote --choices "A,B,C"` → plurality winner/split) — distinct from `provider_votes`.
 
 conclave's first real use was an **adversarial design review**: a council of Grok, Gemini,
 Perplexity, and Claude critiquing a security-tool strategy and catching flaws a single
@@ -125,19 +125,18 @@ output. The v1.1 verdict layer (§4a) sits on top of whichever mode produced the
 | **raw** | **BUILT (v0.1)** | Fan out and return every member's raw answer with no synthesis. Not a deliberation mode — it is "synthesize off." Exposed as `--mode raw` / `ask(..., synthesize=False)`. |
 | **debate** | **BUILT (v0.2)** | N rounds (`--rounds`, default 2). Round 1 is an independent fan-out; rounds 2..N show each member its peers' **anonymized** prior-round answers (`Model A/B/C`) and ask it to revise or defend. A member that errors in a round drops out of later rounds; the debate continues with survivors. The synthesizer consolidates the final round. Exposed as `--mode debate` / `Council.debate()` / `debate_sync()`. |
 | **adversarial** | **BUILT (v0.2)** | Structured propose → refute → verdict. A `--proposer` (default: first member) answers; the remaining members are CRITICS explicitly prompted to refute it; the synthesizer acts as JUDGE, weighing proposal vs. critiques and issuing a verdict + strengthened answer. This is the mode conclave's origin story (the security design review) exercised by hand. Exposed as `--mode adversarial` / `Council.adversarial()` / `adversarial_sync()`. |
-| ~~**vote**~~ | **ABSORBED (v1.1)** | ~~Structured majority with reported split.~~ Superseded by the v1.1 verdict: `provider_votes` records which provider took which position (with evidence) and `consensus_label`/`consensus_score` report the split deterministically — no separate mode needed. See §4a. |
+| **vote** | **BUILT (v1.1, CAC-09 / #3)** | Constrained-choice ballot: each member sees a fixed labelled option set (`A, B, C, …`) and answers with one letter; responses are tallied to a plurality `winner` (or `split` on a tie) on `result.vote` (`VoteResult`). Exposed as `--mode vote --choices "A,B,C"` / `Council.vote()` / `vote_sync()`. Distinct from the verdict's `provider_votes`, which cluster free-form stances with evidence (§4a); `vote` tallies a fixed ballot. |
 
 **Mode algorithms (as built).** The step-by-step "as built" prose for synthesize / raw /
-debate / adversarial (fan-out + partial-results, peer anonymization + drop-out, proposer →
-critic → judge) is landed history and lives in
-[`docs/archive/pdd-v0.x-modes-detail.md`](archive/pdd-v0.x-modes-detail.md). In brief: every
-mode fans out concurrently, captures each call as a `ModelAnswer` (answer **or** redacted
-error — `call_model` never raises), and survives partial failure; the deliberation modes
-extend `CouncilResult` (`mode`, `rounds`, `adversarial`) backward-compatibly so v0.1
-`answers`/`synthesis` consumers keep working. The mode *text* output is a generative
-reconciliation, inherently stochastic (load-bearing for the mcp-warden boundary, §10); the
-v1.1 verdict (§4a) adds a *deterministic* agreement number on top, by arithmetic over a
-clustering, never lifted from that free text.
+debate / adversarial / vote (fan-out + partial-results, peer anonymization + drop-out, proposer →
+critic → judge, ballot tally) is landed history and lives in
+[`docs/archive/pdd-v0.x-modes-detail.md`](archive/pdd-v0.x-modes-detail.md). In brief: every mode
+fans out concurrently, captures each call as a `ModelAnswer` (answer **or** redacted error —
+`call_model` never raises), and survives partial failure; the deliberation modes extend
+`CouncilResult` (`mode`, `rounds`, `adversarial`, `vote`) backward-compatibly so v0.1
+`answers`/`synthesis` consumers keep working. The mode *text* output is a generative, inherently
+stochastic reconciliation (load-bearing for the mcp-warden boundary, §10); the v1.1 verdict (§4a)
+adds a *deterministic* agreement number on top, by arithmetic over a clustering.
 
 ---
 
@@ -242,25 +241,30 @@ verdict appears identically in the buffered result and the streaming `done` even
 `secret_safety` stamp is re-run over the final content. **Cost:** default-on adds exactly
 **one** extra synthesizer call per run; the opt-out exists for cost-sensitive callers.
 
-### ModelHarnessManifest — first-class, secret-free
-The `ModelHarnessManifest` (`manifest.py`) rides on every `CouncilResult` — *not* behind a
-debug flag. It records `request_id`, `conclave_version`, `mode`, `providers_considered/
-called/skipped` (each skip a `ProviderSkip{name, reason}`), `model_ids`,
-`generation_settings`, `receipts` (each a `ProviderExecutionReceipt{name, provider,
-model_id, generation_settings, latency_ms, usage, error(redacted), schema_valid}`),
-`total_latency_ms`, `total_usage`, `schema_valid`, `redacted_errors`. Verdict-provenance
-slots: `verdict_extraction: VerdictExtraction{model_id, prompt_version}` (which model + prompt
-version produced the disagreement analysis — *the* auditability hook), `verdict_type`,
-`consensus_method`, `verdict_absent_reason`. Two deliberate honesty choices:
+**Verdict scope across modes (deliberate).** Posture: *manifest everywhere, clustering verdict only where unambiguously additive.* The manifest rides on all five modes; the clustering verdict still runs on `synthesize`/`ask` only — deferred (not forced) on `debate`/`vote` (a future change may opt them in behind `extract_verdict`), and **intentionally NOT on `adversarial`**, which already emits a judge verdict the clustering verdict would double-count.
 
-- **No invented pricing.** `estimated_cost` is `None` (a wrong number in an audit receipt is
-  worse than none); `pricing_snapshot_date` is the dated-estimate slot, `None` until a real
-  pricing table exists. Usage (tokens) is recorded; cost is not guessed.
+### ModelHarnessManifest — first-class, secret-free
+The `ModelHarnessManifest` (`manifest.py`) rides on every `CouncilResult` — *not* behind a debug
+flag, and now a **true invariant** enforced at one chokepoint: all five modes funnel through
+`Council._cached_run` → `_ensure_manifest`, which attaches the manifest on every returned result
+— including `debate`/`adversarial`/`vote` (built in `modes.py`), the zero-members early return,
+and cache hits (synthesize/raw builds its own richer one earlier). Pinned by
+`tests/test_manifest_all_modes.py`. It records `request_id`, `conclave_version`, `mode`,
+`providers_considered/called/skipped`
+(each skip a `ProviderSkip{name, reason}`), `model_ids`, `generation_settings`, `receipts` (each
+a `ProviderExecutionReceipt{name, provider, model_id, generation_settings, latency_ms, usage,
+error(redacted), schema_valid}`), `total_latency_ms`, `total_usage`, `schema_valid`,
+`redacted_errors`, and verdict-provenance slots (`verdict_extraction: VerdictExtraction{model_id,
+prompt_version}` — the auditability hook — plus `verdict_type`, `consensus_method`,
+`verdict_absent_reason`). Two deliberate honesty choices:
+
+- **No invented pricing.** `estimated_cost` stays `None` (a wrong number in an audit receipt is
+  worse than none); `pricing_snapshot_date` is the dated-estimate slot until a real pricing table
+  exists. Usage (tokens) is recorded; cost is not guessed.
 - **Proven secret-safety.** `secret_safety` defaults to `unverified`, promoted to
-  `verified_no_secrets` **only** after `scan_for_secret_material()` proves the serialized
-  manifest free of forbidden substrings (`sk-`, `bearer`, `authorization`, `api_key`,
-  `x-api-key`). Key *values* never appear; errors are redacted upstream and re-redacted on
-  construction.
+  `verified_no_secrets` **only** after `scan_for_secret_material()` proves the serialized manifest
+  free of forbidden substrings (`sk-`, `bearer`, `authorization`, `api_key`, `x-api-key`). Key
+  *values* never appear; errors are redacted upstream and re-redacted on construction.
 
 ---
 
@@ -308,7 +312,7 @@ consumers. The end-to-end flow — `CLI/Library → Council → call_model → a
 
 | Module | Responsibility |
 |--------|----------------|
-| `council.py` | `Council` — primary importable entry point. Resolves names, partitions members, and exposes two reusable primitives: `fan_out` (the single concurrent + partial-failure call loop) and `synthesize_blocks` (the single synthesizer/judge call path). Hosts the public mode API: `ask`/`ask_sync` (synthesize/raw), `debate`/`debate_sync`, `adversarial`/`adversarial_sync`. Sync wrappers guard against a running event loop. Runs `_apply_verdict` (default-on; `extract_verdict=False` opts out) on both buffered + streaming paths after the manifest exists. |
+| `council.py` | `Council` — primary importable entry point. Resolves names, partitions members, and exposes two reusable primitives: `fan_out` (the single concurrent + partial-failure call loop) and `synthesize_blocks` (the single synthesizer/judge call path). Hosts the public mode API: `ask`/`ask_sync` (synthesize/raw), `debate`/`debate_sync`, `adversarial`/`adversarial_sync`, `vote`/`vote_sync`. Sync wrappers guard against a running event loop. Every mode funnels through `_cached_run`, which enforces the manifest-on-every-result invariant via `_ensure_manifest`. Runs `_apply_verdict` (default-on; `extract_verdict=False` opts out) on the synthesize buffered + streaming paths after the manifest exists. |
 | `verdict.py` | Public verdict/member Pydantic types (`CouncilVerdict`, `CouncilPosition`, `CouncilConflict`, `ProviderVote`, `MinorityReport`) + the LCD JSON Schemas (`verdict_json_schema`/`member_answer_json_schema`/`verdict_extraction_json_schema`) usable across all three native structured-output surfaces; `VERDICT_SCHEMA_VERSION`. |
 | `agreement.py` | Deterministic consensus: `consensus_score` (`position_cluster_ratio_v1` — largest cluster / positioned members; `None` for N<2) + `consensus_label` buckets. Pure arithmetic, no `difflib`, never LLM-emitted. |
 | `verdict_synthesis.py` | `extract_verdict` engine: one extraction call (clusters stances, never emits a number), native `output_contract` enforcement + prompt-level fallback, validate → repair-once → graceful `verdict=None`; the three verdict-absent reasons; provenance on every return path. |
@@ -349,28 +353,24 @@ Typer + Rich, PyYAML. **No LLM-SDK dependency.** hatchling build; console script
 Condensed history (v0.x mode-detail archived per §4, per-release changelog in `CHANGELOG.md`, verdict layer in §4a):
 
 - **v0.1:** `synthesize` + `raw` modes; first-class providers (5, now 9) + adapter
-  pass-through; BYO-keys by env-var name with graceful skip; concurrent fan-out;
-  structured `CouncilResult` (latency, usage, per-model error); CLI (`ask`/`providers`,
-  `--json`); config (named models/councils, default synthesizer); sync + async library
-  API; transport-mocked test suite (no network, no keys).
-- **v0.2:** `debate` (multi-round, anonymized peers, drop-out, `CouncilResult.rounds`) and
-  `adversarial` (proposer → critics → judge, `CouncilResult.adversarial`); backward-
-  compatible `CouncilResult` extension; both on the library API + CLI with rich rendering.
-- **v0.3:** **LiteLLM removed** → owned `httpx` provider highway + adapter registry (§6),
-  the only network dependency; three adapters cover all nine providers; custom
-  OpenAI-compatible `endpoints:` (config-only); key-leak hardening via `redact()` (was §9
-  item 7); `call_model` signature + never-raises contract unchanged.
-- **v1.0 (stable):** distribution name `conclave-cli`; OIDC Trusted-Publishing release
-  workflow + Sigstore + PEP 740; key-leak threat model (`SECURITY.md`, cause-chain fix,
-  transport-logging guard default-on); versioned synthesis prompt
-  (`SYNTHESIS_PROMPT_VERSION` → `result.prompt_version`); streaming (synthesize/raw) +
-  optional result cache + debate convergence early-stop.
+  pass-through; BYO-keys by env-var name with graceful skip; concurrent fan-out; structured
+  `CouncilResult`; CLI (`ask`/`providers`, `--json`); config; sync + async API; mocked suite.
+- **v0.2:** `debate` (multi-round, anonymized peers, drop-out, `.rounds`) and `adversarial`
+  (proposer → critics → judge, `.adversarial`); backward-compatible `CouncilResult` extension.
+- **v0.3:** **LiteLLM removed** → owned `httpx` provider highway + adapter registry (§6, the
+  only network dependency; 3 adapters cover 9 providers); custom OpenAI-compatible `endpoints:`;
+  key-leak hardening via `redact()`; `call_model` signature + never-raises contract unchanged.
+- **v1.0 (stable):** dist name `conclave-cli`; OIDC Trusted-Publishing + Sigstore + PEP 740;
+  key-leak threat model (`SECURITY.md`, transport-logging guard default-on); versioned synthesis
+  prompt (`SYNTHESIS_PROMPT_VERSION`); streaming (synthesize/raw) + result cache + debate early-stop.
 - **v1.1 (the auditable council):** `CouncilResult` v2 — `verdict` + `consensus_*` +
   `conflicts`/`provider_votes`/`minority_reports` + first-class `manifest`; deterministic
   `position_cluster_ratio_v1` consensus; native + fallback structured output across
   OpenAI/Anthropic/Gemini; the verdict-optional rule; verdict default-on with
-  `Council(extract_verdict=False)` opt-out. The `vote` mode is **absorbed** by
-  `provider_votes`. Full detail in §4a.
+  `Council(extract_verdict=False)` opt-out; the auditable `manifest` made a true
+  every-mode invariant (one chokepoint). A constrained-choice **`vote` mode** shipped
+  (CAC-09 / #3) — `--mode vote --choices` — distinct from the verdict's `provider_votes`.
+  Full detail in §4a.
 
 ---
 
@@ -383,9 +383,9 @@ Condensed history (v0.x mode-detail archived per §4, per-release changelog in `
 - **Not an agent framework.** No tool-calling graphs, stateful agents, or orchestration DSL — we compete by being *small*. (Permanent.)
 - **Not a key manager / secrets vault.** conclave reads env vars; it does not provision, rotate, store, or proxy keys. (Permanent.)
 - **No hosted/proxied token path.** No conclave-operated endpoint that sees prompts or takes a margin — BYO-keys, direct-to-provider, always. (Permanent.)
-- **No streaming for debate/adversarial** (synthesize/raw streaming landed in v0.3, #7).
-- **No server mode** (possible Roadmap, §9).
-- ~~**No `vote` mode** yet.~~ **Absorbed in v1.1** — `provider_votes` + `consensus_label`/`consensus_score` deliver "who voted for what, and the split" with evidence (§4a).
+- **No streaming for debate/adversarial/vote** (synthesize/raw streaming landed in v0.3, #7).
+- **No server mode** (possible Roadmap, §9; local HTTP spike #8 closed no-go — §9 item 6).
+- ~~**No `vote` mode** yet.~~ **Shipped in v1.1** (CAC-09 / #3) — `--mode vote --choices "A,B,C"` tallies a fixed ballot (plurality winner or split). Complementary to the verdict's `provider_votes`, which cluster free-form stances with evidence (§4a); the two are not the same thing.
 
 ---
 
@@ -408,7 +408,7 @@ score is validated against real runs.
 
 ### Landed history (kept struck-through for traceability)
 
-1. ~~**`vote` mode**~~ **ABSORBED in v1.1** — `provider_votes` + `consensus_label`/`consensus_score` deliver "who voted for what + the split" with evidence; the structured-answer-schema prerequisite is satisfied by the LCD schemas + native structured output (§4a).
+1. ~~**`vote` mode**~~ **SHIPPED in v1.1 (CAC-09 / #3)** — a real constrained-choice mode (`--mode vote --choices "A,B,C"` / `Council.vote()`): each member picks one labelled option, tallied to a plurality `winner`/`split` on `result.vote`. Complementary to the verdict's `provider_votes` (§4a), not the same thing.
 2. ~~**Debate convergence/stop criteria**~~ **LANDED (#4)** — opt-in `converge_threshold` early-stop on round-over-round text stability (`difflib`); off by default; recorded on `CouncilResult.converged`/`convergence_score`. (NB: text-stability ≠ the verdict `consensus_score`, §4a.)
 3. ~~**More first-class providers**~~ **LANDED (#5)** — `groq`/`deepseek`/`mistral`/`together` promoted to typed defaults (`registry.OPENAI_COMPAT_PROVIDERS`); no native adapter; aggregators excluded (§11).
 4. ~~**Caching**~~ **LANDED (#6)** — opt-in result cache (`config.cache` / `--cache`), off by default, on-disk, secret-free SHA-256 key, corrupt = silent miss; hit on `CouncilResult.cached`.
@@ -483,11 +483,12 @@ the auditable verdict, the owned provider layer, the no-aggregator posture, and 
 
 **Open:** none currently.
 
-2. ~~**`vote` answer schema.**~~ **RESOLVED in v1.1** — the question (constrained answer
-   format vs. post-hoc tally, and its structured-output prerequisite) is moot: the verdict
-   ships the LCD verdict/member JSON Schemas enforced via native structured output across
-   all three adapters, and `provider_votes` records the per-provider positions. The
-   structured-output prerequisite this question flagged is now landed (§4a).
+2. ~~**`vote` answer schema.**~~ **RESOLVED in v1.1** by *two* complementary deliveries: (a) a
+   real constrained-choice **`vote` mode** (CAC-09 / #3) — fixed labelled ballot, plurality
+   winner/split on `result.vote`; and (b) the verdict's structured `provider_votes`, which
+   cluster free-form stances with evidence (LCD JSON Schemas + native structured output, §4a).
+   The constrained-answer-format question is answered by the ballot; the tally question by
+   `provider_votes`.
 
 **Resolved (2026-06-08):** questions 1 (synthesizer-in-council), 3 (per-member overrides),
 4 (server-mode scope, plus the 2026-06-09 #8 spike outcome), and 5 (first-class provider
