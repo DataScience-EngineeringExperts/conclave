@@ -5,6 +5,33 @@ All notable changes to conclave are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`ModelHarnessManifest` now rides on *every* mode's result — a true invariant.**
+  The auditable manifest was documented as first-class on every `CouncilResult`, but
+  `debate`, `adversarial`, and `vote` built their result directly in `modes.py` and
+  returned with `manifest = None` (only `ask`/synthesize attached one). The fix moves
+  manifest attachment to the single chokepoint every mode funnels through
+  (`Council._cached_run` → new `Council._ensure_manifest`): it fills the manifest from
+  the resolved membership + collected answers for `debate`/`adversarial`/`vote`
+  (including the zero-members early return and cache hits), is a no-op for the
+  synthesize/raw path that already builds its own richer manifest, and stamps
+  `secret_safety = verified_no_secrets` when the manifest is provably clean. Regression
+  tests (`tests/test_manifest_all_modes.py`) pin the invariant per mode so it cannot
+  drift again. The clustering **verdict** scope is unchanged: it still runs on
+  `synthesize`/`ask` only and is intentionally not layered onto `adversarial` (which
+  already emits a judge verdict) — see PDD §4a.
+
+### Documentation
+
+- Reconciled `README.md`, `SYSTEM_CONTEXT_DIAGRAM.md`, and the PDD so the
+  manifest-on-every-result claim is now accurate, and documented the constrained-choice
+  **`vote` mode** as **shipped** (CAC-09 / #3) rather than "absorbed by `provider_votes`"
+  — the two are complementary (a fixed ballot vs. clustered free-form stances), not the
+  same feature. Added the `--mode vote --choices` CLI example and a §4a verdict-scope note.
+
 ## [1.1.0] - 2026-06-21
 
 The **auditable council**. Every run now produces a structured, agreement-scored,
@@ -58,10 +85,10 @@ reproducible arithmetic over the model's clustering — never an LLM-emitted fig
 
 ### Note
 
-- **`vote` mode (council issue #3) is absorbed/superseded** by the verdict work:
-  `provider_votes` records which provider took which position (with evidence) and
-  `consensus_label`/`consensus_score` report the split deterministically — no separate
-  `vote` mode is shipped or planned.
+- **`vote` (council issue #3):** at 1.1.0 the verdict's `provider_votes` +
+  `consensus_label`/`consensus_score` were considered to subsume it. **Superseded post-1.1.0**
+  — a real constrained-choice `vote` mode later shipped (CAC-09 / #3; see `[Unreleased]`),
+  complementary to `provider_votes`: a fixed ballot vs. clustered free-form stances.
 
 ## [1.0.0] - 2026-06-14
 

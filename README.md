@@ -22,8 +22,11 @@ verdict you can act on — structured, scored for agreement, fully auditable**: 
 `CouncilVerdict` exposing agreement, `conflicts`, `minority_reports`, and `provider_votes`;
 a deterministic `consensus_score` (arithmetic over the model's clustering, *never* an
 LLM-emitted number); and a redacted `ModelHarnessManifest` recording how the run executed and
-which model produced the disagreement analysis. The verdict is **default-on**. (A `vote` mode
-was once on the roadmap; it is **absorbed** by `provider_votes` — see below.)
+which model produced the disagreement analysis. The verdict is **default-on**, and the manifest
+rides on **every** result — for all five modes (`synthesize`, `raw`, `debate`, `adversarial`,
+`vote`), not just `ask`. A constrained-choice **`vote` mode** (`--mode vote --choices ...`) also
+shipped in v1.1 (CAC-09 / #3) — distinct from the verdict's `provider_votes`, which score
+free-form agreement rather than tally a fixed ballot.
 
 See the canonical spec and design docs:
 
@@ -118,16 +121,21 @@ conclave ask "Is a service mesh worth it for 8 services?" \
 conclave ask "Defend event sourcing for this ledger." \
   -c grok,gemini,perplexity --mode adversarial --proposer grok
 
-# Machine-readable output (works for every mode; carries rounds/adversarial too)
+# Vote: each member picks one labelled choice; plurality winner (or split) is tallied
+conclave ask "Which datastore for this workload?" \
+  -c grok,gemini,claude --mode vote --choices "Postgres,DynamoDB,MongoDB"
+
+# Machine-readable output (works for every mode; carries rounds/adversarial/vote too)
 conclave ask "..." -c grok,perplexity --mode debate --json
 ```
 
-Mode flags at a glance: `--mode synthesize|raw|debate|adversarial`. `--rounds N`
+Mode flags at a glance: `--mode synthesize|raw|debate|adversarial|vote`. `--rounds N`
 (default 2) is the *maximum* round count for `debate`; `--converge-threshold FLOAT`
 (or `--converge`/`--no-converge`) optionally stops a debate early once answers
 stabilize round-over-round (off by default — `--rounds` runs in full). `--proposer
-NAME` (default: first member) applies to `adversarial`. `--synthesizer/-s` overrides
-the synthesizer *and* the adversarial judge.
+NAME` (default: first member) applies to `adversarial`. `--choices "A,B,C"` (two or
+more) is required for `vote`. `--synthesizer/-s` overrides the synthesizer *and* the
+adversarial judge. Every mode's result carries the auditable `ModelHarnessManifest`.
 
 `--council` accepts either a comma-separated list of friendly names or the name
 of a council defined in your config (see below). The built-in `default` council
