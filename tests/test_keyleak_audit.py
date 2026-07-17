@@ -511,7 +511,9 @@ async def test_fan_out_catch_all_error_is_redacted(monkeypatch):
 
     import conclave.council as council_mod
 
-    async def raising_call_model(name, model_id, messages, *, temperature=0.7, timeout=120.0):
+    async def raising_call_model(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None
+    ):
         # Simulate an unexpected escape carrying the key in its text.
         raise RuntimeError(f"unexpected boom leaking {PLANTED}")
 

@@ -76,7 +76,7 @@ def _assert_verified_manifest(result, expected_mode: str) -> None:
 def _elite_phase(messages) -> str:
     """Identify the elite phase from its system prompt."""
     system = _system_text(messages)
-    if "evidence auditor" in system:
+    if "claim auditor" in system:
         return "critique"
     if "revise your original answer" in system:
         return "revision"
