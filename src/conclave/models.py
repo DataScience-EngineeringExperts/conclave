@@ -15,6 +15,9 @@ from .verdict import (
     ProviderVote,
 )
 
+ELITE_PROTOCOL_VERSION = "elite_v1"
+ELITE_MIN_RESPONDERS = 3
+
 # NOTE: ``ModelHarnessManifest`` is imported at the BOTTOM of this module (just
 # before the ``model_rebuild()`` calls), not here. ``manifest`` imports
 # :class:`TokenUsage` from this module, so importing it before ``TokenUsage`` is
@@ -82,6 +85,18 @@ class ModelAnswer(BaseModel):
     def latency_ms(self) -> float:
         """Call latency in milliseconds, derived from :attr:`latency_s`."""
         return self.latency_s * 1000.0
+
+
+class EliteResult(BaseModel):
+    """Phase artifacts and completion state for an elite protocol run."""
+
+    protocol_version: str = ELITE_PROTOCOL_VERSION
+    required_responders: int = Field(default=ELITE_MIN_RESPONDERS, ge=ELITE_MIN_RESPONDERS)
+    completed: bool = False
+    failure_reason: str | None = None
+    initial_answers: list[ModelAnswer] = Field(default_factory=list)
+    critiques: list[ModelAnswer] = Field(default_factory=list)
+    revisions: list[ModelAnswer] = Field(default_factory=list)
 
 
 class StreamEvent(BaseModel):
@@ -284,6 +299,7 @@ class CouncilResult(BaseModel):
     rounds: list[DebateRound] = Field(default_factory=list)
     adversarial: AdversarialResult | None = None
     vote: VoteResult | None = None
+    elite: EliteResult | None = None
     cached: bool = False
     converged: bool = False
     convergence_score: float | None = None

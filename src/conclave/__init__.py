@@ -48,9 +48,12 @@ from .manifest import (
     VerdictExtraction,
 )
 from .models import (
+    ELITE_MIN_RESPONDERS,
+    ELITE_PROTOCOL_VERSION,
     AdversarialResult,
     CouncilResult,
     DebateRound,
+    EliteResult,
     ModelAnswer,
     StreamEvent,
     TokenUsage,
@@ -83,6 +86,9 @@ __all__ = [
     "TokenUsage",
     "DebateRound",
     "AdversarialResult",
+    "EliteResult",
+    "ELITE_PROTOCOL_VERSION",
+    "ELITE_MIN_RESPONDERS",
     "StreamEvent",
     "ConclaveConfig",
     "load_config",
