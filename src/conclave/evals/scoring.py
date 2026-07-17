@@ -153,6 +153,7 @@ class ReliabilityMetrics(EvalModel):
 
     grader_pair: tuple[str, str] | None = None
     cohen_kappa: float | None = Field(default=None, ge=-1.0, le=1.0)
+    kappa_method: Literal["cohen_fixed_pair", "fleiss_rotating_pairs"] | None = None
     paired_judgments: int = Field(ge=0)
     disagreements: int = Field(ge=0)
     adjudicated_disagreements: int = Field(ge=0)
@@ -174,6 +175,7 @@ class ReliabilityStratum(EvalModel):
     raw_agreement: float | None = Field(default=None, ge=0.0, le=1.0)
     positive_prevalence: float | None = Field(default=None, ge=0.0, le=1.0)
     cohen_kappa: float | None = Field(default=None, ge=-1.0, le=1.0)
+    kappa_method: Literal["cohen_fixed_pair", "fleiss_rotating_pairs"] | None = None
 
 
 class StudyScoreReport(EvalModel):
@@ -660,6 +662,19 @@ def cohen_kappa(first: Sequence[bool], second: Sequence[bool]) -> float | None:
     return (observed - expected) / (1 - expected)
 
 
+def fleiss_kappa(pairs: Sequence[tuple[bool, bool]]) -> float | None:
+    """Return label-invariant Fleiss kappa for two ratings per item."""
+
+    if not pairs:
+        return None
+    observed = sum(left == right for left, right in pairs) / len(pairs)
+    positive_prevalence = sum(left + right for left, right in pairs) / (2 * len(pairs))
+    expected = positive_prevalence**2 + (1 - positive_prevalence) ** 2
+    if expected == 1.0:
+        return None
+    return (observed - expected) / (1 - expected)
+
+
 def _target_map(blind_map: BlindMap | None) -> dict[str, str]:
     if blind_map is None:
         return {}
@@ -682,7 +697,8 @@ def _planned_target(record: GraderJudgment | AdjudicationRecord, mapping: Mappin
 def _paired_values(
     judgments_by_run: Mapping[str, Sequence[GraderJudgment]], run_ids: Sequence[str]
 ) -> tuple[tuple[str, str] | None, list[tuple[bool, bool]]]:
-    graders = sorted({item.grader_id for values in judgments_by_run.values() for item in values})
+    relevant = [item for run_id in run_ids for item in judgments_by_run.get(run_id, ())]
+    graders = sorted({item.grader_id for item in relevant})
     grader_pair = (graders[0], graders[1]) if len(graders) == 2 else None
     pairs = []
     for run_id in sorted(run_ids):
@@ -694,14 +710,22 @@ def _paired_values(
 
 def _agreement_statistics(
     pairs: Sequence[tuple[bool, bool]],
-) -> tuple[float | None, float | None, float | None]:
+    grader_pair: tuple[str, str] | None,
+) -> tuple[
+    float | None,
+    float | None,
+    float | None,
+    Literal["cohen_fixed_pair", "fleiss_rotating_pairs"] | None,
+]:
     if not pairs:
-        return None, None, None
+        return None, None, None, None
     first = [left for left, _ in pairs]
     second = [right for _, right in pairs]
     raw_agreement = sum(left == right for left, right in pairs) / len(pairs)
     prevalence = (sum(first) + sum(second)) / (2 * len(pairs))
-    return raw_agreement, prevalence, cohen_kappa(first, second)
+    if grader_pair is not None:
+        return raw_agreement, prevalence, cohen_kappa(first, second), "cohen_fixed_pair"
+    return raw_agreement, prevalence, fleiss_kappa(pairs), "fleiss_rotating_pairs"
 
 
 def _reliability(
@@ -727,7 +751,7 @@ def _reliability(
     )
     rate = adjudicated_disagreements / disagreements if disagreements else 0.0
     grader_pair, pairs = _paired_values(judgments_by_run, tuple(judgments_by_run))
-    raw_agreement, prevalence, kappa = _agreement_statistics(pairs)
+    raw_agreement, prevalence, kappa, kappa_method = _agreement_statistics(pairs, grader_pair)
     strata: list[ReliabilityStratum] = []
     if manifest.frozen_design is not None:
         for family in sorted(set(manifest.frozen_design.task_family_map.values())):
@@ -736,8 +760,10 @@ def _reliability(
                 for run in manifest.planned_runs
                 if manifest.frozen_design.task_family_map[run.task_id] == family
             ]
-            _, stratum_pairs = _paired_values(judgments_by_run, run_ids)
-            agreement, stratum_prevalence, stratum_kappa = _agreement_statistics(stratum_pairs)
+            stratum_pair, stratum_pairs = _paired_values(judgments_by_run, run_ids)
+            agreement, stratum_prevalence, stratum_kappa, stratum_method = _agreement_statistics(
+                stratum_pairs, stratum_pair
+            )
             strata.append(
                 ReliabilityStratum(
                     stratum_type="family",
@@ -746,14 +772,17 @@ def _reliability(
                     raw_agreement=agreement,
                     positive_prevalence=stratum_prevalence,
                     cohen_kappa=stratum_kappa,
+                    kappa_method=stratum_method,
                 )
             )
         for roster_id in sorted(roster.roster_id for roster in manifest.frozen_design.rosters):
             run_ids = [
                 run.planned_run_id for run in manifest.planned_runs if run.roster_id == roster_id
             ]
-            _, stratum_pairs = _paired_values(judgments_by_run, run_ids)
-            agreement, stratum_prevalence, stratum_kappa = _agreement_statistics(stratum_pairs)
+            stratum_pair, stratum_pairs = _paired_values(judgments_by_run, run_ids)
+            agreement, stratum_prevalence, stratum_kappa, stratum_method = _agreement_statistics(
+                stratum_pairs, stratum_pair
+            )
             strata.append(
                 ReliabilityStratum(
                     stratum_type="roster",
@@ -762,11 +791,13 @@ def _reliability(
                     raw_agreement=agreement,
                     positive_prevalence=stratum_prevalence,
                     cohen_kappa=stratum_kappa,
+                    kappa_method=stratum_method,
                 )
             )
     return ReliabilityMetrics(
         grader_pair=grader_pair,
         cohen_kappa=kappa,
+        kappa_method=kappa_method,
         paired_judgments=len(pairs),
         disagreements=disagreements,
         adjudicated_disagreements=adjudicated_disagreements,

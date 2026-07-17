@@ -319,6 +319,7 @@ def test_paid_reliability_reports_raw_agreement_prevalence_and_strata() -> None:
     )
 
     assert report.evidence_classification == "paid_exploratory_pilot"
+    assert report.reliability.kappa_method == "cohen_fixed_pair"
     assert report.reliability.raw_agreement == pytest.approx(
         (len(successful) - 1) / len(successful)
     )
@@ -336,3 +337,41 @@ def test_paid_reliability_reports_raw_agreement_prevalence_and_strata() -> None:
 
 def test_constant_prevalence_kappa_is_undefined_not_perfect() -> None:
     assert cohen_kappa([True, True], [True, True]) is None
+
+
+def test_rotating_grader_kappa_is_label_invariant_and_stratified() -> None:
+    manifest, study_run = _paid_study()
+    successful = [record for record in study_run.records if record.outcome == "success"]
+    pairs = (("A", "B"), ("B", "C"), ("A", "C"), ("A", "B"))
+    ratings = ((False, False), (False, True), (False, False), (False, True))
+
+    def judgments(rename_b: bool):
+        values = []
+        for index, record in enumerate(successful):
+            pair = pairs[index % len(pairs)]
+            outcomes = ratings[index % len(ratings)]
+            for grader, outcome in zip(pair, outcomes, strict=True):
+                grader_id = "Z" if rename_b and grader == "B" else grader
+                values.append(_judgment(record.planned_run_id, grader_id, value=outcome))
+        return tuple(values)
+
+    original = score_study(
+        manifest=manifest,
+        study_run=study_run,
+        raw_judgments=judgments(False),
+        bootstrap_seed=19,
+        bootstrap_samples=100,
+    )
+    renamed = score_study(
+        manifest=manifest,
+        study_run=study_run,
+        raw_judgments=judgments(True),
+        bootstrap_seed=19,
+        bootstrap_samples=100,
+    )
+
+    assert original.reliability.grader_pair is None
+    assert original.reliability.kappa_method == "fleiss_rotating_pairs"
+    assert original.reliability.cohen_kappa == pytest.approx(renamed.reliability.cohen_kappa)
+    assert original.reliability.raw_agreement == renamed.reliability.raw_agreement
+    assert all(item.kappa_method is not None for item in original.reliability.strata)
