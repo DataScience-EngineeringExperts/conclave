@@ -23,7 +23,13 @@ the canonical authority spec on top of those.
 
 | Doc | Path | Purpose |
 |-----|------|---------|
-| **Product Design Document** | [`docs/PRODUCT_DESIGN_DOCUMENT.md`](docs/PRODUCT_DESIGN_DOCUMENT.md) | **Canonical** product spec: six modes including implemented-but-unreleased Elite, its fixed three-success phase gate and cost/latency tradeoff, the v1.1 auditable verdict, manifest, architecture, boundaries, and roadmap. **When docs disagree, the PDD wins.** |
+| **Product Design Document** | [`docs/PRODUCT_DESIGN_DOCUMENT.md`](docs/PRODUCT_DESIGN_DOCUMENT.md) | **Canonical** product spec: six modes including implemented-but-unreleased Elite, its fixed three-success phase gate and cost/latency tradeoff, the v1.1 execution-traceable verdict, manifest, architecture, boundaries, and roadmap. **When docs disagree, the PDD wins.** |
+
+## Product plans
+
+| Doc | Path | Purpose |
+|-----|------|---------|
+| **Decision Quality Roadmap** | [`docs/plans/2026-07-17-decision-quality-roadmap.md`](docs/plans/2026-07-17-decision-quality-roadmap.md) | H0-H4 prove-it roadmap: Elite correctness, randomized ablations, source-grounded Decision Briefs, buyer pull, outcome learning, old-backlog disposition, demand gates, and kill criteria. |
 
 ---
 
@@ -101,6 +107,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 
 | Date | Change |
 |------|--------|
+| 2026-07-17 | Reframed the product roadmap around empirically proven decision quality: narrowed current claims to execution traceability, identified answer IDs as internal provenance rather than external evidence, gated Elite merge on H0 correctness, and added H1-H4 evidence, buyer, and outcome gates. |
 | 2026-07-17 | Documented the implemented-but-unreleased Elite Decision Protocol: fixed three-success gates, initial/audit/revision artifacts, existing final verdict, phased receipts, failure semantics, cost/latency tradeoff, and no streaming. |
 | 2026-07-13 | **Manifest-on-every-result invariant fix + doc reconciliation.** `ModelHarnessManifest` now attaches on all five modes (was `None` for `debate`/`adversarial`/`vote`) via a single-site fix at `Council._cached_run` → new `_ensure_manifest`; regression tests in `tests/test_manifest_all_modes.py`. Docs corrected so the manifest-on-every-result claim is accurate and the `vote` mode is documented as **shipped** (CAC-09 / #3), not "absorbed" — across README, `SYSTEM_CONTEXT_DIAGRAM.md`, PDD (§1/§3/§4a/§8/§9/§12), and `CHANGELOG.md` (`[Unreleased]`). Verdict scope unchanged (still `synthesize`/`ask`-only; not layered on `adversarial`). |
 | 2026-06-21 | **v1.1 docs pivot — the auditable multi-model council.** PDD reframed to the auditable-council wedge (new §4a: CouncilResult v2, deterministic `position_cluster_ratio_v1` consensus, native + fallback structured output, the verdict-optional rule, the secret-free `ModelHarnessManifest`); `vote` mode marked **absorbed** by `provider_votes` across PDD §1/§4/§8/§9/§12; demand-gated v1.2 "Operable Council" roadmap. System Context diagram gains the verdict pipeline + manifest (mermaid re-validated). README gains an "Auditable verdict" section (CLI panel + library example). `CHANGELOG.md` `[1.1.0]` added. v0.x mode-detail prose archived to [`docs/archive/pdd-v0.x-modes-detail.md`](docs/archive/pdd-v0.x-modes-detail.md) to keep the PDD under 500 lines. New modules documented: `verdict.py`, `agreement.py`, `verdict_synthesis.py`, `manifest.py`. |

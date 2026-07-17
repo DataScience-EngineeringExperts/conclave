@@ -3,7 +3,7 @@
 > **Status:** v1.1 stable (the BYO-keys multi-model council: synthesize/raw/debate/
 > adversarial/vote, 9 providers, owned httpx provider highway, key-leak hardening, streaming,
 > cache). **v1.1 — the auditable council — SHIPPED:** every run now yields a structured,
-> agreement-scored, fully auditable **verdict** plus a redacted execution **manifest** (see
+> agreement-scored, execution-traceable **verdict** plus a redacted execution **manifest** (see
 > §4a). The quality-first **Elite Decision Protocol is implemented but unreleased**.
 > This is the **canonical authority document** for conclave's product scope, design,
 > and roadmap. When this document and any other doc disagree, this document wins. Code is the
@@ -43,8 +43,8 @@ response; v0.2 adds **council modes** — **debate** (multi-round) and **adversa
 deliberation.
 
 **The v1.1 wedge — the auditable council.** A synthesis paragraph is not enough to *act* on.
-v1.1 makes the product identity precise: **a multi-model council verdict you can act on —
-structured, scored for agreement, fully auditable.** Every run yields a `CouncilVerdict`
+v1.1 makes the product identity precise: **a multi-model council verdict you can inspect —
+structured, scored for agreement, and execution-traceable.** Every run yields a `CouncilVerdict`
 exposing agreement, disagreement (`conflicts`), minority views (`minority_reports`), and
 per-provider votes (`provider_votes`); a deterministic `consensus_score` (arithmetic over the
 model's clustering, *never* an LLM-emitted number); and a redacted `ModelHarnessManifest` (how
@@ -52,7 +52,7 @@ the run executed + which model produced the analysis) riding on **every** result
 modes (one chokepoint, §4a). A constrained-choice **`vote` mode** also **shipped** (CAC-09 / #3,
 `--mode vote --choices "A,B,C"` → plurality winner/split) — distinct from `provider_votes`.
 
-The next product-quality step is **Elite** (implemented, unreleased): independent answers → council-wide evidence audits → member revisions → the existing synthesis and auditable verdict. Elite requires three successful responders at every member phase and intentionally spends more calls and time to improve consequential decisions.
+The next product-quality step is **Elite** (implemented, unreleased): independent answers → council-wide answer/claim audits → member revisions → the existing synthesis and execution-traceable verdict. Elite requires three successful responders at every member phase and intentionally spends more calls and time to improve consequential decisions.
 
 conclave's first real use was an **adversarial design review**: a council of Grok, Gemini,
 Perplexity, and Claude critiquing a security-tool strategy and catching flaws a single
@@ -177,8 +177,8 @@ evidence_answer_ids}`; `CouncilConflict{topic, position_labels, summary, consens
 `ProviderVote{provider, position_label, confidence}`; `MinorityReport{providers, claim,
 evidence_answer_ids, why_it_matters}`.
 
-**Evidence is the product, not a nicety.** Every clustered stance cites `evidence_answer_ids`
-(the member `answer_id`s backing it) and every conflict names the positions in tension — a
+**Answer provenance is the current product, not external evidence.** Every clustered stance
+cites `evidence_answer_ids` (the member `answer_id`s backing it) and every conflict names the positions in tension — a
 conflict that just says "models disagreed about cost" without pointing at answers is a
 *failure*. `ProviderVote.confidence` is recorded but **never used in arithmetic**.
 
@@ -200,14 +200,15 @@ The consensus number is **arithmetic over the model's clustering, never LLM-emit
 | `majority` | 0.5 < score < 0.75 |
 | `split` | score ≤ 0.5 (no majority); a 1-of-2 tie is `0.5` = `split`, never "50% consensus" |
 
-**Why it is auditable, not theater.** The extraction schema carries *no* consensus field —
+**Why it is execution-traceable, not ground truth.** The extraction schema carries *no* consensus field —
 `verdict_extraction_json_schema()` strips it and `VerdictExtractionModel` ignores extra keys,
 so a model that smuggles a number in is dropped by the validator. The module deliberately
 does **not** import `difflib`: text-similarity is the debate `convergence_score` (a
 *forbidden* consensus measure), never conflated with agreement. The single LLM-assisted step
 is the **semantic clustering** of stances; the number is reproducible arithmetic over it,
 each cluster cites its `evidence_answer_ids`, and the manifest records which model + prompt
-version did the clustering — so the score is traceable.
+version did the clustering — so the score is reproducible and traceable. Answer IDs point to
+council outputs, not external sources; source grounding is Roadmap (§9).
 
 ### Verdict extraction + native structured output
 `extract_verdict(prompt, member_answers, *, synthesizer_name, synthesizer_model_id,
@@ -403,26 +404,20 @@ Condensed history (v0.x mode-detail archived per §4, per-release changelog in `
 `adversarial`/`debate` shipped in v0.2; streaming/cache/convergence in v1.0; the **auditable
 council shipped in v1.1** (§4a — the wedge).
 
-### Elite quality track (implemented, unreleased)
+The revised thesis is a **source-grounded, execution-traceable decision record with
+empirically proven quality**. Current answer IDs identify model outputs, not external evidence;
+"fully auditable" is therefore too broad until source grounding ships. Elite remains
+implemented but unreleased on draft PR #51.
 
-Elite is the owner-approved next product slice: stronger decisions before broader operability. Its source implementation is complete, but this document assigns no release number and claims no publication. Release requires normal verification, versioning, and publishing gates; the operability prove-it gate below does not block this quality track.
-
-### v1.2 — the "Operable Council" (DEMAND-GATED, not scheduled)
-The broader v1.2 operability substrate is held behind a **prove-it gate**: put the auditable
-verdict and Elite workflow in front of real users
-first; observed pull authorizes the build. This substrate is demoted from the old
-"engagement-modes-first" plan and only builds if demand appears — **engagement modes**
-(regular/smart) on a generation-settings substrate; **thin task profiles**
-(cheap/balanced/frontier/critic); **profile compilation + routing**
-(`parallel_synthesize`, `sequential_fallback`, `cheap_then_smart`); a **capability cache**
-with explicit refresh/discovery; `conclave doctor` + `providers` subcommands; a minimal
-mock/replay transport; and a narrow eval harness. The `cheap_then_smart` soft-triggers (low
-confidence / high disagreement) are gated behind **proven scoring** — flag-only until the
-score is validated against real runs.
-
-### Landed history (kept struck-through for traceability)
-
-Shipped items remain traceable in `CHANGELOG.md`: vote (CAC-09/#3), debate convergence (#4), four additional first-class providers (#5), caching (#6), streaming (#7), and key-leak hardening. The local HTTP spike (#8) remains a no-go; prefer a thin stdio MCP server if cross-process access gains demand. Roadmap items are reprioritized freely but not removed on one data point.
+The canonical roadmap is
+[`docs/plans/2026-07-17-decision-quality-roadmap.md`](plans/2026-07-17-decision-quality-roadmap.md):
+**H0** closes Elite correctness and wording gaps before merge; **H1** runs budget-matched,
+randomized ablations with go/kill gates; **H2** adds a minimal Markdown evidence bundle,
+claim ledger, deterministic citation-integrity checks, readiness tri-state, and Markdown/JSON
+Decision Brief; **H3** proves onboarding, repeat use, and paid buyer pull; **H4** learns
+escalation and roster weighting from outcomes. The plan also records retain/promote/retire
+decisions for the old v1.2 backlog, commodity-versus-moat boundaries, demand-gated items, and
+portfolio kill criteria. No horizon is a release commitment.
 
 ---
 
@@ -456,13 +451,13 @@ chase LiteLLM (routing/budgets), Vercel AI SDK (provider abstraction), LangChain
 
 **Where we are *now* distinct** (re-anchored on what competitors have not replicated):
 
-1. **The auditable verdict (the v1.1 wedge).** A council answer you can *act on*: structured
+1. **The execution-traceable verdict (the v1.1 wedge).** A council answer you can inspect: structured
    positions, `conflicts` and `minority_reports` that cite `evidence_answer_ids`,
    `provider_votes`, a **deterministic** `consensus_score` (arithmetic over the model's
    clustering, never an LLM-emitted number), and a redacted `ModelHarnessManifest` recording
    which model + prompt version produced the disagreement analysis. Peers ship "structured
-   verdicts" as synthesizer *content*; conclave's verdict is a reproducible, evidence-cited,
-   provenance-stamped object. **This is now the most defensible claim.**
+   verdicts" as synthesizer *content*; conclave's current verdict is a reproducible,
+   answer-linked, provenance-stamped object. External source grounding remains Roadmap (§9).
 2. **Owned, zero-LLM-SDK provider highway** — a single hand-owned httpx transport + adapter
    registry, no provider SDKs, no OpenRouter. Competitors lean on aggregators or vendor SDKs.
 3. **Direct-keys / no-middleman + name-only key rigor** — never an aggregator, never a token
@@ -471,9 +466,9 @@ chase LiteLLM (routing/budgets), Vercel AI SDK (provider abstraction), LangChain
 4. **A telemetry-grade `CouncilResult` contract** — per-model latency + token usage + typed
    error capture as a *stable downstream contract* (the mcp-warden dev-time story).
 
-We are the small, embeddable, **auditable** council primitive — not a LangGraph/AutoGen
+We are the small, embeddable, **execution-traceable** council primitive — not a LangGraph/AutoGen
 rival. Against the direct peers (`llm-council-core`, `the-llm-council`) we differentiate on
-the auditable verdict, the owned provider layer, the no-aggregator posture, and key rigor.
+the execution-traceable verdict, the owned provider layer, the no-aggregator posture, and key rigor.
 
 ---
 
