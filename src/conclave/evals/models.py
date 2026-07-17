@@ -28,6 +28,7 @@ EVAL_CONDITION_IDS: tuple[ConditionId, ...] = (
 )
 
 Sha256Digest = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+RunOutcome = Literal["success", "failed", "timed_out", "malformed", "abstained", "incomplete"]
 
 
 class EvalModel(BaseModel):
@@ -73,15 +74,36 @@ class PlannedRun(EvalModel):
     max_output_tokens: int = Field(gt=0)
 
 
-class RunRecord(EvalModel):
-    """Failure-inclusive result for one predeclared cell."""
+class ProtocolExecution(EvalModel):
+    """Typed output returned by an injected offline protocol executor."""
 
-    planned_run_id: str = Field(pattern=r"^run_[0-9a-f]{24}$")
-    outcome: Literal["success", "failed", "timed_out", "malformed", "abstained", "incomplete"]
+    outcome: RunOutcome
     output: str | None = None
     completion_tokens: int | None = Field(default=None, ge=0)
     latency_ms: float | None = Field(default=None, ge=0)
     error_category: str | None = None
+
+
+class RunRecord(EvalModel):
+    """Failure-inclusive result for one predeclared cell."""
+
+    planned_run_id: str = Field(pattern=r"^run_[0-9a-f]{24}$")
+    outcome: RunOutcome
+    output: str | None = None
+    completion_tokens: int | None = Field(default=None, ge=0)
+    latency_ms: float | None = Field(default=None, ge=0)
+    error_category: str | None = None
+
+
+class StudyRun(EvalModel):
+    """Complete failure-inclusive execution result for a frozen manifest."""
+
+    study_id: str = Field(min_length=1)
+    records: tuple[RunRecord, ...]
+    total_planned_runs: int = Field(ge=1)
+    outcome_counts: dict[RunOutcome, int]
+    total_completion_tokens: int = Field(ge=0)
+    total_latency_ms: float = Field(ge=0)
 
 
 class ScoreRecord(EvalModel):

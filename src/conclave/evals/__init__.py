@@ -9,10 +9,12 @@ from .models import (
     ConditionSpec,
     GraderKey,
     PlannedRun,
+    ProtocolExecution,
     PublicTask,
     RunRecord,
     ScoreRecord,
     StudyManifest,
+    StudyRun,
 )
 
 __all__ = [
@@ -20,8 +22,10 @@ __all__ = [
     "ConditionSpec",
     "GraderKey",
     "PlannedRun",
+    "ProtocolExecution",
     "PublicTask",
     "RunRecord",
     "ScoreRecord",
     "StudyManifest",
+    "StudyRun",
 ]
