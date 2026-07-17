@@ -255,4 +255,3 @@ Confirm no `.env`, credentials, generated caches, release tags, or publishing ch
 **Step 5: Commit**
 
 `git add README.md docs/PRODUCT_DESIGN_DOCUMENT.md SYSTEM_CONTEXT_DIAGRAM.md DOCUMENTATION_INDEX.md CHANGELOG.md && git commit -m "docs: specify elite decision protocol"`
-

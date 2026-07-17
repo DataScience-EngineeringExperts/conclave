@@ -66,4 +66,3 @@ unverified claims from disproven claims because conclave has no retrieval or too
 - Manifest receipts expose every member phase and remain secret-free.
 - Existing modes, cache behavior, output schemas, and public APIs remain compatible.
 - Unit, CLI, manifest, cache, secret-safety, lint, formatting, and full test suites pass.
-
