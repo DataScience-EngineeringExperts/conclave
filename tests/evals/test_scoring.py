@@ -126,6 +126,48 @@ def test_scoring_preserves_raw_records_and_keeps_adjudication_separate() -> None
     assert report.reliability.adjudication_rate == 1.0
 
 
+@pytest.mark.parametrize(
+    ("raw_values", "source_indexes", "expected"),
+    (
+        ((True,), (0,), "disagreement"),
+        ((True, True), (0, 1), "disagreement"),
+        ((True, False), (0,), "exactly all"),
+    ),
+)
+def test_adjudication_only_resolves_complete_multi_grader_disagreement(
+    raw_values, source_indexes, expected
+) -> None:
+    manifest, run = _study(task_count=1)
+    planned_id = manifest.planned_runs[0].planned_run_id
+    raw = tuple(
+        GraderJudgment(
+            judgment_id=f"judgment-{index}",
+            planned_run_id=planned_id,
+            grader_id=f"grader-{index}",
+            critical_error_free=value,
+        )
+        for index, value in enumerate(raw_values)
+    )
+    adjudication = AdjudicationRecord(
+        adjudication_id="adjudication-invalid",
+        planned_run_id=planned_id,
+        critical_error_free=True,
+        source_judgment_ids=tuple(raw[index].judgment_id for index in source_indexes),
+        adjudicator_id="adjudicator",
+        rationale="Attempted override.",
+    )
+
+    with pytest.raises(ValueError, match=expected):
+        score_study(
+            manifest=manifest,
+            study_run=run,
+            raw_judgments=raw,
+            adjudications=(adjudication,),
+            bootstrap_seed=9,
+            bootstrap_samples=10,
+        )
+
+
 def test_critical_error_free_rate_keeps_all_planned_runs_in_denominator() -> None:
     manifest, successful = _study(task_count=1)
     first_condition = manifest.planned_runs[0].condition_id

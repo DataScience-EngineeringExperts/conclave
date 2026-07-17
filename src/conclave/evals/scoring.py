@@ -17,6 +17,7 @@ from .models import (
     StudyManifest,
     StudyRun,
 )
+from .runner import validate_run_records
 
 
 class GraderJudgment(EvalModel):
@@ -288,6 +289,7 @@ def score_study(
 
     if study_run.study_id != manifest.study_id:
         raise ValueError("study run and manifest study_id values must match")
+    validate_run_records(manifest, study_run.records)
     planned_by_id = {run.planned_run_id: run for run in manifest.planned_runs}
     run_by_id = {record.planned_run_id: record for record in study_run.records}
     if set(run_by_id) != set(planned_by_id) or len(run_by_id) != len(study_run.records):
@@ -321,8 +323,12 @@ def score_study(
         if not set(adjudication.source_judgment_ids).issubset(judgment_ids):
             raise ValueError("adjudication references an unknown source judgment")
         expected_source_ids = {item.judgment_id for item in judgments_by_run[run_id]}
-        if not set(adjudication.source_judgment_ids).issubset(expected_source_ids):
-            raise ValueError("adjudication source judgments must target the same run")
+        source_ids = set(adjudication.source_judgment_ids)
+        if source_ids != expected_source_ids:
+            raise ValueError("adjudication must cite exactly all same-run source judgments")
+        values = {item.critical_error_free for item in judgments_by_run[run_id]}
+        if len(expected_source_ids) < 2 or len(values) < 2:
+            raise ValueError("adjudication requires a genuine multi-grader disagreement")
         adjudication_by_run[run_id] = adjudication
 
     resolved: list[ResolvedOutcome] = []

@@ -32,12 +32,27 @@ class RunValidationError(ValueError):
 def validate_run_records(
     manifest: StudyManifest, records: Sequence[RunRecord]
 ) -> tuple[RunRecord, ...]:
-    """Require exactly one result for every planned cell and no other results."""
+    """Require complete coverage and enforce each cell's execution invariants."""
 
     planned_ids = [planned.planned_run_id for planned in manifest.planned_runs]
     actual_ids = [record.planned_run_id for record in records]
     if Counter(actual_ids) != Counter(planned_ids):
         raise RunValidationError("run records must cover every planned_run_id exactly once")
+    planned_by_id = {planned.planned_run_id: planned for planned in manifest.planned_runs}
+    for record in records:
+        planned = planned_by_id[record.planned_run_id]
+        if (
+            record.completion_tokens is not None
+            and record.completion_tokens > planned.max_output_tokens
+            and not (
+                record.outcome == "malformed" and record.error_category == "output_budget_exceeded"
+            )
+        ):
+            raise RunValidationError(
+                f"run {record.planned_run_id} exceeds its planned output budget"
+            )
+        if record.outcome == "success" and record.output is None:
+            raise RunValidationError(f"run {record.planned_run_id} is missing its success output")
     return tuple(records)
 
 

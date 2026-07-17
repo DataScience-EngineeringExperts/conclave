@@ -139,10 +139,12 @@ async def test_runner_fails_closed_when_executor_exceeds_budget_or_returns_empty
 
     assert by_condition["single_frontier"].outcome == "malformed"
     assert by_condition["single_frontier"].error_category == "output_budget_exceeded"
+    assert by_condition["single_frontier"].completion_tokens == 101
     assert by_condition["self_refine"].outcome == "malformed"
     assert by_condition["self_refine"].error_category == "missing_success_output"
     assert study_run.total_planned_runs == 6
     assert sum(study_run.outcome_counts.values()) == 6
+    assert study_run.total_completion_tokens == 121
 
 
 @pytest.mark.asyncio

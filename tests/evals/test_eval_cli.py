@@ -122,6 +122,42 @@ def test_eval_run_rejects_live_and_validates_offline_replay_artifact(tmp_path) -
     assert "summary" in rejected_tamper.output.lower()
 
 
+def test_eval_run_rejects_records_that_bypass_manifest_execution_invariants(tmp_path) -> None:
+    _, manifest_path, run_path, manifest = _study_artifacts(tmp_path)
+    output = tmp_path / "validated-run.json"
+
+    for name, replacement, expected in (
+        (
+            "over-budget",
+            {"completion_tokens": manifest.planned_runs[0].max_output_tokens + 1},
+            "output budget",
+        ),
+        ("missing-output", {"output": None}, "success output"),
+    ):
+        payload = json.loads(run_path.read_text())
+        payload["records"][0].update(replacement)
+        payload["total_completion_tokens"] = sum(
+            item.get("completion_tokens") or 0 for item in payload["records"]
+        )
+        tampered_path = tmp_path / f"{name}.json"
+        _write_json(tampered_path, payload)
+
+        result = runner.invoke(
+            app,
+            [
+                "eval",
+                "run",
+                str(manifest_path),
+                str(output),
+                "--replay-artifact",
+                str(tampered_path),
+            ],
+        )
+
+        assert result.exit_code == 2
+        assert expected in result.output.lower()
+
+
 def test_eval_blind_writes_separate_grader_and_identity_artifacts(tmp_path) -> None:
     _, _, run_path, _ = _study_artifacts(tmp_path)
     grader_path = tmp_path / "grader.json"
