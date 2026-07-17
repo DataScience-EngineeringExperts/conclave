@@ -23,6 +23,11 @@ from .models import ModelAnswer
 # opaque (a date-stamped tag); only equality/inequality is meaningful.
 SYNTHESIS_PROMPT_VERSION = "2026-06-29"
 
+# Elite's prompt version is independent from the orchestration version owned by
+# ``models.ELITE_PROTOCOL_VERSION``. Bump this whenever the critic or revision
+# wording below changes; both versions are part of result-cache identity.
+ELITE_PROMPT_VERSION = "1"
+
 # Stable position-based labels used to anonymize peers in debate rounds 2..N.
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 

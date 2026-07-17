@@ -61,8 +61,8 @@ from .adapters.base import redact
 from .config import ConclaveConfig, load_config
 from .logging import get_logger
 from .manifest import ModelHarnessManifest, ProviderSkip, verified_secret_safety
-from .models import CouncilResult, ModelAnswer, StreamEvent, TokenUsage
-from .prompts import SYNTHESIS_PROMPT_VERSION
+from .models import ELITE_PROTOCOL_VERSION, CouncilResult, ModelAnswer, StreamEvent, TokenUsage
+from .prompts import ELITE_PROMPT_VERSION, SYNTHESIS_PROMPT_VERSION
 from .providers import call_model, receipt_from_answer
 from .registry import key_present
 
@@ -135,6 +135,10 @@ class Council:
             keys; you remain responsible for that band then. Consumers using the
             provider functions directly (without a ``Council``) can still call
             :func:`conclave.guard_transport_logging` themselves.
+        source_bundle_digest: Optional digest of a future source-grounding bundle.
+            When supplied, it participates in cache identity so grounded and
+            ungrounded Elite runs cannot collide. The value is re-hashed before
+            entering the canonical identity document.
 
     Example:
         >>> council = Council(models=["grok", "perplexity"], synthesizer="claude")
@@ -152,6 +156,7 @@ class Council:
         cache: bool | None = None,
         extract_verdict: bool = True,
         allow_transport_debug_logging: bool = False,
+        source_bundle_digest: str | None = None,
     ) -> None:
         self.config = config or load_config()
         self.requested_models = list(models)
@@ -165,6 +170,11 @@ class Council:
         # ``extract_verdict`` engine function. There is no per-call override --
         # this constructor flag is the single resolution path (one opt-out).
         self.extract_verdict_enabled = extract_verdict
+        # Horizon-2 placeholder: callers with a grounded source bundle can bind
+        # its digest into cache identity now, before source retrieval ships.
+        # cache.build_identity re-hashes this value so malformed/raw input never
+        # appears in inspectable identity documents or diagnostics.
+        self.source_bundle_digest = source_bundle_digest
         # Default-on transport-logging guard (key-leak audit, RANK 6): drop
         # httpx/httpcore DEBUG records (the only band that emits the auth header)
         # so a process holding a real key cannot leak it via verbose transport
@@ -214,6 +224,11 @@ class Council:
         """
         members, _skipped = self._available_members()
         synth_id = self.config.resolve_model_id(self.synthesizer)
+        used_prefixes = {
+            model_id.split("/", 1)[0]
+            for _name, model_id in [*members, (self.synthesizer, synth_id)]
+            if "/" in model_id
+        }
         return cache_mod.make_key(
             prompt=prompt,
             mode=mode,
@@ -221,10 +236,21 @@ class Council:
             synthesizer=self.synthesizer,
             synthesizer_model_id=synth_id,
             temperature=self.temperature,
+            timeout=self.timeout,
             rounds=rounds,
             proposer=proposer,
             converge_threshold=converge_threshold,
             choices=choices,
+            extract_verdict=self.extract_verdict_enabled,
+            endpoint_urls={
+                prefix: endpoint.completions_url
+                for prefix, endpoint in self.config.endpoints.items()
+                if prefix in used_prefixes
+            },
+            source_bundle_digest=self.source_bundle_digest,
+            protocol_version=ELITE_PROTOCOL_VERSION,
+            synthesis_prompt_version=SYNTHESIS_PROMPT_VERSION,
+            elite_prompt_version=ELITE_PROMPT_VERSION,
         )
 
     async def _cached_run(
