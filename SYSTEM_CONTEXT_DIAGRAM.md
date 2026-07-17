@@ -32,6 +32,8 @@ flowchart TB
         council["Council orchestrator<br/>fan_out · synthesize_blocks · skip-no-key (council.py)"]
         modes["Deliberation modes<br/>debate · adversarial · vote (modes.py + prompts.py)"]
         elite["Elite (UNRELEASED)<br/>initial → claim audit → revision<br/>fixed 3-success gate each phase"]
+        evalcli["Experimental eval CLI (DSE-708)<br/>plan · replay validation · blind · report<br/>OFFLINE ONLY"]
+        evalartifacts["Versioned eval artifacts<br/>manifest · run · grader set + separate map<br/>exploratory report"]
         registry["Registry · name to model-id<br/>key PRESENCE only, never values (registry.py)"]
         config["Config loader · custom endpoints (config.py)"]
         models["Result contract · CouncilResult v2<br/>answers · verdict · consensus · manifest (models.py)"]
@@ -65,6 +67,8 @@ flowchart TB
     end
 
     user -->|"prompt + council + mode"| cli
+    user -->|"public tasks + offline artifacts"| evalcli
+    evalcli --> evalartifacts
     user -->|"import"| lib
     warden -.->|"imports at DEV time only · NOT a runtime dep"| lib
 
@@ -123,6 +127,10 @@ flowchart TB
 - **Two entry points, one core.** The CLI (`cli.py`) and the library API
   (`from conclave import Council`) are both thin drivers over the same `Council`
   orchestrator. There is no behavior in the CLI that the library can't reach.
+- **The DSE-708 eval lane is experimental and offline.** `conclave eval` freezes manifests,
+  validates pre-recorded run artifacts, blinds outputs into a grader set plus separate identity
+  map, and writes exploratory reports. It has no edge to the provider highway: live execution is
+  fail-closed, and these artifacts support measurement rather than a decision-quality claim.
 - **mcp-warden is dashed and dev-time.** The dotted edge from `mcp-warden` to the library
   is deliberate: warden imports conclave **only at design/eval time**. conclave is
   stochastic and must never sit in warden's deterministic runtime decision path. See PDD
