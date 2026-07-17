@@ -243,6 +243,18 @@ class SimultaneousUpperBounds(EvalModel):
         return self
 
 
+class SecondaryTaskStatistics(EvalModel):
+    """Immutable task-level sufficient inputs for all secondary bound calculations."""
+
+    task_id: str = Field(min_length=1)
+    elite_severe_error_rate: float = Field(ge=0, le=1)
+    baseline_severe_error_rate: float = Field(ge=0, le=1)
+    elite_readiness_error_rate: float = Field(ge=0, le=1)
+    baseline_readiness_error_rate: float = Field(ge=0, le=1)
+    elite_reviewer_effort: float = Field(gt=0)
+    baseline_reviewer_effort: float = Field(gt=0)
+
+
 class PaidAnalysisSummary(EvalModel):
     """Task-clustered operational and quality summaries for paid studies."""
 
@@ -260,6 +272,7 @@ class PaidAnalysisSummary(EvalModel):
     excluded_task_ids: tuple[str, ...]
     family_directions: dict[str, float]
     roster_directions: dict[str, float]
+    secondary_task_statistics: tuple[SecondaryTaskStatistics, ...] = Field(min_length=1)
 
 
 class ConfirmatoryGateResult(EvalModel):
@@ -272,9 +285,13 @@ class ConfirmatoryGateResult(EvalModel):
 def evaluate_confirmatory_gates(
     *,
     manifest: StudyManifest,
+    study_run: StudyRun,
+    raw_judgments: Sequence[GraderJudgment],
     report: StudyScoreReport,
+    adjudications: Sequence[AdjudicationRecord] = (),
+    blind_map: BlindMap | None = None,
 ) -> ConfirmatoryGateResult:
-    """Derive every decision input from one frozen manifest and its bound score report."""
+    """Re-score raw artifacts, reject report substitution, then evaluate frozen gates."""
 
     design = manifest.frozen_design
     if manifest.evidence_classification != "confirmatory" or design is None:
@@ -293,11 +310,27 @@ def evaluate_confirmatory_gates(
         raise ValueError("confirmatory report is missing paid analysis")
     if report.simultaneous_upper_bounds is None:
         raise ValueError("confirmatory report is missing simultaneous upper bounds")
+    derived_report = score_study(
+        manifest=manifest,
+        study_run=study_run,
+        raw_judgments=raw_judgments,
+        adjudications=adjudications,
+        blind_map=blind_map,
+        bootstrap_seed=design.bootstrap.seed,
+        bootstrap_samples=design.bootstrap.samples,
+    )
+    if report != derived_report:
+        raise ValueError("confirmatory report does not exactly match re-scored raw artifacts")
+    report = derived_report
     metrics = report.paid_analysis
     bounds = report.simultaneous_upper_bounds
     config = design.analysis_gates
     if bounds.evidence_hash != hash_confirmatory_evidence(report):
         raise ValueError("simultaneous-bound evidence hash does not match the report")
+    recomputed_bounds = recompute_simultaneous_upper_bounds(manifest=manifest, report=report)
+    if bounds != recomputed_bounds:
+        raise ValueError("simultaneous bounds do not match recomputed task-level inputs")
+    bounds = recomputed_bounds
     expected_per_endpoint_alpha = config.alpha / 3
     if not math.isclose(bounds.per_endpoint_alpha, expected_per_endpoint_alpha, abs_tol=1e-15):
         raise ValueError("simultaneous-bound alpha does not match the frozen design")
@@ -552,6 +585,65 @@ def hash_confirmatory_evidence(report: StudyScoreReport) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def recompute_simultaneous_upper_bounds(
+    *, manifest: StudyManifest, report: StudyScoreReport
+) -> SimultaneousUpperBounds:
+    """Recompute every secondary bound solely from archived task-level sufficient inputs."""
+
+    design = manifest.frozen_design
+    if design is None or report.paid_analysis is None:
+        raise ValueError("simultaneous bounds require a frozen paid analysis")
+    statistics = report.paid_analysis.secondary_task_statistics
+    by_task = {item.task_id: item for item in statistics}
+    if len(by_task) != len(statistics):
+        raise ValueError("secondary task statistics must contain unique task IDs")
+    expected_task_ids = {run.task_id for run in analysis_planned_runs(manifest)}
+    if set(by_task) != expected_task_ids:
+        raise ValueError("secondary task statistics must exactly cover the frozen analysis tasks")
+
+    config = design.analysis_gates
+    per_endpoint_alpha = config.alpha / 3
+    quantile_probability = 1 - per_endpoint_alpha
+    severe_elite = {task_id: item.elite_severe_error_rate for task_id, item in by_task.items()}
+    severe_baseline = {
+        task_id: item.baseline_severe_error_rate for task_id, item in by_task.items()
+    }
+    readiness_elite = {
+        task_id: item.elite_readiness_error_rate for task_id, item in by_task.items()
+    }
+    readiness_baseline = {
+        task_id: item.baseline_readiness_error_rate for task_id, item in by_task.items()
+    }
+    effort_elite = {task_id: item.elite_reviewer_effort for task_id, item in by_task.items()}
+    effort_baseline = {task_id: item.baseline_reviewer_effort for task_id, item in by_task.items()}
+    return SimultaneousUpperBounds(
+        per_endpoint_alpha=per_endpoint_alpha,
+        quantile_probability=quantile_probability,
+        severe_error_upper_bound=_bootstrap_difference_upper_bound(
+            severe_elite,
+            severe_baseline,
+            quantile_probability=quantile_probability,
+            seed=design.bootstrap.seed,
+            samples=design.bootstrap.samples,
+        ),
+        readiness_error_upper_bound=_bootstrap_difference_upper_bound(
+            readiness_elite,
+            readiness_baseline,
+            quantile_probability=quantile_probability,
+            seed=design.bootstrap.seed,
+            samples=design.bootstrap.samples,
+        ),
+        reviewer_effort_ratio_upper_bound=_bootstrap_median_ratio_upper_bound(
+            effort_elite,
+            effort_baseline,
+            quantile_probability=quantile_probability,
+            seed=design.bootstrap.seed,
+            samples=design.bootstrap.samples,
+        ),
+        evidence_hash=hash_confirmatory_evidence(report),
+    )
 
 
 def cohen_kappa(first: Sequence[bool], second: Sequence[bool]) -> float | None:
@@ -1009,6 +1101,18 @@ def score_study(
                 )
             return values
 
+        secondary_task_statistics = tuple(
+            SecondaryTaskStatistics(
+                task_id=task_id,
+                elite_severe_error_rate=severe_means["elite_full"][task_id],
+                baseline_severe_error_rate=severe_means[baseline][task_id],
+                elite_readiness_error_rate=readiness_means["elite_full"][task_id],
+                baseline_readiness_error_rate=readiness_means[baseline][task_id],
+                elite_reviewer_effort=effort_means["elite_full"][task_id],
+                baseline_reviewer_effort=effort_means[baseline][task_id],
+            )
+            for task_id in sorted(severe_means["elite_full"])
+        )
         paid_analysis = PaidAnalysisSummary(
             primary_paired_difference=primary,
             severe_error_difference=severe_difference,
@@ -1026,6 +1130,7 @@ def score_study(
             excluded_task_ids=tuple(sorted(excluded_task_ids)),
             family_directions=directional_effects("family"),
             roster_directions=directional_effects("roster"),
+            secondary_task_statistics=secondary_task_statistics,
         )
     report = StudyScoreReport(
         study_id=manifest.study_id,
@@ -1061,34 +1166,5 @@ def score_study(
     if manifest.evidence_classification != "confirmatory":
         return report
     assert manifest.frozen_design is not None
-    design = manifest.frozen_design
-    config = design.analysis_gates
-    per_endpoint_alpha = config.alpha / 3
-    quantile_probability = 1 - per_endpoint_alpha
-    bounds = SimultaneousUpperBounds(
-        per_endpoint_alpha=per_endpoint_alpha,
-        quantile_probability=quantile_probability,
-        severe_error_upper_bound=_bootstrap_difference_upper_bound(
-            severe_means["elite_full"],
-            severe_means[baseline],
-            quantile_probability=quantile_probability,
-            seed=design.bootstrap.seed,
-            samples=design.bootstrap.samples,
-        ),
-        readiness_error_upper_bound=_bootstrap_difference_upper_bound(
-            readiness_means["elite_full"],
-            readiness_means[baseline],
-            quantile_probability=quantile_probability,
-            seed=design.bootstrap.seed,
-            samples=design.bootstrap.samples,
-        ),
-        reviewer_effort_ratio_upper_bound=_bootstrap_median_ratio_upper_bound(
-            effort_means["elite_full"],
-            effort_means[baseline],
-            quantile_probability=quantile_probability,
-            seed=design.bootstrap.seed,
-            samples=design.bootstrap.samples,
-        ),
-        evidence_hash=hash_confirmatory_evidence(report),
-    )
+    bounds = recompute_simultaneous_upper_bounds(manifest=manifest, report=report)
     return report.model_copy(update={"simultaneous_upper_bounds": bounds})

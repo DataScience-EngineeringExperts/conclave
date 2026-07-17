@@ -6,10 +6,12 @@ from pydantic import ValidationError
 from conclave.evals.models import AnalysisGateConfig, RunRecord, StudyRun
 from conclave.evals.protocols import CONDITION_IDS, build_study_manifest
 from conclave.evals.scoring import (
+    AtomicError,
     analysis_planned_runs,
     evaluate_confirmatory_gates,
     hash_confirmatory_evidence,
     paired_bootstrap_ratio,
+    recompute_simultaneous_upper_bounds,
     score_study,
 )
 from tests.evals.test_method_grading import _judgment
@@ -112,6 +114,15 @@ def _confirmatory_report_run(manifest):
     return study_run
 
 
+def _gate(manifest, report):
+    return evaluate_confirmatory_gates(
+        manifest=manifest,
+        study_run=_confirmatory_report_run(manifest),
+        raw_judgments=report.raw_judgments,
+        report=report,
+    )
+
+
 def _rebind_evidence(report):
     bounds = report.simultaneous_upper_bounds
     assert bounds is not None
@@ -126,16 +137,11 @@ def _rebind_evidence(report):
 
 def test_confirmatory_gate_is_bound_to_manifest_report_and_simultaneous_bounds() -> None:
     manifest, report = _confirmatory_report()
-    result = evaluate_confirmatory_gates(manifest=manifest, report=report)
+    result = _gate(manifest, report)
     assert result.status == "GO"
 
     undersized_manifest, undersized_report = _confirmatory_report(minimum_tasks=3)
-    assert (
-        "sample_size"
-        in evaluate_confirmatory_gates(
-            manifest=undersized_manifest, report=undersized_report
-        ).failed_gates
-    )
+    assert "sample_size" in _gate(undersized_manifest, undersized_report).failed_gates
 
     assert report.simultaneous_upper_bounds is not None
     assert report.simultaneous_upper_bounds.method == "task_clustered_percentile_bonferroni_v1"
@@ -149,8 +155,8 @@ def test_confirmatory_gate_is_bound_to_manifest_report_and_simultaneous_bounds()
             )
         }
     )
-    with pytest.raises(ValueError, match="evidence hash"):
-        evaluate_confirmatory_gates(manifest=manifest, report=tampered)
+    with pytest.raises(ValueError, match="re-scored raw artifacts"):
+        _gate(manifest, tampered)
 
 
 def test_confirmatory_gate_uses_every_derived_report_boundary() -> None:
@@ -172,23 +178,6 @@ def test_confirmatory_gate_uses_every_derived_report_boundary() -> None:
                 )
             }
         ),
-        "severe_error_noninferiority": paid.model_copy(
-            update={"severe_error_difference": paid.severe_error_difference}
-        ),
-        "readiness_noninferiority": paid.model_copy(
-            update={
-                "readiness_error_difference": paid.readiness_error_difference.model_copy(
-                    update={"upper": 0.051}
-                )
-            }
-        ),
-        "reviewer_effort": paid.model_copy(
-            update={
-                "reviewer_effort_ratio_interval": paid.reviewer_effort_ratio_interval.model_copy(
-                    update={"upper": 1.201}
-                )
-            }
-        ),
         "latency_ratio": paid.model_copy(update={"p95_latency_ratio": 3.001}),
         "latency_ceiling": paid.model_copy(update={"elite_p95_latency_seconds": 180.1}),
         "spend_ceiling": paid.model_copy(update={"total_cost_usd": 251.0}),
@@ -199,59 +188,166 @@ def test_confirmatory_gate_uses_every_derived_report_boundary() -> None:
             update={"roster_directions": {"roster-a": 0.0, "roster-b": 1.0}}
         ),
     }
-    for expected_gate, changed in cases.items():
+    for changed in cases.values():
         changed_report = report.model_copy(update={"paid_analysis": changed})
-        if expected_gate in {
-            "severe_error_noninferiority",
-            "readiness_noninferiority",
-            "reviewer_effort",
-        }:
-            bounds = changed_report.simultaneous_upper_bounds
-            assert bounds is not None
-            field = {
-                "severe_error_noninferiority": "severe_error_upper_bound",
-                "readiness_noninferiority": "readiness_error_upper_bound",
-                "reviewer_effort": "reviewer_effort_ratio_upper_bound",
-            }[expected_gate]
-            changed_report = changed_report.model_copy(
-                update={"simultaneous_upper_bounds": bounds.model_copy(update={field: 2.0})}
-            )
         changed_report = _rebind_evidence(changed_report)
-        result = evaluate_confirmatory_gates(
-            manifest=manifest,
-            report=changed_report,
+        with pytest.raises(ValueError, match="re-scored raw artifacts"):
+            _gate(manifest, changed_report)
+
+
+@pytest.mark.parametrize(
+    ("expected_gate", "updates"),
+    (
+        (
+            "severe_error_noninferiority",
+            {"elite_severe_error_rate": 1.0, "baseline_severe_error_rate": 0.0},
+        ),
+        (
+            "readiness_noninferiority",
+            {"elite_readiness_error_rate": 1.0, "baseline_readiness_error_rate": 0.0},
+        ),
+        (
+            "reviewer_effort",
+            {"elite_reviewer_effort": 25.0, "baseline_reviewer_effort": 10.0},
+        ),
+    ),
+)
+def test_confirmatory_gate_recomputes_secondary_bounds_from_task_inputs(
+    expected_gate, updates
+) -> None:
+    manifest, report = _confirmatory_report()
+    paid = report.paid_analysis
+    assert paid is not None
+    changed_paid = paid.model_copy(
+        update={
+            "secondary_task_statistics": tuple(
+                item.model_copy(update=updates) for item in paid.secondary_task_statistics
+            )
+        }
+    )
+    changed_report = report.model_copy(update={"paid_analysis": changed_paid})
+    changed_report = changed_report.model_copy(
+        update={
+            "simultaneous_upper_bounds": recompute_simultaneous_upper_bounds(
+                manifest=manifest, report=changed_report
+            )
+        }
+    )
+
+    bounds = changed_report.simultaneous_upper_bounds
+    assert bounds is not None
+    values = {
+        "severe_error_noninferiority": bounds.severe_error_upper_bound,
+        "readiness_noninferiority": bounds.readiness_error_upper_bound,
+        "reviewer_effort": bounds.reviewer_effort_ratio_upper_bound,
+    }
+    thresholds = {
+        "severe_error_noninferiority": manifest.frozen_design.analysis_gates.severe_error_noninferiority_margin,
+        "readiness_noninferiority": manifest.frozen_design.analysis_gates.readiness_noninferiority_margin,
+        "reviewer_effort": manifest.frozen_design.analysis_gates.reviewer_effort_max_ratio,
+    }
+    assert values[expected_gate] > thresholds[expected_gate]
+    with pytest.raises(ValueError, match="re-scored raw artifacts"):
+        _gate(manifest, changed_report)
+
+
+def test_caller_cannot_substitute_optimistic_bounds_to_turn_redesign_into_go() -> None:
+    manifest, report = _confirmatory_report()
+    condition_by_run = {
+        planned.planned_run_id: planned.condition_id for planned in manifest.planned_runs
+    }
+    severe = AtomicError(
+        rubric_item="safety",
+        category="severe_harm",
+        severity="severe",
+        detail="Confirmatory severe error.",
+    )
+    bad_judgments = tuple(
+        judgment.model_copy(
+            update={
+                "critical_error_free": False,
+                "atomic_errors": (severe,),
+                "severe_error": True,
+            }
         )
-        assert expected_gate in result.failed_gates
+        if condition_by_run[judgment.planned_run_id] == "elite_full"
+        else judgment
+        for judgment in report.raw_judgments
+    )
+    study_run = _confirmatory_report_run(manifest)
+    redesign_report = score_study(
+        manifest=manifest,
+        study_run=study_run,
+        raw_judgments=bad_judgments,
+        bootstrap_seed=manifest.frozen_design.bootstrap.seed,
+        bootstrap_samples=manifest.frozen_design.bootstrap.samples,
+    )
+    assert (
+        evaluate_confirmatory_gates(
+            manifest=manifest,
+            study_run=study_run,
+            raw_judgments=bad_judgments,
+            report=redesign_report,
+        ).status
+        == "REDESIGN"
+    )
+
+    bounds = redesign_report.simultaneous_upper_bounds
+    paid = redesign_report.paid_analysis
+    assert bounds is not None and paid is not None
+    substituted = redesign_report.model_copy(
+        update={
+            "paid_analysis": paid.model_copy(
+                update={
+                    "secondary_task_statistics": tuple(
+                        item.model_copy(
+                            update={
+                                "elite_severe_error_rate": 0.0,
+                                "baseline_severe_error_rate": 0.0,
+                            }
+                        )
+                        for item in paid.secondary_task_statistics
+                    )
+                }
+            ),
+            "simultaneous_upper_bounds": bounds.model_copy(
+                update={"severe_error_upper_bound": 0.0}
+            ),
+        }
+    )
+    substituted = _rebind_evidence(substituted)
+    with pytest.raises(ValueError, match="re-scored raw artifacts"):
+        evaluate_confirmatory_gates(
+            manifest=manifest,
+            study_run=study_run,
+            raw_judgments=bad_judgments,
+            report=substituted,
+        )
 
 
 def test_confirmatory_gate_refuses_exploratory_missing_bounds_or_provenance_drift() -> None:
     manifest, report = _confirmatory_report()
     with pytest.raises(ValueError, match="confirmatory"):
-        evaluate_confirmatory_gates(
-            manifest=manifest.model_copy(
-                update={"evidence_classification": "paid_exploratory_pilot"}
-            ),
-            report=report,
+        _gate(
+            manifest.model_copy(update={"evidence_classification": "paid_exploratory_pilot"}),
+            report,
         )
     with pytest.raises(ValueError, match="simultaneous"):
-        evaluate_confirmatory_gates(
-            manifest=manifest,
-            report=report.model_copy(update={"simultaneous_upper_bounds": None}),
-        )
+        _gate(manifest, report.model_copy(update={"simultaneous_upper_bounds": None}))
     with pytest.raises(ValueError, match="frozen design hash"):
-        evaluate_confirmatory_gates(
-            manifest=manifest,
-            report=report.model_copy(update={"frozen_design_hash": "sha256:" + "c" * 64}),
+        _gate(
+            manifest,
+            report.model_copy(update={"frozen_design_hash": "sha256:" + "c" * 64}),
         )
     with pytest.raises(ValueError, match="preregistration hash"):
-        evaluate_confirmatory_gates(
-            manifest=manifest,
-            report=report.model_copy(update={"preregistration_hash": "sha256:" + "c" * 64}),
+        _gate(
+            manifest,
+            report.model_copy(update={"preregistration_hash": "sha256:" + "c" * 64}),
         )
     with pytest.raises(ValueError, match="analysis code hash"):
-        evaluate_confirmatory_gates(
-            manifest=manifest,
-            report=report.model_copy(update={"analysis_code_hash": "sha256:" + "c" * 64}),
+        _gate(
+            manifest,
+            report.model_copy(update={"analysis_code_hash": "sha256:" + "c" * 64}),
         )
 
 
@@ -303,11 +399,8 @@ def test_confirmatory_gate_uses_single_model_latency_baseline_and_reliability() 
             )
         }
     )
-    failed = evaluate_confirmatory_gates(
-        manifest=manifest, report=_rebind_evidence(weak)
-    ).failed_gates
-    assert "raw_agreement" in failed
-    assert "overall_kappa" in failed
+    with pytest.raises(ValueError, match="re-scored raw artifacts"):
+        _gate(manifest, _rebind_evidence(weak))
 
 
 def test_rotating_grader_pairs_still_produce_complete_reliability() -> None:
