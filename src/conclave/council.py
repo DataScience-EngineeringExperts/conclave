@@ -347,6 +347,7 @@ class Council:
                 name,
                 model_id,
                 messages_for(name, model_id),
+                config=self.config,
                 temperature=self.temperature,
                 timeout=self.timeout,
             )
@@ -841,6 +842,7 @@ class Council:
             self.synthesizer,
             synth_id,
             messages,
+            config=self.config,
             temperature=self.temperature,
             timeout=self.timeout,
         )
