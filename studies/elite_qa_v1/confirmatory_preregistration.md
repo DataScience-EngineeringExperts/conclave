@@ -12,7 +12,8 @@
 - Primary endpoint: failure-inclusive critical-error-free decision rate: `[confirm]`
 - Primary comparison and multiplicity treatment: `[required]`
 - Minimum practically important effect: `[required]`
-- Power, alpha, sample-size method, and assumptions justified from pilot variance: `[required]`
+- Power, alpha, sample-size method, and assumptions justified independently of this open-book
+  QA pack: `[required]`
 - Two prespecified macro-families and minimum family-specific sample sizes: `[required]`
 - Conditions, prompts, roster, provider/model versions, budgets, replicates, and seed: `[required]`
 - Inclusion, failure, retry, exclusion, stopping, and missing-data rules: `[required]`
@@ -21,10 +22,10 @@
 
 ## Independent holdout construction
 
-The confirmatory corpus must be authored as a separate project by people who cannot see pilot
-outputs while authoring keys. It must use **new scenario archetypes**, entities, numbers,
+The confirmatory corpus must be authored as a separate project by people who cannot see QA or
+paid-pilot outputs while authoring keys. It must use **new scenario archetypes**, entities, numbers,
 packet prose, constraint interactions, and minority-view traps. Simple **parameter swaps** or
-paraphrases of pilot tasks are prohibited. Pilot task or answer text may not enter examples,
+paraphrases of QA tasks are prohibited. QA task or answer text may not enter examples,
 few-shot context, prompt tuning, grader training, or rubric demonstrations.
 
 Before acceptance, run exact-ID and exact-text checks, an **eight-token** contiguous-overlap
@@ -35,7 +36,12 @@ task; do not repair it by editing only its answer key.
 
 Public tasks and grader keys remain separate. The execution identity cannot read the keys.
 Corpus authors do not grade outputs they authored unless declared and sensitivity-tested.
-Grader training uses separate calibration examples that are in neither pilot nor holdout.
+Grader training uses separate calibration examples that are in neither this QA pack nor the
+holdout.
+
+Committed repository keys are fixtures only. Any paid pilot or confirmatory run requires a
+separately access-controlled key artifact, unavailable to models and runner identities, whose
+cryptographic hash is frozen in the study manifest before execution.
 
 ## Freeze and unsealing gate
 
@@ -47,8 +53,8 @@ code, primary comparison, minimum effect, sample size, stopping rules, and decis
 
 An independent reviewer must attest that:
 
-1. the pilot and holdout are semantically distinct;
-2. no model, protocol author, or runner has received grader-only material;
+1. this QA pack, any paid pilot, and the holdout are semantically distinct;
+2. no model, protocol author, or runner has received the access-controlled study keys;
 3. budgets and evidence access are condition-matched;
 4. the full failure-inclusive analysis can run from frozen artifacts;
 5. provider spend and automatic-stop authority are approved; and

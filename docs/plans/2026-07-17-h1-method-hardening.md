@@ -20,10 +20,14 @@
 2. Extend `scoring.py`, `reporting.py`, and CLI artifact validation. Archive every gate input and seed.
 3. Re-run focused tests and commit.
 
-## Phase 4 — Pilot pack
+## Phase 4 — Synthetic QA pack
 
-1. Add `studies/elite_pilot_v1/public_tasks.json`, embargoed-development `grader_keys.json`, `pilot_protocol.md`, `confirmatory_preregistration.md`, and `README.md`.
-2. Add `tests/evals/test_pilot_pack.py`: exactly 24 unique tasks, 12/12 families, 4 per subfamily, balanced tier/readiness, matching nonempty keys, packet citation IDs, no grader material in public records, no duplicates, and documented leakage/holdout rules.
+1. Add `studies/elite_qa_v1/public_tasks.json`, committed fixture `grader_keys.json`,
+   `qa_protocol.md`, `confirmatory_preregistration.md`, and `README.md`. Classify the pack as
+   open-book harness QA, not a paid pilot.
+2. Add `tests/evals/test_qa_pack.py`: exactly 24 unique tasks, 12/12 families, 4 per
+   subfamily, balanced tier/readiness, matching nonempty fixture keys, packet citation IDs, no
+   grader material in public records, no duplicates, and documented leakage/holdout rules.
 3. Generate and validate an offline manifest only; do not create model outputs.
 4. Re-run focused tests and commit.
 
@@ -39,4 +43,7 @@ git diff --check
 gitleaks git --redact
 ```
 
-Push, open a draft PR stacked on #52, obtain independent methods/code review, and attach evidence to DSE-708. Paid pilot execution remains blocked until PR #51 is merged/pinned and Ernest approves a hard spend ceiling.
+Push, open a draft PR stacked on #52, obtain independent methods/code review, and attach
+evidence to DSE-708. Paid pilot execution remains blocked until PR #51 is merged/pinned,
+Ernest approves a hard spend ceiling, and separately access-controlled grader keys are frozen
+by hash before execution.

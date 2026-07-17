@@ -2,11 +2,14 @@
 
 **Linear:** DSE-708  
 **Dependency:** PR #52 at `4365c28`  
-**Gate:** Required before any paid pilot call
+**Gate:** Required before any paid study call
 
 ## Decision
 
-Keep the existing H1 substrate as the execution primitive, then add a frozen study-method contract and a balanced 24-task exploratory pack. The pilot estimates variance, grader reliability, leakage, latency, and cost; it cannot produce a product GO or KILL.
+Keep the existing H1 substrate as the execution primitive, then add a frozen study-method
+contract and a balanced 24-task open-book synthetic QA pack. The committed pack validates
+mechanics only; it cannot estimate unbiased effects or produce a product GO or KILL. A paid
+pilot requires separately access-controlled grader keys and a hash frozen before execution.
 
 ## Frozen study contract
 
@@ -26,15 +29,24 @@ Non-success records bypass the human queue and are automatic failures. Successfu
 
 ## Analysis and gates
 
-Pilot reporting uses failure-inclusive Wilson rates, task-clustered paired bootstrap differences with roster/replicate averaging, raw agreement, prevalence, kappa, adjudication rate, severe errors, reviewer effort, token/cost distributions, latency distributions, deviations, and leakage guesses.
+Study reporting uses failure-inclusive Wilson rates, task-clustered paired bootstrap differences with roster/replicate averaging, raw agreement, prevalence, kappa, adjudication rate, severe errors, reviewer effort, token/cost distributions, latency distributions, deviations, and leakage guesses.
 
-Reliability is undefined—not perfect—when expected agreement is one. The pilot is method-ready only with at least 95% double grading, raw agreement at least 80%, kappa at least 0.60 overall and no family below 0.50, adjudication at most 20%, and no material leakage. Otherwise redesign.
+Reliability is undefined—not perfect—when expected agreement is one. A future paid pilot is
+method-ready only with at least 95% double grading, raw agreement at least 80%, kappa at least
+0.60 overall and no family below 0.50, adjudication at most 20%, and no material leakage.
+Otherwise redesign. The committed open-book QA pack cannot satisfy or measure this gate.
 
 Confirmation freezes one strongest baseline. GO requires a point gain of at least 10 percentage points with the paired 95% interval above zero, severe-error noninferiority within +2 points, readiness noninferiority within +5 points, reviewer-effort and latency gates, positive direction in every family and roster, and failure-inclusive validity. Simpler-baseline equivalence, harm, weak reliability, or post-hoc changes trigger redesign or kill per DSE-708.
 
-## Pilot pack
+## Synthetic QA pack
 
-Use 24 synthetic, current-fact-free tasks: 12 operational-execution and 12 organizational-stewardship, balanced across six subfamilies, three difficulty tiers, and `ready`/`not_ready`/`indeterminate`. Public packets and grader-only keys are separate. Confirmatory tasks are independently authored, access-restricted, and screened for sentence, numeric, structural, and semantic overlap.
+Use 24 synthetic, current-fact-free tasks: 12 operational-execution and 12
+organizational-stewardship, balanced across six subfamilies, three difficulty tiers, and
+`ready`/`not_ready`/`indeterminate`. Public packets and committed fixture keys are separate
+files, but not separate security domains. Paid-study keys must be provisioned outside the
+repository under access control and frozen by hash. Confirmatory tasks are independently
+authored, access-restricted, and screened for sentence, numeric, structural, and semantic
+overlap.
 
 ## Non-goals
 

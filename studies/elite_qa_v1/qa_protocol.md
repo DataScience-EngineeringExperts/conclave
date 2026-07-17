@@ -1,11 +1,11 @@
-# Elite Pilot v1 Protocol
+# Elite Synthetic QA v1 Protocol
 
 ## Purpose and decision boundary
 
-This is a frozen, synthetic, exploratory pilot. It tests whether the H1 harness, task design,
-atomic rubric, blinding, and adjudication process are usable. It cannot demonstrate that a
-condition is better, justify a product-quality claim, or change a real decision. The primary
-pilot outcome is method readiness for a separately authored confirmatory study.
+This is a frozen, open-book synthetic harness QA exercise. It tests whether the H1 schemas,
+task design, atomic rubric, blinding mechanics, and adjudication process are usable. It cannot
+demonstrate that a condition is better, justify a product-quality claim, estimate an unbiased
+effect, or change a real decision. Its output is QA evidence only.
 
 ## Frozen corpus and prompt
 
@@ -27,16 +27,20 @@ replicate count, seed, software revision, and replay-artifact hashes are recorde
 
 ## Execution
 
-Only `public_tasks.json` may enter execution. `grader_keys.json` is grader-only and must be
-kept outside the runner's readable inputs. Every planned cell produces exactly one record.
+Only `public_tasks.json` may enter an execution-path QA test. The committed
+`grader_keys.json` is an open-book fixture and must still be excluded from model prompts and
+runner inputs to exercise the intended interface. This convention is not an access control.
+Every planned cell produces exactly one record.
 Timeouts, malformed output, abstentions, incomplete output, provider errors, and missing
 records are non-successes; **failures remain in the denominator**. No cell may be rerun or
 excluded because its answer is inconvenient. Any permitted infrastructure retry must be
 predeclared and retain every attempt in the audit artifact.
 
-This repository pack does not authorize paid calls. A live pilot requires a separately
-approved spend ceiling, an automatic stop below that ceiling, pinned model identifiers, and a
-fresh manifest. Offline replay is the default until those gates are satisfied.
+This repository pack does not authorize paid calls. A paid execution requires separately
+access-controlled grader keys, their cryptographic hash frozen before execution, an approved
+spend ceiling, an automatic stop below that ceiling, pinned model identifiers, and a fresh
+manifest. The committed fixture keys do not satisfy that gate. Offline replay is the only
+valid use of this pack.
 
 ## Atomic grading
 
@@ -67,14 +71,14 @@ minutes. No composite quality score is reported.
 Grader disagreements retain both raw judgments and receive a separate adjudication citing
 exactly the source judgments. Report Cohen's kappa, disagreement count, adjudication rate,
 Wilson intervals for rates, and seeded task-paired bootstrap intervals for Elite-minus-each-
-baseline differences. Report macro-family and subfamily results descriptively; this pilot is
-not powered for confirmatory subgroup claims.
+baseline differences. Report macro-family and subfamily results descriptively; this QA pack
+is neither blinded evidence nor powered for confirmatory subgroup claims.
 
 ## Frozen exclusions and changes
 
 Exclude no task or output after execution. Pre-execution rejection is allowed only for a
 schema-invalid or hash-mismatched entire pack, which aborts the study rather than deleting
 cells. Changes to a scenario, packet, key, prompt, condition, dimension, critical-error rule,
-budget rule, or analysis create a new pack version. Pilot observations may improve a future
-rubric and estimate variance; they may not alter, reveal, or train on confirmatory tasks.
-
+budget rule, or analysis create a new pack version. QA observations may improve harness
+mechanics or a future rubric; they may not supply effect estimates, alter, reveal, or train on
+confirmatory tasks.

@@ -6,7 +6,7 @@ from pathlib import Path
 from conclave.evals.dataset import load_grader_keys, load_public_tasks
 
 ROOT = Path(__file__).resolve().parents[2]
-PACK = ROOT / "studies" / "elite_pilot_v1"
+PACK = ROOT / "studies" / "elite_qa_v1"
 
 EXPECTED_TASK_IDS = {
     *(f"PRC-{index:02d}" for index in range(1, 5)),
@@ -42,7 +42,7 @@ def _expected_readiness(required_facts: tuple[str, ...]) -> str:
     return matches[0]
 
 
-def test_pilot_pack_is_complete_balanced_and_public_private_separated() -> None:
+def test_qa_pack_is_complete_balanced_and_task_key_files_are_separate() -> None:
     tasks = load_public_tasks(PACK / "public_tasks.json")
     keys = load_grader_keys(PACK / "grader_keys.json")
 
@@ -84,16 +84,21 @@ def test_pilot_pack_is_complete_balanced_and_public_private_separated() -> None:
     assert "critical_errors" not in public_text
 
 
-def test_pilot_protocol_freezes_exploratory_boundary_and_holdout_controls() -> None:
+def test_qa_protocol_freezes_open_book_boundary_and_holdout_controls() -> None:
     readme = (PACK / "README.md").read_text(encoding="utf-8")
-    protocol = (PACK / "pilot_protocol.md").read_text(encoding="utf-8")
+    protocol = (PACK / "qa_protocol.md").read_text(encoding="utf-8")
     preregistration = (PACK / "confirmatory_preregistration.md").read_text(encoding="utf-8")
+    normalized_protocol = " ".join(protocol.lower().split())
 
-    assert "synthetic exploratory" in readme.lower()
+    assert "open-book synthetic harness qa" in readme.lower()
     assert "must not support product-quality claims" in readme.lower()
-    assert "critical-error-free decision rate" in protocol.lower()
-    assert "failures remain in the denominator" in protocol.lower()
-    assert "grader-only" in protocol.lower()
+    assert "committed `grader_keys.json`" in readme.lower()
+    assert "not access-controlled" in readme.lower()
+    assert "critical-error-free decision rate" in normalized_protocol
+    assert "failures remain in the denominator" in normalized_protocol
+    assert "open-book fixture" in normalized_protocol
+    assert "separately access-controlled grader keys" in normalized_protocol
+    assert "cryptographic hash frozen before execution" in normalized_protocol
     assert "not a completed preregistration" in preregistration.lower()
     assert "new scenario archetypes" in preregistration.lower()
     assert "parameter swaps" in preregistration.lower()
