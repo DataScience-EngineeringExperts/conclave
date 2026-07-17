@@ -18,8 +18,9 @@ logged. It ships six modes: **synthesize** (merge answers into one), **raw** (no
 **elite** (quality-first claim audit and revision). conclave is intentionally lightweight — a
 small council primitive, not an agent framework.
 
-**The v1.1 wedge — the execution-traceable council.** Every run also yields **a multi-model
-council verdict you can inspect — structured, scored for agreement, and execution-traceable**: a
+**The v1.1 wedge — the execution-traceable council.** Decision/review synthesis runs can yield
+**a multi-model council verdict you can inspect — structured, scored for agreement, and
+execution-traceable**: a
 `CouncilVerdict` exposing agreement, `conflicts`, `minority_reports`, and `provider_votes`;
 a deterministic `consensus_score` (arithmetic over the model's clustering, *never* an
 LLM-emitted number); and a redacted `ModelHarnessManifest` recording how the run executed and

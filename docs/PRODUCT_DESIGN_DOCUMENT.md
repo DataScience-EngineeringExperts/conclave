@@ -262,8 +262,9 @@ and cache hits (synthesize/raw builds its own richer one earlier). Pinned by
 `tests/test_manifest_all_modes.py`. It records `request_id`, `conclave_version`, `mode`,
 `providers_considered/called/skipped`
 (each skip a `ProviderSkip{name, reason}`), `model_ids`, `generation_settings`, `receipts` (each
-a `ProviderExecutionReceipt{name, provider, model_id, generation_settings, latency_ms, usage,
-error(redacted), schema_valid}`), `total_latency_ms`, `total_usage`, `schema_valid`,
+a `ProviderExecutionReceipt{phase, attempt, outcome, name, provider, model_id,
+generation_settings, latency_ms, usage, error_category, schema_valid, versions}`),
+`total_latency_ms`, `total_usage`, `schema_valid`,
 `redacted_errors`, and verdict-provenance slots (`verdict_extraction: VerdictExtraction{model_id,
 prompt_version}` — the execution-trace hook — plus `verdict_type`, `consensus_method`,
 `verdict_absent_reason`). Two deliberate honesty choices:
