@@ -16,6 +16,7 @@ from .models import (
     StudyManifest,
     StudyRun,
 )
+from .scoring import AdjudicationRecord, GraderJudgment, StudyScoreReport
 
 __all__ = [
     "EVAL_SCHEMA_VERSION",
@@ -28,4 +29,7 @@ __all__ = [
     "ScoreRecord",
     "StudyManifest",
     "StudyRun",
+    "AdjudicationRecord",
+    "GraderJudgment",
+    "StudyScoreReport",
 ]
