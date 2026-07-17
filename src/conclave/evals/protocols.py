@@ -10,12 +10,14 @@ from collections.abc import Mapping, Sequence
 from .dataset import hash_public_tasks
 from .models import (
     EVAL_CONDITION_IDS,
-    EVAL_SCHEMA_VERSION,
     ConditionId,
     ConditionSpec,
+    FrozenStudyDesign,
     PlannedRun,
     PublicTask,
     StudyManifest,
+    derive_planned_run_id,
+    hash_frozen_study_design,
 )
 
 CONDITIONS: tuple[ConditionSpec, ...] = (
@@ -42,6 +44,27 @@ def condition_order(seed: int) -> tuple[ConditionId, ...]:
     return tuple(ordered)
 
 
+def blocked_condition_order(
+    *, master_seed: int, task_id: str, roster_id: str
+) -> tuple[ConditionId, ...]:
+    """Derive one deterministic, independent permutation per task-roster block."""
+
+    identity = json.dumps(
+        {
+            "method": "sha256_task_roster_block_v1",
+            "master_seed": master_seed,
+            "task_id": task_id,
+            "roster_id": roster_id,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    derived_seed = int.from_bytes(hashlib.sha256(identity).digest(), "big")
+    ordered = list(CONDITION_IDS)
+    random.Random(derived_seed).shuffle(ordered)
+    return tuple(ordered)
+
+
 def _validate_budgets(output_token_budgets: Mapping[str, int]) -> None:
     if set(output_token_budgets) != set(CONDITION_IDS):
         raise ValueError("output_token_budgets must contain exactly the six frozen conditions")
@@ -56,29 +79,6 @@ def _validate_budgets(output_token_budgets: Mapping[str, int]) -> None:
         raise ValueError("planned output-token ceilings must remain within 5% across conditions")
 
 
-def _planned_run_id(
-    *,
-    study_id: str,
-    task_id: str,
-    condition_id: ConditionId,
-    replicate: int,
-    max_output_tokens: int,
-) -> str:
-    identity = json.dumps(
-        {
-            "schema_version": EVAL_SCHEMA_VERSION,
-            "study_id": study_id,
-            "task_id": task_id,
-            "condition_id": condition_id,
-            "replicate": replicate,
-            "max_output_tokens": max_output_tokens,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return f"run_{hashlib.sha256(identity).hexdigest()[:24]}"
-
-
 def build_study_manifest(
     *,
     study_id: str,
@@ -86,8 +86,9 @@ def build_study_manifest(
     replicates: int,
     seed: int,
     output_token_budgets: Mapping[str, int],
+    frozen_design: FrozenStudyDesign | None = None,
 ) -> StudyManifest:
-    """Predeclare every task-condition-replicate cell with stable identities."""
+    """Predeclare every legacy or frozen task-roster-condition-replicate cell."""
 
     if replicates < 1:
         raise ValueError("replicates must be at least one")
@@ -97,33 +98,58 @@ def build_study_manifest(
     if len(set(task_ids)) != len(task_ids):
         raise ValueError("public task_id values must be unique")
     _validate_budgets(output_token_budgets)
+    if frozen_design is not None:
+        if set(frozen_design.task_family_map) != set(task_ids):
+            raise ValueError("task_family_map must exactly cover public task IDs")
+        if frozen_design.randomization.master_seed != seed:
+            raise ValueError("seed must match the frozen randomization master seed")
 
     sorted_tasks = sorted(tasks, key=lambda task: task.task_id)
-    ordered_conditions = condition_order(seed)
+    roster_ids = (
+        tuple(sorted(roster.roster_id for roster in frozen_design.rosters))
+        if frozen_design is not None
+        else ("legacy_default",)
+    )
+    design_hash = hash_frozen_study_design(frozen_design) if frozen_design is not None else None
     planned_runs = tuple(
         PlannedRun(
-            planned_run_id=_planned_run_id(
+            planned_run_id=derive_planned_run_id(
                 study_id=study_id,
                 task_id=task.task_id,
                 condition_id=condition_id,
                 replicate=replicate,
                 max_output_tokens=output_token_budgets[condition_id],
+                roster_id=roster_id,
+                frozen_design_hash=design_hash,
             ),
             study_id=study_id,
             task_id=task.task_id,
+            roster_id=roster_id,
             condition_id=condition_id,
             replicate=replicate,
             max_output_tokens=output_token_budgets[condition_id],
         )
         for task in sorted_tasks
         for replicate in range(1, replicates + 1)
-        for condition_id in ordered_conditions
+        for roster_id in roster_ids
+        for condition_id in (
+            blocked_condition_order(master_seed=seed, task_id=task.task_id, roster_id=roster_id)
+            if frozen_design is not None
+            else condition_order(seed)
+        )
     )
     return StudyManifest(
         study_id=study_id,
+        evidence_classification=(
+            frozen_design.evidence_classification
+            if frozen_design is not None
+            else "synthetic_exploratory"
+        ),
         seed=seed,
         replicates=replicates,
         task_ids=tuple(task.task_id for task in sorted_tasks),
         public_tasks_hash=hash_public_tasks(sorted_tasks),
+        frozen_design=frozen_design,
+        frozen_design_hash=design_hash,
         planned_runs=planned_runs,
     )
