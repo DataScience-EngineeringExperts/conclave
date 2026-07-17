@@ -6,6 +6,7 @@ import math
 import random
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
+from typing import Literal
 
 from pydantic import Field, model_validator
 
@@ -14,10 +15,32 @@ from .models import (
     ConditionId,
     EvalModel,
     RunOutcome,
+    Sha256Digest,
     StudyManifest,
     StudyRun,
 )
 from .runner import validate_run_records
+
+
+class AtomicError(EvalModel):
+    """One rubric-linked error identified in a grader-visible output."""
+
+    rubric_item: str = Field(min_length=1)
+    category: str = Field(min_length=1)
+    severity: Literal["minor", "major", "severe"]
+    detail: str = Field(min_length=1)
+    evidence_packet_ids: tuple[str, ...] = ()
+
+
+class RubricDimensions(EvalModel):
+    """Fixed 0–2 holistic rubric dimensions."""
+
+    constraint_recall: int = Field(ge=0, le=2)
+    conflict_minority_recognition: int = Field(ge=0, le=2)
+    unsupported_claim_avoidance: int = Field(ge=0, le=2)
+    recommendation_correctness: int = Field(ge=0, le=2)
+    completeness_actionability: int = Field(ge=0, le=2)
+    readiness_calibration: int = Field(ge=0, le=2)
 
 
 class GraderJudgment(EvalModel):
@@ -30,11 +53,33 @@ class GraderJudgment(EvalModel):
     critical_error_free: bool
     dimensions: dict[str, int] = Field(default_factory=dict)
     notes: str | None = None
+    atomic_errors: tuple[AtomicError, ...] = ()
+    severe_error: bool | None = None
+    rubric_dimensions: RubricDimensions | None = None
+    reviewer_seconds: float | None = Field(default=None, gt=0)
+    confidence: Literal["low", "medium", "high"] | None = None
+    abstained: bool | None = None
+    rubric_version: str | None = None
+    rubric_hash: Sha256Digest | None = None
+    grader_batch: str | None = None
+    grader_order: int | None = Field(default=None, ge=1)
+    condition_guess: ConditionId | Literal["unknown"] | None = None
+    provider_guess: str | None = None
 
     @model_validator(mode="after")
     def validate_one_target(self) -> GraderJudgment:
         if (self.planned_run_id is None) == (self.opaque_output_id is None):
             raise ValueError("exactly one of planned_run_id or opaque_output_id is required")
+        has_severe = any(error.severity == "severe" for error in self.atomic_errors)
+        if self.severe_error is not None and self.severe_error != has_severe:
+            raise ValueError("severe_error must match the atomic error severities")
+        has_disqualifying_error = any(
+            error.severity in {"major", "severe"} for error in self.atomic_errors
+        )
+        if self.critical_error_free and has_disqualifying_error:
+            raise ValueError("critical_error_free must be false for major or severe errors")
+        if self.abstained is True and self.critical_error_free:
+            raise ValueError("abstained judgments cannot be critical_error_free")
         return self
 
 
@@ -108,6 +153,20 @@ class ReliabilityMetrics(EvalModel):
     disagreements: int = Field(ge=0)
     adjudicated_disagreements: int = Field(ge=0)
     adjudication_rate: float = Field(ge=0.0, le=1.0)
+    raw_agreement: float | None = Field(default=None, ge=0.0, le=1.0)
+    positive_prevalence: float | None = Field(default=None, ge=0.0, le=1.0)
+    strata: tuple[ReliabilityStratum, ...] = ()
+
+
+class ReliabilityStratum(EvalModel):
+    """Agreement statistics for one frozen family or roster stratum."""
+
+    stratum_type: Literal["family", "roster"]
+    stratum_value: str = Field(min_length=1)
+    paired_judgments: int = Field(ge=0)
+    raw_agreement: float | None = Field(default=None, ge=0.0, le=1.0)
+    positive_prevalence: float | None = Field(default=None, ge=0.0, le=1.0)
+    cohen_kappa: float | None = Field(default=None, ge=-1.0, le=1.0)
 
 
 class StudyScoreReport(EvalModel):
@@ -214,7 +273,7 @@ def cohen_kappa(first: Sequence[bool], second: Sequence[bool]) -> float | None:
     second_true = sum(second) / len(second)
     expected = first_true * second_true + (1 - first_true) * (1 - second_true)
     if expected == 1.0:
-        return 1.0 if observed == 1.0 else None
+        return None
     return (observed - expected) / (1 - expected)
 
 
@@ -237,11 +296,38 @@ def _planned_target(record: GraderJudgment | AdjudicationRecord, mapping: Mappin
         raise ValueError("opaque target is missing from the blind map") from exc
 
 
+def _paired_values(
+    judgments_by_run: Mapping[str, Sequence[GraderJudgment]], run_ids: Sequence[str]
+) -> tuple[tuple[str, str] | None, list[tuple[bool, bool]]]:
+    graders = sorted({item.grader_id for values in judgments_by_run.values() for item in values})
+    if len(graders) != 2:
+        return None, []
+    first, second = graders
+    pairs = []
+    for run_id in sorted(run_ids):
+        by_grader = {item.grader_id: item.critical_error_free for item in judgments_by_run[run_id]}
+        if first in by_grader and second in by_grader:
+            pairs.append((by_grader[first], by_grader[second]))
+    return (first, second), pairs
+
+
+def _agreement_statistics(
+    pairs: Sequence[tuple[bool, bool]],
+) -> tuple[float | None, float | None, float | None]:
+    if not pairs:
+        return None, None, None
+    first = [left for left, _ in pairs]
+    second = [right for _, right in pairs]
+    raw_agreement = sum(left == right for left, right in pairs) / len(pairs)
+    prevalence = (sum(first) + sum(second)) / (2 * len(pairs))
+    return raw_agreement, prevalence, cohen_kappa(first, second)
+
+
 def _reliability(
     judgments_by_run: Mapping[str, Sequence[GraderJudgment]],
     adjudicated_runs: set[str],
+    manifest: StudyManifest,
 ) -> ReliabilityMetrics:
-    graders = sorted({item.grader_id for values in judgments_by_run.values() for item in values})
     disagreements = sum(
         len({item.critical_error_free for item in values}) > 1
         for values in judgments_by_run.values()
@@ -252,27 +338,100 @@ def _reliability(
         if len({item.critical_error_free for item in values}) > 1
     )
     rate = adjudicated_disagreements / disagreements if disagreements else 0.0
-    if len(graders) != 2:
-        return ReliabilityMetrics(
-            paired_judgments=0,
-            disagreements=disagreements,
-            adjudicated_disagreements=adjudicated_disagreements,
-            adjudication_rate=rate,
-        )
-    first, second = graders
-    pairs = []
-    for run_id in sorted(judgments_by_run):
-        by_grader = {item.grader_id: item.critical_error_free for item in judgments_by_run[run_id]}
-        if first in by_grader and second in by_grader:
-            pairs.append((by_grader[first], by_grader[second]))
+    grader_pair, pairs = _paired_values(judgments_by_run, tuple(judgments_by_run))
+    raw_agreement, prevalence, kappa = _agreement_statistics(pairs)
+    strata: list[ReliabilityStratum] = []
+    if manifest.frozen_design is not None:
+        for family in sorted(set(manifest.frozen_design.task_family_map.values())):
+            run_ids = [
+                run.planned_run_id
+                for run in manifest.planned_runs
+                if manifest.frozen_design.task_family_map[run.task_id] == family
+            ]
+            _, stratum_pairs = _paired_values(judgments_by_run, run_ids)
+            agreement, stratum_prevalence, stratum_kappa = _agreement_statistics(stratum_pairs)
+            strata.append(
+                ReliabilityStratum(
+                    stratum_type="family",
+                    stratum_value=family,
+                    paired_judgments=len(stratum_pairs),
+                    raw_agreement=agreement,
+                    positive_prevalence=stratum_prevalence,
+                    cohen_kappa=stratum_kappa,
+                )
+            )
+        for roster_id in sorted(roster.roster_id for roster in manifest.frozen_design.rosters):
+            run_ids = [
+                run.planned_run_id for run in manifest.planned_runs if run.roster_id == roster_id
+            ]
+            _, stratum_pairs = _paired_values(judgments_by_run, run_ids)
+            agreement, stratum_prevalence, stratum_kappa = _agreement_statistics(stratum_pairs)
+            strata.append(
+                ReliabilityStratum(
+                    stratum_type="roster",
+                    stratum_value=roster_id,
+                    paired_judgments=len(stratum_pairs),
+                    raw_agreement=agreement,
+                    positive_prevalence=stratum_prevalence,
+                    cohen_kappa=stratum_kappa,
+                )
+            )
     return ReliabilityMetrics(
-        grader_pair=(first, second),
-        cohen_kappa=cohen_kappa([left for left, _ in pairs], [right for _, right in pairs]),
+        grader_pair=grader_pair,
+        cohen_kappa=kappa,
         paired_judgments=len(pairs),
         disagreements=disagreements,
         adjudicated_disagreements=adjudicated_disagreements,
         adjudication_rate=rate,
+        raw_agreement=raw_agreement,
+        positive_prevalence=prevalence,
+        strata=tuple(strata),
     )
+
+
+def _validate_paid_grading(
+    *,
+    manifest: StudyManifest,
+    study_run: StudyRun,
+    judgments_by_run: Mapping[str, Sequence[GraderJudgment]],
+) -> None:
+    """Fail closed on incomplete or non-independent paid-study grading."""
+
+    if manifest.evidence_classification == "synthetic_exploratory":
+        return
+    run_by_id = {record.planned_run_id: record for record in study_run.records}
+    required_fields = (
+        "severe_error",
+        "rubric_dimensions",
+        "reviewer_seconds",
+        "confidence",
+        "abstained",
+        "rubric_version",
+        "rubric_hash",
+        "grader_batch",
+        "grader_order",
+        "condition_guess",
+        "provider_guess",
+    )
+    for run_id, judgments in judgments_by_run.items():
+        if run_by_id[run_id].outcome != "success":
+            raise ValueError("non-success cells must remain outside paid human grading")
+        if any(
+            getattr(judgment, field) is None for judgment in judgments for field in required_fields
+        ):
+            raise ValueError("paid judgments require complete paid-study fields")
+        if manifest.frozen_design is not None and any(
+            judgment.rubric_hash != manifest.frozen_design.rubric_hash for judgment in judgments
+        ):
+            raise ValueError("paid judgment rubric hash must match the frozen design")
+    for record in study_run.records:
+        if record.outcome != "success":
+            continue
+        judgments = judgments_by_run[record.planned_run_id]
+        if len(judgments) != 2 or len({item.grader_id for item in judgments}) != 2:
+            raise ValueError(
+                "every successful paid cell requires exactly two independent judgments"
+            )
 
 
 def score_study(
@@ -312,6 +471,10 @@ def score_study(
             raise ValueError("a grader may provide only one judgment per planned run")
         seen_grader_targets.add(grader_target)
         judgments_by_run[run_id].append(judgment)
+
+    _validate_paid_grading(
+        manifest=manifest, study_run=study_run, judgments_by_run=judgments_by_run
+    )
 
     adjudication_by_run: dict[str, AdjudicationRecord] = {}
     for adjudication in adjudications:
@@ -399,13 +562,14 @@ def score_study(
     )
     return StudyScoreReport(
         study_id=manifest.study_id,
+        evidence_classification=manifest.evidence_classification,
         total_planned_runs=len(manifest.planned_runs),
         run_outcome_distribution=dict(
             sorted(Counter(item.outcome for item in study_run.records).items())
         ),
         condition_metrics=tuple(condition_metrics),
         paired_differences=paired,
-        reliability=_reliability(judgments_by_run, set(adjudication_by_run)),
+        reliability=_reliability(judgments_by_run, set(adjudication_by_run), manifest),
         raw_judgments=tuple(raw_judgments),
         adjudications=tuple(adjudications),
         resolved_outcomes=tuple(resolved),
