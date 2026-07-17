@@ -14,6 +14,7 @@ from conclave import (
     ModelAnswer,
 )
 from conclave.config import ConclaveConfig
+from conclave.manifest import SECRET_SAFETY_VERIFIED
 from conclave.modes import run_elite
 from conclave.prompts import (
     ELITE_CRITIC_SYSTEM,
@@ -400,6 +401,10 @@ async def test_council_elite_synthesizes_revisions_and_applies_canonical_verdict
     assert result.verdict is not None
     assert result.consensus_score == result.verdict.consensus_score == 1.0
     assert result.provider_votes == result.verdict.provider_votes
+    assert result.manifest is not None
+    assert result.manifest.verdict_extraction.model_id == "anthropic/claude-sonnet-4-6"
+    assert result.manifest.verdict_extraction.prompt_version is not None
+    assert result.manifest.secret_safety == SECRET_SAFETY_VERIFIED
 
 
 async def test_council_elite_incomplete_skips_synthesis_and_verdict(

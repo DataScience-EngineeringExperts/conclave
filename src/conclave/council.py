@@ -904,6 +904,7 @@ class Council:
             result = await run_elite(self, prompt)
             if result.elite is not None and result.elite.completed:
                 await self._synthesize(result)
+                self._ensure_manifest(result, "elite")
                 await self._apply_verdict(result)
             return result
 
