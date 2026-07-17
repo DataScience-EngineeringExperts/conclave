@@ -1,5 +1,8 @@
 # Elite Decision Protocol Implementation Plan
 
+> **Historical implementation plan (superseded):** terminology and receipt scope below record
+> the initial build. The current contracts are defined by the PDD and H0 hardening plan.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add a three-stage, minimum-three-member Elite Decision Protocol that produces a stronger evidence-audited decision through conclave's existing auditable verdict.

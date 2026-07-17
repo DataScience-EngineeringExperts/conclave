@@ -1,6 +1,6 @@
 # Conclave Decision Quality Roadmap
 
-**Status:** Approved product direction; implementation is gated by the evidence below
+**Status:** Approved direction; Horizon 0 implemented on the draft branch, pending full gate review
 **Date:** 2026-07-17
 **Current product:** v1.1.0 stable; Elite implemented but unreleased on draft PR #51
 
@@ -12,11 +12,11 @@ not "more agents." It is a disciplined path from source material to competing cl
 critique, decision readiness, and an exportable brief, with receipts that let a reviewer
 reconstruct what happened.
 
-That wording is intentionally narrower than the current "fully auditable" language. Today,
+That wording is intentionally narrower than source-auditable product language. Today,
 Conclave traces model execution and the model-assisted clustering behind a verdict. Its
 `evidence_answer_ids` identify council answers, **not external evidence**. Until source
 grounding and deterministic citation validation ship, the honest claim is
-**execution-traceable**, not source-auditable or fully auditable.
+**execution-traceable**, not source-auditable.
 
 ## Product doctrine
 
@@ -30,16 +30,16 @@ grounding and deterministic citation validation ship, the honest claim is
 
 ## Horizon 0 — verify Elite correctness before merge
 
-Elite remains implemented but unreleased. Draft PR #51 must remain draft until these
-correctness gaps are resolved and regression-tested:
+Elite remains implemented but unreleased. The draft branch now implements these contracts;
+draft PR #51 must remain draft until the complete merge gate verifies them:
 
-1. **Persistent identities.** Give each initial answer a stable identifier that survives
+1. **Persistent identities.** Each initial answer has a stable identifier that survives claim
    audit, revision, synthesis, serialization, and cache replay. Do not present those IDs as
    external citations.
-2. **Two states, not one.** Separate `protocol_completion` (all required phases executed)
+2. **Two states, not one.** Separate `completed` (all required member phases succeeded)
    from `decision_readiness`. Readiness is `ready`, `not_ready`, or `indeterminate`, with
    machine-readable reasons. A completed run may still be `not_ready`.
-3. **Full-call receipts.** Manifest totals must include member, audit, revision, synthesis,
+3. **Full-call receipts.** Buffered Elite manifest totals include member, claim-audit, revision, synthesis,
    repair, and verdict-extraction calls, with phase, latency, usage, errors, and prompt/schema
    versions. Never imply completeness when final calls are absent from totals.
 4. **Version-aware cache.** Cache identity must cover protocol, prompt, schema, model,
@@ -47,8 +47,8 @@ correctness gaps are resolved and regression-tested:
    artifacts cannot replay as current.
 5. **Custom config threading.** Every Elite phase, including synthesis and verdict
    extraction, must receive the same resolved custom-endpoint/provider configuration.
-6. **Correct language.** Rename "evidence audit" where necessary to "answer/claim audit"
-   until external sources exist. Product copy must say execution-traceable. Answer IDs prove
+6. **Correct language.** Use "answer/claim audit" until external sources exist. Product copy
+   must say execution-traceable. Answer IDs prove
    provenance within a run; they do not prove truth.
 
 **Merge gate:** all six items have tests, the complete suite and static checks pass, a

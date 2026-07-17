@@ -10,19 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Elite Decision Protocol (unreleased).** A quality-first `elite` mode for consequential
-  decisions: independent member answers → concurrent council-wide evidence audits → concurrent
-  member revisions → the existing synthesis and canonical auditable verdict. It is available
+  decisions: independent member answers → concurrent council-wide claim audits → concurrent
+  member revisions → the existing synthesis and canonical execution-traceable verdict. It is available
   through `--mode elite`, `Council.elite()`, and `elite_sync()` in source; no version, tag, or
   package publication is claimed here.
 - **Fixed three-success phase gate.** Each of Elite's `initial`, `critique`, and `revision`
   phases requires three successful responders. Larger councils may survive partial failures
   while three remain. A failed gate stops later calls and returns an incomplete result with a
   phase-specific reason, attempted artifacts, no synthesis/verdict, and CLI exit code 1.
-- **Phase-auditable results.** `EliteResult` preserves initial answers, critiques, and revisions;
+- **Execution-traceable results.** `EliteResult` preserves initial answers, critiques, and revisions;
   the manifest records a separate redacted receipt with `phase` provenance for every attempted
-  member call, aggregates phase usage/latency, and retains the existing secret-safety scan.
+  buffered Elite call through synthesis, extraction, and repair, and aggregates reported
+  usage/latency. Unknown cost remains `None` instead of being guessed.
   Elite is buffered-only: `--stream` is rejected before provider calls. The quality tradeoff is
-  explicit—up to `3N + 2` calls for N members versus the ordinary single-fan-out workflow.
+  explicit—normally up to `3N + 2` calls for N members, or `3N + 3` when repair is attempted.
+- **Completion is not readiness.** `EliteResult.completed` records successful member phases;
+  `decision_readiness` separately reports `ready`, `not_ready`, or `indeterminate` with reasons.
+  The CLI exits 1 unless an Elite decision is `ready`.
+- **Version-aware cache identity.** Cache keys cover the resolved roster, generation and mode
+  settings, extraction behavior, sanitized endpoint routing, optional source-bundle digest, and
+  cache/protocol/prompt/schema versions. Old incompatible envelopes are safe misses.
 
 ### Fixed
 
@@ -54,9 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.1.0] - 2026-06-21
 
-The **auditable council**. Every run now produces a structured, agreement-scored,
-fully auditable verdict plus a redacted execution manifest, on top of the existing
-synthesize/raw/debate/adversarial modes. The verdict is the product wedge: a
+The **auditable council** (the historical v1.1 release name). Every run produces a structured,
+agreement-scored, execution-traceable verdict plus a redacted execution manifest, on top of the
+existing synthesize/raw/debate/adversarial modes. The verdict is the product wedge: a
 multi-model council answer you can act on, with the agreement number computed by
 reproducible arithmetic over the model's clustering — never an LLM-emitted figure.
 

@@ -15,11 +15,11 @@ returns **structured results** (per-model latency, token usage, and error captur
 logged. It ships six modes: **synthesize** (merge answers into one), **raw** (no merge),
 **debate** (multi-round, members revise after seeing peers' anonymized answers), and
 **adversarial** (propose → refute → verdict), **vote** (fixed-choice tally), and
-**elite** (quality-first evidence audit and revision). conclave is intentionally lightweight — a
+**elite** (quality-first claim audit and revision). conclave is intentionally lightweight — a
 small council primitive, not an agent framework.
 
-**The v1.1 wedge — the auditable council.** Every run also yields **a multi-model council
-verdict you can act on — structured, scored for agreement, fully auditable**: a
+**The v1.1 wedge — the execution-traceable council.** Every run also yields **a multi-model
+council verdict you can inspect — structured, scored for agreement, and execution-traceable**: a
 `CouncilVerdict` exposing agreement, `conflicts`, `minority_reports`, and `provider_votes`;
 a deterministic `consensus_score` (arithmetic over the model's clustering, *never* an
 LLM-emitted number); and a redacted `ModelHarnessManifest` recording how the run executed and
@@ -126,7 +126,7 @@ conclave ask "Defend event sourcing for this ledger." \
 conclave ask "Which datastore for this workload?" \
   -c grok,gemini,claude --mode vote --choices "Postgres,DynamoDB,MongoDB"
 
-# Elite (unreleased): independent answers -> evidence audits -> revisions -> verdict
+# Elite (unreleased): independent answers -> claim audits -> revisions -> verdict
 conclave ask "Should we adopt a service mesh for 8 services?" \
   -c grok,gemini,claude --mode elite
 
@@ -187,10 +187,10 @@ spend for a stronger answer: three concurrent member phases, followed by conclav
 synthesis and canonical structured verdict.
 
 1. **Initial:** members answer independently.
-2. **Evidence audit:** every surviving member audits the anonymized panel for supported,
-   conflicting, and externally unverified claims.
+2. **Claim audit:** every surviving member audits the anonymized panel for supported,
+   conflicting, and externally unverified claims. This compares answers; it does not check sources.
 3. **Revision:** survivors revise their own answer using the full anonymized panel and audits.
-4. **Final:** conclave synthesizes successful revisions, then applies the existing auditable
+4. **Final:** conclave synthesizes successful revisions, then applies the existing structured
    verdict and deterministic consensus calculation.
 
 Each member phase has a fixed gate of **three successful responders**. A council larger than
@@ -212,27 +212,30 @@ council = Council(
 result = council.elite_sync("Should we adopt a service mesh for 8 services?")
 # or: result = await council.elite("Should we adopt a service mesh for 8 services?")
 
-if result.elite.completed:
+if result.elite.completed and result.elite.decision_readiness == "ready":
     print(result.synthesis)
     print(result.verdict)
 else:
-    print(result.elite.failure_reason)
+    print(result.elite.decision_readiness, result.elite.readiness_reasons)
 
 for receipt in result.manifest.receipts:
-    print(receipt.phase, receipt.name, receipt.error)  # initial/critique/revision
+    print(receipt.phase, receipt.name, receipt.outcome)
 ```
 
 Elite normally makes up to `3N + 2` calls for `N` members: three concurrent member phases,
-one synthesis call, and one verdict-extraction call. Failures reduce later member calls, and
-`Council(extract_verdict=False)` removes the final extraction call. The manifest keeps a
-separate receipt for every attempted `initial`, `critique`, and `revision` call, aggregates
-their latency/usage, preserves redacted failures, and remains secret-scanned. Elite does **not**
-stream.
+one synthesis call, and one verdict-extraction call; a schema repair can raise that to `3N + 3`.
+`Council(extract_verdict=False)` removes extraction and leaves readiness `indeterminate`. The
+secret-scanned manifest records every attempted member, synthesis, extraction, and repair call
+and aggregates reported latency/usage; unknown cost remains `None`. Elite does **not** stream.
 
-## Auditable verdict
+`completed` means the three member phases ran successfully; it does not mean the output is ready
+to use. `decision_readiness` is separately `ready`, `not_ready`, or `indeterminate`, with
+machine-readable `readiness_reasons`; the CLI exits 1 unless readiness is `ready`.
+
+## Execution-traceable verdict
 
 On a decision- or review-style prompt with at least two responding members, conclave
-adjudicates the answers into a structured, agreement-scored, auditable **verdict**. It is
+adjudicates the answers into a structured, agreement-scored, execution-traceable **verdict**. It is
 **default-on** — no flag needed.
 
 From the CLI, a decision prompt renders a green `VERDICT` panel:
@@ -297,8 +300,8 @@ run), construct with `Council(extract_verdict=False)`; then `result.verdict` sta
 members' stances; `consensus_score` is then deterministic arithmetic over that clustering
 (largest cluster / members with a position — no text-similarity, never model-emitted). Every
 cluster cites the member `answer_id`s backing it (`evidence_answer_ids`), and the manifest
-records which model + prompt version did the clustering, so the score is reproducible and
-traceable rather than a number to take on faith.
+records which model + prompt version did the clustering, so the calculation is traceable. It
+measures agreement over model-assisted clusters, not truth or external factual support.
 
 **The verdict is optional.** It is absent — `result.verdict is None`, with the synthesis and
 member answers still returned — for an open-ended/creative prompt, for fewer than two
@@ -421,11 +424,11 @@ Then: `conclave ask "..." --council fast`.
 
 Repeated or eval runs can be served from an on-disk cache instead of re-calling
 the providers. It is **off by default** and **never persists API keys** — the
-cache key is a SHA-256 over the normalized prompt, the ordered council members
-(friendly name + resolved model id), the mode, the synthesizer/judge identity,
-and the mode params (temperature, debate `rounds` + `converge_threshold`,
-adversarial `proposer`). No key value or env-var name ever reaches the key or the
-stored payload.
+cache key is a SHA-256 over a canonical identity covering prompt, mode, ordered resolved
+models, synthesizer/judge, generation/mode settings, verdict-extraction behavior, sanitized
+custom-endpoint fingerprints, source-bundle digest, and cache/protocol/prompt/schema versions.
+No key value or raw endpoint URL reaches the identity or stored payload; incompatible older
+cache envelopes are misses, not migrated results.
 
 Enable it per run with `--cache` (or disable a config default with `--no-cache`):
 

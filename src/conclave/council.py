@@ -972,7 +972,7 @@ class Council:
         )
 
     async def elite(self, prompt: str) -> CouncilResult:
-        """Run the evidence-audited Elite Decision Protocol.
+        """Run the answer/claim-audited Elite Decision Protocol.
 
         Completed runs synthesize the council's revised answers and apply the
         canonical structured verdict. A run that fails any three-responder gate

@@ -5,8 +5,8 @@ the system context: how a user (or a downstream consumer) drives conclave, how c
 environment-variable keys feed in, how requests reach the nine first-class providers through
 conclave's own **provider highway** (an httpx transport + per-provider adapter registry — no
 LLM-SDK dependency), how the v1.1 **verdict pipeline** turns the member answers into a
-structured, agreement-scored, **auditable** verdict plus a redacted execution manifest, and
-how the implemented-but-unreleased **Elite Decision Protocol** adds gated evidence audit and
+structured, agreement-scored, **execution-traceable** verdict plus a redacted execution manifest, and
+how the implemented-but-unreleased **Elite Decision Protocol** adds gated claim audit and
 revision before that verdict. It also shows where **mcp-warden** sits as a dev-time consumer.
 
 > Authority note: behavioral details here are descriptive. The canonical spec is
@@ -31,7 +31,7 @@ flowchart TB
         lib["Library API · from conclave import Council (__init__.py)"]
         council["Council orchestrator<br/>fan_out · synthesize_blocks · skip-no-key (council.py)"]
         modes["Deliberation modes<br/>debate · adversarial · vote (modes.py + prompts.py)"]
-        elite["Elite (UNRELEASED)<br/>initial → evidence audit → revision<br/>fixed 3-success gate each phase"]
+        elite["Elite (UNRELEASED)<br/>initial → claim audit → revision<br/>fixed 3-success gate each phase"]
         registry["Registry · name to model-id<br/>key PRESENCE only, never values (registry.py)"]
         config["Config loader · custom endpoints (config.py)"]
         models["Result contract · CouncilResult v2<br/>answers · verdict · consensus · manifest (models.py)"]
@@ -136,7 +136,7 @@ flowchart TB
   speaks native `generateContent` (OpenAI roles mapped, `systemInstruction` hoisted,
   `usageMetadata` parsed). Every adapter builds a request and hands it to the **single**
   network boundary — `transport.post_json` (`transport.py`), one async httpx call site.
-- **The verdict pipeline is default-on and auditable (PDD §4a).** Once the council has the
+- **The verdict pipeline is default-on and execution-traceable (PDD §4a).** Once the council has the
   member answers, `_apply_verdict` (`council.py`, run on both the buffered and streaming
   paths, *after* the manifest exists) drives `extract_verdict` (`verdict_synthesis.py`): a
   **single** extraction call asks the synthesizer model to *cluster* the members' stances —
@@ -159,11 +159,13 @@ flowchart TB
   prompts, fewer than two responding members, or extraction failure leave `verdict = None`
   with the synthesis and member answers intact and the reason recorded on the manifest.
 - **Elite is quality-first and unreleased.** Its three concurrent member phases are independent
-  answers, council-wide anonymized evidence audits, and member revisions. Each phase requires
+  answers, council-wide anonymized claim audits, and member revisions. Answer IDs trace outputs
+  within the run; they are not external citations. Each phase requires
   three successful responders. Larger councils may lose members and continue while three remain;
   a failed gate stops later calls and returns an incomplete result with artifacts and phased
-  receipts for attempted work, but no synthesis or verdict. Completed runs feed revisions into
-  the existing synthesis and verdict pipeline. This can cost up to `3N + 2` calls and more
+  receipts for attempted work, but no synthesis or verdict. Completion is separate from decision
+  readiness (`ready`/`not_ready`/`indeterminate`). Completed runs feed revisions into the existing
+  synthesis and verdict pipeline. This normally costs up to `3N + 2` calls (`3N + 3` with repair) and more
   wall-clock time than ordinary modes; `--stream` is rejected because Elite is buffered only.
 - **Streaming shares the same boundary (PDD §9 #5).** A `--stream` run (and the library
   `Council.ask_stream` async generator) flows through a streaming sibling of the call path:

@@ -1,5 +1,8 @@
 # Elite Decision Protocol Design
 
+> **Historical design (superseded):** terminology and receipt scope below record the initial
+> design. The current contracts are defined by the PDD and the H0 hardening plan.
+
 ## Outcome
 
 Add a first-class `elite` council mode optimized for consequential decisions. Elite runs
