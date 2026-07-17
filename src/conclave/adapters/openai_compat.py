@@ -178,6 +178,7 @@ class OpenAICompatAdapter:
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
+        max_output_tokens: int | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the OpenAI-style POST.
 
@@ -196,8 +197,9 @@ class OpenAICompatAdapter:
         }
         if temperature is not None:
             body["temperature"] = temperature
-        if self.max_tokens is not None:
-            body["max_tokens"] = self.max_tokens
+        token_cap = max_output_tokens if max_output_tokens is not None else self.max_tokens
+        if token_cap is not None:
+            body["max_tokens"] = token_cap
         # Capability-gated ``response_format`` injection. Passes the FULL
         # provider-prefixed ``model_id`` (NOT the bare wire id already stored in
         # body["model"]) because the catalog is keyed on the full id. No-op when
@@ -240,6 +242,7 @@ class OpenAICompatAdapter:
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
+        max_output_tokens: int | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the streaming POST: ``build_request`` + ``stream`` flags.
 
@@ -253,7 +256,13 @@ class OpenAICompatAdapter:
         # capability-gated ``response_format`` shaping (compatible with
         # stream:true). Stream flags are layered on top of the shaped body.
         url, headers, body = self.build_request(
-            model_id, messages, temperature, timeout, api_key, output_contract
+            model_id,
+            messages,
+            temperature,
+            timeout,
+            api_key,
+            output_contract=output_contract,
+            max_output_tokens=max_output_tokens,
         )
         body["stream"] = True
         body["stream_options"] = {"include_usage": True}
