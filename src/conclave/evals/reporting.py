@@ -1,4 +1,4 @@
-"""Deterministic JSON and Markdown rendering for exploratory eval reports."""
+"""Deterministic JSON and Markdown rendering for evaluation reports."""
 
 from __future__ import annotations
 
@@ -12,8 +12,16 @@ from .scoring import StudyScoreReport
 def render_markdown_report(report: StudyScoreReport) -> str:
     """Render a compact human report without promoting exploratory evidence."""
 
+    evidence_labels = {
+        "synthetic_exploratory": "SYNTHETIC / EXPLORATORY",
+        "paid_exploratory_pilot": "PAID / EXPLORATORY PILOT",
+        "confirmatory": "CONFIRMATORY / GATE EVALUATION REQUIRED",
+    }
+    evidence_label = evidence_labels.get(
+        report.evidence_classification, report.evidence_classification.upper()
+    )
     lines = [
-        "# Conclave Elite Evaluation — SYNTHETIC / EXPLORATORY",
+        f"# Conclave Elite Evaluation — {evidence_label}",
         "",
         f"Study: `{report.study_id}`",
         "",

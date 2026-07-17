@@ -64,6 +64,17 @@ def test_markdown_report_is_explicitly_exploratory_and_complete() -> None:
     assert "confirmatory" in markdown.lower()
 
 
+def test_markdown_report_uses_the_recorded_evidence_classification() -> None:
+    report = _synthetic_report().model_copy(
+        update={"evidence_classification": "paid_exploratory_pilot"}
+    )
+
+    markdown = render_markdown_report(report)
+
+    assert "PAID / EXPLORATORY PILOT" in markdown
+    assert "SYNTHETIC / EXPLORATORY" not in markdown
+
+
 def test_report_bundle_writes_machine_json_and_human_markdown(tmp_path) -> None:
     report = _synthetic_report()
     json_path = tmp_path / "nested" / "report.json"
