@@ -151,7 +151,7 @@ def _elite_prompt_answers() -> list[ModelAnswer]:
     ]
 
 
-def test_elite_critic_prompt_is_anonymized_evidence_audit() -> None:
+def test_elite_critic_prompt_is_anonymized_claim_audit() -> None:
     answers = _elite_prompt_answers()
 
     built = elite_critic_user("Choose the strongest option.", answers)
@@ -169,6 +169,9 @@ def test_elite_critic_prompt_is_anonymized_evidence_audit() -> None:
     assert "CONFLICTING" in ELITE_CRITIC_SYSTEM
     assert "EXTERNALLY UNVERIFIED" in ELITE_CRITIC_SYSTEM
     assert "Do not invent citations" in ELITE_CRITIC_SYSTEM
+    assert "claim auditor" in ELITE_CRITIC_SYSTEM
+    assert "within-run answer provenance" in ELITE_CRITIC_SYSTEM
+    assert "evidence auditor" not in ELITE_CRITIC_SYSTEM
 
 
 def test_elite_revision_prompt_includes_original_panel_and_critiques() -> None:
@@ -177,7 +180,7 @@ def test_elite_revision_prompt_includes_original_panel_and_critiques() -> None:
         ModelAnswer(
             name=f"critic-{index}",
             model_id=f"critic-vendor/model-{index}",
-            answer=f"Evidence audit {index}",
+            answer=f"Claim audit {index}",
             answer_id=f"critique-{index:03d}",
         )
         for index in range(1, 4)
@@ -245,6 +248,49 @@ async def test_run_elite_executes_three_stages_and_captures_artifacts(
     ] * 3
     assert all(answer.ok for answer in result.answers)
     assert all(answer.answer.startswith("revision") for answer in result.answers)
+
+
+async def test_run_elite_assigns_phase_specific_ids_and_preserves_them_round_trip(
+    monkeypatch, patch_call_model
+) -> None:
+    _all_keys(monkeypatch)
+
+    def handler(model_id, messages):
+        return make_response(f"{_phase(messages)} from {model_id}")
+
+    patch_call_model(handler)
+    result = await run_elite(
+        Council(
+            models=["grok", "gemini", "perplexity"],
+            config=_elite_config(),
+            extract_verdict=False,
+        ),
+        "Decide.",
+    )
+
+    assert result.elite is not None
+    phase_artifacts = {
+        "initial": result.elite.initial_answers,
+        "critique": result.elite.critiques,
+        "revision": result.elite.revisions,
+    }
+    for phase, artifacts in phase_artifacts.items():
+        assert all((answer.answer_id or "").startswith(f"ca_{phase}_") for answer in artifacts)
+    assert [answer.answer_id for answer in result.answers] == [
+        answer.answer_id for answer in result.elite.revisions if answer.ok
+    ]
+
+    reconstructed = CouncilResult.model_validate_json(result.model_dump_json())
+    assert reconstructed.elite is not None
+    assert [answer.answer_id for answer in reconstructed.elite.initial_answers] == [
+        answer.answer_id for answer in result.elite.initial_answers
+    ]
+    assert [answer.answer_id for answer in reconstructed.elite.critiques] == [
+        answer.answer_id for answer in result.elite.critiques
+    ]
+    assert [answer.answer_id for answer in reconstructed.elite.revisions] == [
+        answer.answer_id for answer in result.elite.revisions
+    ]
 
 
 @pytest.mark.parametrize("failed_phase", ["initial", "critique", "revision"])
@@ -398,6 +444,7 @@ async def test_council_elite_synthesizes_revisions_and_applies_canonical_verdict
     assert len(synthesis_inputs) == 1
     assert "revision from xai/grok-4.3" in synthesis_inputs[0]
     assert "initial from xai/grok-4.3" not in synthesis_inputs[0]
+    assert all(f"Answer ID: {answer.answer_id}" in synthesis_inputs[0] for answer in result.answers)
     assert result.verdict is not None
     assert result.consensus_score == result.verdict.consensus_score == 1.0
     assert result.provider_votes == result.verdict.provider_votes

@@ -62,18 +62,20 @@ JUDGE_SYSTEM = (
 )
 
 ELITE_CRITIC_SYSTEM = (
-    "You are an evidence auditor in an elite decision council. Independently "
+    "You are a claim auditor in an elite decision council. Independently "
     "stress-test the anonymized answers against the original prompt. Organize "
     "your audit into three explicit categories: SUPPORTED claims, CONFLICTING "
     "claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in "
     "the answers from assumptions that would require outside verification. Do "
-    "not invent citations, sources, quotations, measurements, or facts. Cite "
-    "the displayed answer IDs when identifying a claim. Preserve meaningful "
+    "not invent citations, sources, quotations, measurements, or facts. The "
+    "displayed answer IDs provide within-run answer provenance only; they do "
+    "not prove any claim against external sources. Cite those IDs when identifying "
+    "a claim. Preserve meaningful "
     "minority positions and be precise about uncertainty."
 )
 
 ELITE_REVISION_SYSTEM = (
-    "You are revising your independent answer after an evidence audit by an "
+    "You are revising your independent answer after a claim audit by an "
     "elite decision council. Use the anonymized initial panel and critiques to "
     "correct unsupported claims, resolve conflicts where the supplied material "
     "permits, and clearly mark externally unverified claims. Do not invent "
@@ -179,12 +181,12 @@ def _elite_artifact_block(answers: Sequence[ModelAnswer], phase: str) -> str:
 
 
 def elite_critic_user(prompt: str, answers: Sequence[ModelAnswer]) -> str:
-    """Build an anonymized, evidence-audit prompt for an elite critic."""
+    """Build an anonymized claim-audit prompt with within-run answer IDs."""
     panel = _elite_artifact_block(answers, "initial answer")
     return (
         f"Original prompt:\n{prompt}\n\n"
         f"Anonymized initial panel:\n\n{panel}\n\n"
-        "Audit the panel using the required evidence categories."
+        "Audit the panel using the required claim categories."
     )
 
 
@@ -203,6 +205,6 @@ def elite_revision_user(
         f"Your original answer (Answer ID: {original_id}):\n"
         f"{original_answer.answer or ''}\n\n"
         f"Anonymized initial panel:\n\n{initial_panel}\n\n"
-        f"Anonymized evidence critiques:\n\n{critique_panel}\n\n"
-        "Now provide your evidence-aware revised answer."
+        f"Anonymized claim audits:\n\n{critique_panel}\n\n"
+        "Now provide your claim-audit-aware revised answer."
     )

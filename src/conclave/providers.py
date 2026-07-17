@@ -24,7 +24,7 @@ from .adapters.base import OutputContract, ProviderAdapter, redact
 from .config import ConclaveConfig, load_config
 from .logging import get_logger
 from .manifest import ProviderExecutionReceipt
-from .models import ModelAnswer, TokenUsage
+from .models import ModelAnswer, TokenUsage, stable_answer_id
 from .registry import provider_prefix
 from .transport import TransportError
 
@@ -165,6 +165,7 @@ async def call_model(
             answer=text,
             latency_s=latency,
             usage=usage,
+            answer_id=stable_answer_id(name, model_id, text),
         )
     except (ProviderError, TransportError) as exc:
         latency = time.perf_counter() - started
@@ -329,6 +330,7 @@ async def call_model_stream(
             answer=text,
             latency_s=latency,
             usage=usage,
+            answer_id=stable_answer_id(name, model_id, text),
         )
     except (ProviderError, TransportError) as exc:
         # Mid-stream failure: preserve any partial text already collected, set

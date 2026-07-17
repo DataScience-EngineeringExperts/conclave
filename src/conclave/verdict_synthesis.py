@@ -102,7 +102,9 @@ _REASON_EXTRACTION_FAILED = "verdict extraction failed schema validation"
 _EXTRACTION_SYSTEM = (
     "You are the verdict extractor for an auditable multi-model council. You are "
     "given the original prompt and each council member's answer, labeled with a "
-    "stable evidence id. Produce ONE JSON object that conforms exactly to the "
+    "stable answer id. These IDs provide within-run answer provenance only; they "
+    "do not prove claims against external sources. Produce ONE JSON object that "
+    "conforms exactly to the "
     "provided JSON Schema and nothing else.\n\n"
     "Your job is to ADJUDICATE, not to re-answer:\n"
     "- Set verdict_applies=false when the prompt is open-ended generation (a poem, "
@@ -111,8 +113,9 @@ _EXTRACTION_SYSTEM = (
     "- Set verdict_type to 'decision' (a question with an answer), 'review' (an "
     "accept/revise/reject judgment), or 'synthesis' (open-ended consolidation).\n"
     "- Cluster the members into positions[]; each position lists the providers in "
-    "it and the evidence_answer_ids (the labels shown) backing it, so a human can "
-    "verify every assignment against the raw answer.\n"
+    "it and the evidence_answer_ids (the compatibility field containing the answer "
+    "IDs shown) tracing it, so a human can verify every assignment against the raw "
+    "answer.\n"
     "- Record one provider_vote per member that took a stance (position_label must "
     "match a positions[].label); omit a member that took no clean stance.\n"
     "- Add conflicts[] only when there are two or more positions in tension.\n\n"
@@ -170,31 +173,30 @@ def _responding(member_answers: list[ModelAnswer]) -> list[ModelAnswer]:
     return [a for a in member_answers if a.ok and a.answer and a.answer.strip()]
 
 
-def _evidence_label(answer: ModelAnswer, index: int) -> str:
-    """Return a stable evidence label for one responding member.
+def _answer_label(answer: ModelAnswer, index: int) -> str:
+    """Return a stable within-run provenance label for one responding member.
 
     Prefers the conclave-assigned ``answer_id`` (which backs
-    ``evidence_answer_ids`` on the verdict's positions). Falls back to the member
-    ``name`` and then to a positional ``member-{index}`` so the model always has a
-    stable, citable handle even when ``answer_id`` is ``None`` (DD-2 positions must
-    cite evidence regardless).
+    ``evidence_answer_ids`` compatibility field on verdict positions). Successful
+    answers normally always carry this ID. The positional fallback deliberately
+    avoids exposing a provider/model name as a substitute identity.
 
     Args:
         answer: One responding member answer.
         index: Its 0-based position in the responding list (fallback id source).
 
     Returns:
-        A non-empty label string the model can cite as an evidence id.
+        A non-empty label string the model can cite as an answer id.
     """
-    return answer.answer_id or answer.name or f"member-{index}"
+    return answer.answer_id or f"unidentified-answer-{index + 1}"
 
 
 def _build_messages(prompt: str, responders: list[ModelAnswer]) -> list[dict[str, str]]:
     """Build the extraction messages from the prompt + every responding answer.
 
     Each responding member's answer is included verbatim, labeled with its stable
-    evidence id (:func:`_evidence_label`) so the model can populate
-    ``evidence_answer_ids``. The LCD extraction schema is embedded in the user
+    answer id (:func:`_answer_label`) so the model can populate the compatibility
+    field ``evidence_answer_ids``. The LCD extraction schema is embedded in the user
     message (prompt-level structured output — see the module docstring). Messages
     are built from answer TEXT + evidence labels only; the synthesizer call routes
     through :func:`conclave.providers.call_model`, which redacts, so no key
@@ -209,8 +211,8 @@ def _build_messages(prompt: str, responders: list[ModelAnswer]) -> list[dict[str
     """
     blocks = []
     for i, ans in enumerate(responders):
-        label = _evidence_label(ans, i)
-        blocks.append(f"### Member answer (evidence id: {label}) — from {ans.name}\n{ans.answer}")
+        label = _answer_label(ans, i)
+        blocks.append(f"### Member answer (answer id: {label}) — from {ans.name}\n{ans.answer}")
     answers_block = "\n\n".join(blocks)
 
     schema_json = json.dumps(verdict_extraction_json_schema(), indent=2)
@@ -409,7 +411,7 @@ async def extract_verdict(
        ``"fewer than 2 responding members"`` and NO LLM call (consensus is
        undefined for N<2, DD-1 edge case).
     2. **Extract.** Build the ``[system, user]`` messages from the prompt + every
-       responding answer (labeled by evidence id) with the LCD extraction schema
+       responding answer (labeled by within-run answer id) with the LCD extraction schema
        embedded, and make ONE :func:`conclave.providers.call_model` call.
     3. **Validate → repair-once → fallback.** Parse JSON + validate via Pydantic.
        On failure, re-call ONCE with the stringified errors appended; if it still

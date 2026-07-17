@@ -714,7 +714,11 @@ class Council:
             logger.warning(result.synthesis_error)
             return
 
-        blocks = "\n\n".join(f"### Answer from {a.name} ({a.model_id})\n{a.answer}" for a in usable)
+        blocks = "\n\n".join(
+            f"### Answer from {a.name} ({a.model_id})"
+            f"{f' (Answer ID: {a.answer_id})' if a.answer_id else ''}\n{a.answer}"
+            for a in usable
+        )
         user_content = (
             f"Original prompt:\n{result.prompt}\n\n"
             f"Council answers:\n\n{blocks}\n\n"

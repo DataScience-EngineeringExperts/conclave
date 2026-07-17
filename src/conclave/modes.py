@@ -35,6 +35,7 @@ from .models import (
     EliteResult,
     ModelAnswer,
     VoteResult,
+    derive_phase_answer_id,
 )
 from .registry import key_present
 
@@ -48,7 +49,7 @@ async def run_elite(council: Council, prompt: str) -> CouncilResult:
     """Run the three-stage Elite Decision Protocol without final synthesis.
 
     The protocol requires at least three successful responders after each of its
-    independent-answer, evidence-critique, and revision phases. Provider failures
+    independent-answer, claim-audit, and revision phases. Provider failures
     remain attached to their phase artifacts; a failed gate stops later calls and
     returns the latest fully qualified answers to the original prompt.
     """
@@ -60,6 +61,7 @@ async def run_elite(council: Council, prompt: str) -> CouncilResult:
         return [{"role": "user", "content": prompt}]
 
     elite.initial_answers = await council.fan_out(members, initial_messages)
+    _elite_assign_phase_ids(elite.initial_answers, "initial")
     initial_successes = _elite_gate(elite, "initial", elite.initial_answers)
     result.answers = initial_successes
     if elite.failure_reason is not None:
@@ -68,6 +70,11 @@ async def run_elite(council: Council, prompt: str) -> CouncilResult:
     critique_members = _elite_surviving_members(members, initial_successes)
     critique_messages = _elite_critique_messages_for(prompt, initial_successes)
     elite.critiques = await council.fan_out(critique_members, critique_messages)
+    _elite_assign_phase_ids(
+        elite.critiques,
+        "critique",
+        parent_answer_ids=(answer.answer_id for answer in initial_successes),
+    )
     critique_successes = _elite_gate(elite, "critique", elite.critiques)
     if elite.failure_reason is not None:
         return result
@@ -81,6 +88,13 @@ async def run_elite(council: Council, prompt: str) -> CouncilResult:
         critique_successes,
     )
     elite.revisions = await council.fan_out(revision_members, revision_messages)
+    _elite_assign_phase_ids(
+        elite.revisions,
+        "revision",
+        parent_answer_ids=(
+            answer.answer_id for answer in [*initial_successes, *critique_successes]
+        ),
+    )
     revision_successes = _elite_gate(elite, "revision", elite.revisions)
     if elite.failure_reason is not None:
         return result
@@ -88,6 +102,18 @@ async def run_elite(council: Council, prompt: str) -> CouncilResult:
     result.answers = revision_successes
     elite.completed = True
     return result
+
+
+def _elite_assign_phase_ids(
+    artifacts: list[ModelAnswer],
+    phase: str,
+    *,
+    parent_answer_ids=(),
+) -> None:
+    """Attach opaque phase identities without exposing model-name fallbacks."""
+    parents = [answer_id for answer_id in parent_answer_ids if answer_id]
+    for artifact in artifacts:
+        derive_phase_answer_id(artifact, phase, parent_answer_ids=parents)
 
 
 def _elite_gate(
@@ -116,7 +142,7 @@ def _elite_surviving_members(
 
 
 def _elite_critique_messages_for(prompt: str, answers: list[ModelAnswer]):
-    """Build the shared evidence-audit messages for each surviving member."""
+    """Build the shared claim-audit messages for each surviving member."""
     messages = [
         {"role": "system", "content": prompts.ELITE_CRITIC_SYSTEM},
         {"role": "user", "content": prompts.elite_critic_user(prompt, answers)},
@@ -130,7 +156,7 @@ def _elite_revision_messages_for(
     initial_answers: list[ModelAnswer],
     critiques: list[ModelAnswer],
 ):
-    """Build member-specific evidence-aware revision messages."""
+    """Build member-specific claim-audit-aware revision messages."""
 
     def messages_for(name: str, _model_id: str) -> list[dict[str, str]]:
         return [
