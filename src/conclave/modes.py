@@ -28,13 +28,125 @@ from typing import TYPE_CHECKING
 
 from . import prompts
 from .logging import get_logger
-from .models import AdversarialResult, CouncilResult, DebateRound, ModelAnswer, VoteResult
+from .models import (
+    AdversarialResult,
+    CouncilResult,
+    DebateRound,
+    EliteResult,
+    ModelAnswer,
+    VoteResult,
+)
 from .registry import key_present
 
 if TYPE_CHECKING:  # avoid a circular import at runtime; only needed for typing
     from .council import Council
 
 logger = get_logger("modes")
+
+
+async def run_elite(council: Council, prompt: str) -> CouncilResult:
+    """Run the three-stage Elite Decision Protocol without final synthesis.
+
+    The protocol requires at least three successful responders after each of its
+    independent-answer, evidence-critique, and revision phases. Provider failures
+    remain attached to their phase artifacts; a failed gate stops later calls and
+    returns the latest fully qualified answers to the original prompt.
+    """
+    members, skipped = council._available_members()
+    elite = EliteResult()
+    result = CouncilResult(prompt=prompt, mode="elite", skipped=skipped, elite=elite)
+
+    def initial_messages(_name: str, _model_id: str) -> list[dict[str, str]]:
+        return [{"role": "user", "content": prompt}]
+
+    elite.initial_answers = await council.fan_out(members, initial_messages)
+    initial_successes = _elite_gate(elite, "initial", elite.initial_answers)
+    result.answers = initial_successes
+    if elite.failure_reason is not None:
+        return result
+
+    critique_members = _elite_surviving_members(members, initial_successes)
+    critique_messages = _elite_critique_messages_for(prompt, initial_successes)
+    elite.critiques = await council.fan_out(critique_members, critique_messages)
+    critique_successes = _elite_gate(elite, "critique", elite.critiques)
+    if elite.failure_reason is not None:
+        return result
+
+    revision_members = _elite_surviving_members(critique_members, critique_successes)
+    initials_by_name = {answer.name: answer for answer in initial_successes}
+    revision_messages = _elite_revision_messages_for(
+        prompt,
+        initials_by_name,
+        initial_successes,
+        critique_successes,
+    )
+    elite.revisions = await council.fan_out(revision_members, revision_messages)
+    revision_successes = _elite_gate(elite, "revision", elite.revisions)
+    if elite.failure_reason is not None:
+        return result
+
+    result.answers = revision_successes
+    elite.completed = True
+    return result
+
+
+def _elite_gate(
+    elite: EliteResult,
+    phase: str,
+    artifacts: list[ModelAnswer],
+) -> list[ModelAnswer]:
+    """Return successful artifacts and record a strict responder-gate failure."""
+    successful = [answer for answer in artifacts if answer.ok]
+    if len(successful) < elite.required_responders:
+        elite.failure_reason = (
+            f"{phase} phase required {elite.required_responders} successful responders; "
+            f"got {len(successful)}"
+        )
+        logger.warning(elite.failure_reason)
+    return successful
+
+
+def _elite_surviving_members(
+    members: list[tuple[str, str]],
+    successful: list[ModelAnswer],
+) -> list[tuple[str, str]]:
+    """Preserve council order while retaining only successful phase members."""
+    names = {answer.name for answer in successful}
+    return [(name, model_id) for name, model_id in members if name in names]
+
+
+def _elite_critique_messages_for(prompt: str, answers: list[ModelAnswer]):
+    """Build the shared evidence-audit messages for each surviving member."""
+    messages = [
+        {"role": "system", "content": prompts.ELITE_CRITIC_SYSTEM},
+        {"role": "user", "content": prompts.elite_critic_user(prompt, answers)},
+    ]
+    return lambda _name, _model_id: messages
+
+
+def _elite_revision_messages_for(
+    prompt: str,
+    initials_by_name: dict[str, ModelAnswer],
+    initial_answers: list[ModelAnswer],
+    critiques: list[ModelAnswer],
+):
+    """Build member-specific evidence-aware revision messages."""
+
+    def messages_for(name: str, _model_id: str) -> list[dict[str, str]]:
+        return [
+            {"role": "system", "content": prompts.ELITE_REVISION_SYSTEM},
+            {
+                "role": "user",
+                "content": prompts.elite_revision_user(
+                    prompt,
+                    initials_by_name[name],
+                    initial_answers,
+                    critiques,
+                ),
+            },
+        ]
+
+    return messages_for
 
 
 async def run_vote(
