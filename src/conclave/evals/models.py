@@ -92,6 +92,7 @@ class ExclusionDeviationPolicy(EvalModel):
     """Predeclared exclusions while keeping execution deviations in analysis."""
 
     predefined_task_exclusions: tuple[str, ...] = ()
+    excluded_task_ids: tuple[str, ...] = ()
     output_level_exclusions_allowed: Literal[False] = False
     deviations_remain_in_denominator: Literal[True] = True
 
@@ -118,6 +119,28 @@ class BootstrapConfig(EvalModel):
     samples: int = Field(ge=1)
     confidence_level: Literal[0.95] = 0.95
     unit: Literal["task"] = "task"
+
+
+class AnalysisGateConfig(EvalModel):
+    """Canonical DSE-708 confirmatory thresholds frozen before execution."""
+
+    primary_baseline: ConditionId
+    alpha: Literal[0.05] = 0.05
+    power: Literal[0.80] = 0.80
+    minimum_effect: Literal[0.10] = 0.10
+    severe_error_noninferiority_margin: Literal[0.02] = 0.02
+    readiness_noninferiority_margin: Literal[0.05] = 0.05
+    reviewer_effort_max_ratio: Literal[1.20] = 1.20
+    p95_latency_max_ratio: Literal[3.0] = 3.0
+    absolute_p95_latency_seconds: float = Field(gt=0)
+    multiplicity_rule: Literal["holm_secondary"] = "holm_secondary"
+    unit: Literal["task"] = "task"
+
+    @model_validator(mode="after")
+    def validate_primary_baseline(self) -> AnalysisGateConfig:
+        if self.primary_baseline == "elite_full":
+            raise ValueError("primary_baseline must not be elite_full")
+        return self
 
 
 class PriceSnapshot(EvalModel):
@@ -148,6 +171,7 @@ class FrozenStudyDesign(EvalModel):
     timeout_retry_policy: TimeoutRetryPolicy
     randomization: RandomizationConfig
     bootstrap: BootstrapConfig
+    analysis_gates: AnalysisGateConfig
     price_snapshot: PriceSnapshot
     approved_spend_ceiling_usd: float = Field(ge=0)
     preregistration_id: str | None = None
@@ -236,6 +260,8 @@ class ProtocolExecution(EvalModel):
     completion_tokens: int | None = Field(default=None, ge=0)
     latency_ms: float | None = Field(default=None, ge=0)
     error_category: str | None = None
+    cost_usd: float = Field(default=0.0, ge=0)
+    deviation_codes: tuple[str, ...] = ()
 
 
 class RunRecord(EvalModel):
@@ -247,6 +273,8 @@ class RunRecord(EvalModel):
     completion_tokens: int | None = Field(default=None, ge=0)
     latency_ms: float | None = Field(default=None, ge=0)
     error_category: str | None = None
+    cost_usd: float = Field(default=0.0, ge=0)
+    deviation_codes: tuple[str, ...] = ()
 
 
 class StudyRun(EvalModel):
@@ -258,6 +286,8 @@ class StudyRun(EvalModel):
     outcome_counts: dict[RunOutcome, int]
     total_completion_tokens: int = Field(ge=0)
     total_latency_ms: float = Field(ge=0)
+    total_cost_usd: float = Field(default=0.0, ge=0)
+    total_deviation_count: int = Field(default=0, ge=0)
 
 
 class ScoreRecord(EvalModel):
@@ -302,6 +332,10 @@ class StudyManifest(EvalModel):
                 raise ValueError("frozen design hash does not match its contents")
             if set(self.frozen_design.task_family_map) != set(self.task_ids):
                 raise ValueError("task_family_map must exactly cover manifest task_ids")
+            if not set(self.frozen_design.exclusion_deviation_policy.excluded_task_ids).issubset(
+                self.task_ids
+            ):
+                raise ValueError("excluded_task_ids must be manifest task IDs")
             if self.seed != self.frozen_design.randomization.master_seed:
                 raise ValueError("manifest seed must match the frozen randomization master seed")
             roster_ids = tuple(roster.roster_id for roster in self.frozen_design.rosters)

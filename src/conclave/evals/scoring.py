@@ -12,6 +12,7 @@ from pydantic import Field, model_validator
 
 from .blinding import BlindMap
 from .models import (
+    AnalysisGateConfig,
     ConditionId,
     EvalModel,
     RunOutcome,
@@ -65,6 +66,7 @@ class GraderJudgment(EvalModel):
     grader_order: int | None = Field(default=None, ge=1)
     condition_guess: ConditionId | Literal["unknown"] | None = None
     provider_guess: str | None = None
+    readiness_correct: bool | None = None
 
     @model_validator(mode="after")
     def validate_one_target(self) -> GraderJudgment:
@@ -190,6 +192,92 @@ class StudyScoreReport(EvalModel):
     raw_judgments: tuple[GraderJudgment, ...]
     adjudications: tuple[AdjudicationRecord, ...]
     resolved_outcomes: tuple[ResolvedOutcome, ...]
+    paid_analysis: PaidAnalysisSummary | None = None
+
+
+class PaidAnalysisSummary(EvalModel):
+    """Task-clustered operational and quality summaries for paid studies."""
+
+    primary_paired_difference: PairedDifference
+    severe_error_difference: PairedDifference
+    readiness_error_difference: PairedDifference
+    reviewer_effort_ratio: float = Field(gt=0)
+    p95_latency_ratio: float = Field(gt=0)
+    elite_p95_latency_seconds: float = Field(ge=0)
+    total_cost_usd: float = Field(ge=0)
+    deviation_count: int = Field(ge=0)
+    excluded_task_ids: tuple[str, ...]
+    family_directions: dict[str, float]
+    roster_directions: dict[str, float]
+
+
+class ConfirmatoryGateMetrics(EvalModel):
+    """Frozen inputs consumed by the deterministic confirmatory gate."""
+
+    primary_effect: float
+    primary_lower_95: float
+    severe_error_upper_95: float
+    readiness_error_upper_95: float
+    reviewer_effort_upper_ratio_95: float = Field(gt=0)
+    p95_latency_ratio: float = Field(gt=0)
+    elite_p95_latency_seconds: float = Field(ge=0)
+    family_directions: dict[str, float] = Field(min_length=1)
+    roster_directions: dict[str, float] = Field(min_length=1)
+
+
+class ConfirmatoryGateResult(EvalModel):
+    """GO only when every frozen DSE-708 threshold passes."""
+
+    status: Literal["GO", "REDESIGN"]
+    failed_gates: tuple[str, ...]
+
+
+def evaluate_confirmatory_gates(
+    *,
+    evidence_classification: str,
+    config: AnalysisGateConfig,
+    metrics: ConfirmatoryGateMetrics,
+    expected_frozen_design_hash: str,
+    observed_frozen_design_hash: str,
+    expected_preregistration_hash: str,
+    observed_preregistration_hash: str,
+) -> ConfirmatoryGateResult:
+    """Refuse non-confirmatory/drifted artifacts, then evaluate every canonical gate."""
+
+    if evidence_classification != "confirmatory":
+        raise ValueError("confirmatory gate evaluation requires a confirmatory manifest")
+    if expected_frozen_design_hash != observed_frozen_design_hash:
+        raise ValueError("observed frozen design hash does not match the preregistered artifact")
+    if expected_preregistration_hash != observed_preregistration_hash:
+        raise ValueError("observed preregistration hash does not match the frozen artifact")
+    failed = []
+    checks = (
+        ("minimum_effect", metrics.primary_effect >= config.minimum_effect),
+        ("superiority_interval", metrics.primary_lower_95 > 0),
+        (
+            "severe_error_noninferiority",
+            metrics.severe_error_upper_95 <= config.severe_error_noninferiority_margin,
+        ),
+        (
+            "readiness_noninferiority",
+            metrics.readiness_error_upper_95 <= config.readiness_noninferiority_margin,
+        ),
+        (
+            "reviewer_effort",
+            metrics.reviewer_effort_upper_ratio_95 <= config.reviewer_effort_max_ratio,
+        ),
+        ("latency_ratio", metrics.p95_latency_ratio <= config.p95_latency_max_ratio),
+        (
+            "latency_ceiling",
+            metrics.elite_p95_latency_seconds <= config.absolute_p95_latency_seconds,
+        ),
+        ("family_direction", all(value > 0 for value in metrics.family_directions.values())),
+        ("roster_direction", all(value > 0 for value in metrics.roster_directions.values())),
+    )
+    failed.extend(name for name, passed in checks if not passed)
+    return ConfirmatoryGateResult(
+        status="GO" if not failed else "REDESIGN", failed_gates=tuple(failed)
+    )
 
 
 def wilson_interval(*, successes: int, trials: int, confidence_level: float = 0.95) -> RateInterval:
@@ -412,6 +500,7 @@ def _validate_paid_grading(
         "grader_order",
         "condition_guess",
         "provider_guess",
+        "readiness_correct",
     )
     for run_id, judgments in judgments_by_run.items():
         if run_by_id[run_id].outcome != "success":
@@ -432,6 +521,17 @@ def _validate_paid_grading(
             raise ValueError(
                 "every successful paid cell requires exactly two independent judgments"
             )
+
+
+def analysis_planned_runs(manifest: StudyManifest):
+    """Apply only symmetric, predeclared task exclusions to the analysis matrix."""
+
+    excluded = (
+        set(manifest.frozen_design.exclusion_deviation_policy.excluded_task_ids)
+        if manifest.frozen_design is not None
+        else set()
+    )
+    return tuple(run for run in manifest.planned_runs if run.task_id not in excluded)
 
 
 def score_study(
@@ -518,12 +618,20 @@ def score_study(
         )
 
     resolved_by_id = {item.planned_run_id: item for item in resolved}
+    excluded_task_ids = (
+        manifest.frozen_design.exclusion_deviation_policy.excluded_task_ids
+        if manifest.frozen_design is not None
+        else ()
+    )
+    analysis_runs = analysis_planned_runs(manifest)
+    if not analysis_runs:
+        raise ValueError("task exclusions cannot remove every task from analysis")
     condition_metrics = []
     task_condition_values: dict[ConditionId, dict[str, list[bool]]] = defaultdict(
         lambda: defaultdict(list)
     )
-    for condition_id in dict.fromkeys(run.condition_id for run in manifest.planned_runs):
-        planned = [run for run in manifest.planned_runs if run.condition_id == condition_id]
+    for condition_id in dict.fromkeys(run.condition_id for run in analysis_runs):
+        planned = [run for run in analysis_runs if run.condition_id == condition_id]
         successes = sum(resolved_by_id[run.planned_run_id].critical_error_free for run in planned)
         distribution = dict(
             sorted(Counter(run_by_id[run.planned_run_id].outcome for run in planned).items())
@@ -560,6 +668,129 @@ def score_study(
         for condition_id in means
         if condition_id != "elite_full"
     )
+    paid_analysis = None
+    if manifest.frozen_design is not None:
+        design = manifest.frozen_design
+        baseline = design.analysis_gates.primary_baseline
+        primary = next(item for item in paired if item.baseline_condition_id == baseline)
+
+        def task_means(cell_values: Mapping[str, float]) -> dict[ConditionId, dict[str, float]]:
+            grouped: dict[ConditionId, dict[str, list[float]]] = defaultdict(
+                lambda: defaultdict(list)
+            )
+            for run in analysis_runs:
+                grouped[run.condition_id][run.task_id].append(cell_values[run.planned_run_id])
+            return {
+                condition: {task_id: sum(values) / len(values) for task_id, values in tasks.items()}
+                for condition, tasks in grouped.items()
+            }
+
+        severe_cells = {
+            run.planned_run_id: float(
+                any(item.severe_error for item in judgments_by_run[run.planned_run_id])
+            )
+            for run in analysis_runs
+        }
+        readiness_error_cells = {
+            run.planned_run_id: float(
+                run_by_id[run.planned_run_id].outcome != "success"
+                or not all(
+                    item.readiness_correct is True for item in judgments_by_run[run.planned_run_id]
+                )
+            )
+            for run in analysis_runs
+        }
+        effort_cells = {
+            run.planned_run_id: (
+                sum(item.reviewer_seconds or 0 for item in judgments_by_run[run.planned_run_id])
+                / len(judgments_by_run[run.planned_run_id])
+                if judgments_by_run[run.planned_run_id]
+                else 0.0
+            )
+            for run in analysis_runs
+        }
+        severe_means = task_means(severe_cells)
+        readiness_means = task_means(readiness_error_cells)
+        effort_means = task_means(effort_cells)
+        frozen_seed = design.bootstrap.seed
+        frozen_samples = design.bootstrap.samples
+        severe_difference = paired_bootstrap_difference(
+            severe_means["elite_full"],
+            severe_means[baseline],
+            seed=frozen_seed,
+            samples=frozen_samples,
+            baseline_condition_id=baseline,
+        )
+        readiness_difference = paired_bootstrap_difference(
+            readiness_means["elite_full"],
+            readiness_means[baseline],
+            seed=frozen_seed,
+            samples=frozen_samples,
+            baseline_condition_id=baseline,
+        )
+        baseline_effort = sum(effort_means[baseline].values()) / len(effort_means[baseline])
+        elite_effort = sum(effort_means["elite_full"].values()) / len(effort_means["elite_full"])
+        if baseline_effort <= 0:
+            raise ValueError("paid reviewer-effort baseline must be positive")
+        latencies = {
+            condition: sorted(
+                (run_by_id[run.planned_run_id].latency_ms or 0.0) / 1000
+                for run in analysis_runs
+                if run.condition_id == condition
+            )
+            for condition in (baseline, "elite_full")
+        }
+        baseline_p95 = _quantile(latencies[baseline], 0.95)
+        elite_p95 = _quantile(latencies["elite_full"], 0.95)
+        if baseline_p95 <= 0:
+            raise ValueError("paid latency baseline must be positive")
+
+        def directional_effects(attribute: str) -> dict[str, float]:
+            values = {}
+            if attribute == "family":
+                groups = design.task_family_map
+                names = sorted(set(groups.values()))
+
+                def selected(run, name):
+                    return groups[run.task_id] == name
+
+            else:
+                names = sorted(roster.roster_id for roster in design.rosters)
+
+                def selected(run, name):
+                    return run.roster_id == name
+
+            for name in names:
+                elite_values = [
+                    resolved_by_id[run.planned_run_id].critical_error_free
+                    for run in analysis_runs
+                    if run.condition_id == "elite_full" and selected(run, name)
+                ]
+                baseline_values = [
+                    resolved_by_id[run.planned_run_id].critical_error_free
+                    for run in analysis_runs
+                    if run.condition_id == baseline and selected(run, name)
+                ]
+                values[name] = sum(elite_values) / len(elite_values) - sum(baseline_values) / len(
+                    baseline_values
+                )
+            return values
+
+        paid_analysis = PaidAnalysisSummary(
+            primary_paired_difference=primary,
+            severe_error_difference=severe_difference,
+            readiness_error_difference=readiness_difference,
+            reviewer_effort_ratio=elite_effort / baseline_effort,
+            p95_latency_ratio=elite_p95 / baseline_p95,
+            elite_p95_latency_seconds=elite_p95,
+            total_cost_usd=sum(run_by_id[run.planned_run_id].cost_usd for run in analysis_runs),
+            deviation_count=sum(
+                len(run_by_id[run.planned_run_id].deviation_codes) for run in analysis_runs
+            ),
+            excluded_task_ids=tuple(sorted(excluded_task_ids)),
+            family_directions=directional_effects("family"),
+            roster_directions=directional_effects("roster"),
+        )
     return StudyScoreReport(
         study_id=manifest.study_id,
         evidence_classification=manifest.evidence_classification,
@@ -573,4 +804,5 @@ def score_study(
         raw_judgments=tuple(raw_judgments),
         adjudications=tuple(adjudications),
         resolved_outcomes=tuple(resolved),
+        paid_analysis=paid_analysis,
     )

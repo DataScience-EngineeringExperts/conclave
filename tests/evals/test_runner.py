@@ -37,6 +37,8 @@ async def test_runner_executes_complete_matrix_with_cell_budget_and_immutable_re
             output=f"{task.task_id}:{planned_run.condition_id}",
             completion_tokens=11,
             latency_ms=2.5,
+            cost_usd=0.01,
+            deviation_codes=("retry_used",),
         )
 
     study_run = await run_study(
@@ -55,6 +57,9 @@ async def test_runner_executes_complete_matrix_with_cell_budget_and_immutable_re
     assert study_run.outcome_counts == {"success": 24}
     assert study_run.total_completion_tokens == 264
     assert study_run.total_latency_ms == 60.0
+    assert study_run.total_cost_usd == pytest.approx(0.24)
+    assert study_run.total_deviation_count == 24
+    assert study_run.records[0].deviation_codes == ("retry_used",)
     with pytest.raises(ValidationError):
         study_run.records[0].output = "changed"
 

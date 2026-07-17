@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from conclave.evals.models import (
+    AnalysisGateConfig,
     BootstrapConfig,
     ExclusionDeviationPolicy,
     FrozenStudyDesign,
@@ -59,6 +60,9 @@ def _paid_study():
         timeout_retry_policy=TimeoutRetryPolicy(timeout_seconds=60, retry_attempts=0),
         randomization=RandomizationConfig(master_seed=17),
         bootstrap=BootstrapConfig(seed=19, samples=100),
+        analysis_gates=AnalysisGateConfig(
+            primary_baseline="self_refine", absolute_p95_latency_seconds=180
+        ),
         price_snapshot=PriceSnapshot(
             snapshot_id="prices-v1",
             captured_at="2026-07-17T00:00:00Z",
@@ -81,6 +85,9 @@ def _paid_study():
             outcome="failed" if index == 0 else "success",
             output=None if index == 0 else "answer",
             error_category="executor_error" if index == 0 else None,
+            latency_ms=100.0 + index,
+            cost_usd=0.01,
+            deviation_codes=("retry_used",) if index == 1 else (),
         )
         for index, planned in enumerate(manifest.planned_runs)
     )
@@ -91,6 +98,8 @@ def _paid_study():
         outcome_counts={"failed": 1, "success": len(records) - 1},
         total_completion_tokens=0,
         total_latency_ms=0,
+        total_cost_usd=0.12,
+        total_deviation_count=1,
     )
     return manifest, study_run
 
@@ -120,6 +129,7 @@ def _judgment(run_id: str, grader: str, *, value: bool = True) -> GraderJudgment
         grader_order=1 if grader == "grader-a" else 2,
         condition_guess="unknown",
         provider_guess="unknown",
+        readiness_correct=True,
     )
 
 
@@ -245,6 +255,9 @@ def test_paid_reliability_reports_raw_agreement_prevalence_and_strata() -> None:
         ("roster", "roster-b"),
     }
     assert report.resolved_outcomes[0].resolution == "automatic_non_success"
+    assert report.paid_analysis.primary_paired_difference.baseline_condition_id == "self_refine"
+    assert report.paid_analysis.primary_paired_difference.task_count == 1
+    assert report.paid_analysis.excluded_task_ids == ()
 
 
 def test_constant_prevalence_kappa_is_undefined_not_perfect() -> None:

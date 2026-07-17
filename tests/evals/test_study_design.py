@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from conclave.evals.models import (
+    AnalysisGateConfig,
     BootstrapConfig,
     ExclusionDeviationPolicy,
     FrozenStudyDesign,
@@ -74,6 +75,9 @@ def _design(
         timeout_retry_policy=TimeoutRetryPolicy(timeout_seconds=120, retry_attempts=1),
         randomization=RandomizationConfig(master_seed=20260717),
         bootstrap=BootstrapConfig(seed=991, samples=10000),
+        analysis_gates=AnalysisGateConfig(
+            primary_baseline="self_refine", absolute_p95_latency_seconds=180
+        ),
         price_snapshot=PriceSnapshot(
             snapshot_id="prices-2026-07-17",
             captured_at="2026-07-17T12:00:00Z",
