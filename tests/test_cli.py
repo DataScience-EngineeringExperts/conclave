@@ -22,6 +22,8 @@ from typer.testing import CliRunner
 
 from conclave import cli
 from conclave.config import ConclaveConfig
+from conclave.models import CouncilResult, EliteResult, ModelAnswer
+from conclave.verdict import CouncilVerdict
 
 runner = CliRunner()
 
@@ -100,6 +102,146 @@ def test_unknown_mode_exits_two(patch_cli_config):
     """Usage error (bad mode) keeps its distinct exit code 2."""
     result = runner.invoke(cli.app, ["ask", "hello", "--mode", "bogus"])
     assert result.exit_code == 2
+
+
+def _elite_cli_result(*, completed: bool = True, failure_reason: str | None = None):
+    """Build a compact elite result for CLI-only behavior tests."""
+    initials = [
+        ModelAnswer(name=f"member-{i}", model_id=f"provider/model-{i}", answer=f"initial-{i}")
+        for i in range(1, 4)
+    ]
+    critiques = [
+        ModelAnswer(name=f"member-{i}", model_id=f"provider/model-{i}", answer=f"critique-{i}")
+        for i in range(1, 4)
+    ]
+    revisions = [
+        ModelAnswer(name=f"member-{i}", model_id=f"provider/model-{i}", answer=f"revision-{i}")
+        for i in range(1, 4)
+    ]
+    return CouncilResult(
+        prompt="Should we ship?",
+        mode="elite",
+        answers=revisions if completed else [],
+        synthesis="Ship with safeguards." if completed else None,
+        elite=EliteResult(
+            completed=completed,
+            failure_reason=failure_reason,
+            initial_answers=initials,
+            critiques=critiques if completed else [],
+            revisions=revisions if completed else [],
+        ),
+        verdict=(
+            CouncilVerdict(
+                verdict_type="decision",
+                headline="Ship deliberately.",
+                recommendation="Ship with safeguards.",
+                consensus_score=1.0,
+                consensus_label="unanimous",
+            )
+            if completed
+            else None
+        ),
+    )
+
+
+def test_elite_mode_dispatches_and_renders_protocol_summary(monkeypatch, patch_cli_config):
+    """Elite dispatch uses elite_sync and renders the protocol plus verdict."""
+    calls: list[str] = []
+
+    class FakeCouncil:
+        def __init__(self, **kwargs):
+            pass
+
+        def elite_sync(self, prompt: str) -> CouncilResult:
+            calls.append(prompt)
+            return _elite_cli_result()
+
+    monkeypatch.setattr(cli, "Council", FakeCouncil)
+
+    result = runner.invoke(cli.app, ["ask", "Should we ship?", "--mode", "elite"])
+
+    assert result.exit_code == 0
+    assert calls == ["Should we ship?"]
+    assert "ELITE DECISION PROTOCOL" in result.output
+    assert "elite_v1" in result.output
+    assert "Initial 3/3" in result.output
+    assert "Critiques 3/3" in result.output
+    assert "Revisions 3/3" in result.output
+    assert "VERDICT" in result.output
+    assert "Ship deliberately." in result.output
+
+
+def test_elite_json_emits_full_council_result(monkeypatch, patch_cli_config):
+    """Elite JSON includes every protocol phase artifact."""
+
+    class FakeCouncil:
+        def __init__(self, **kwargs):
+            pass
+
+        def elite_sync(self, prompt: str) -> CouncilResult:
+            return _elite_cli_result()
+
+    monkeypatch.setattr(cli, "Council", FakeCouncil)
+
+    result = runner.invoke(cli.app, ["ask", "Should we ship?", "--mode", "elite", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["mode"] == "elite"
+    assert payload["elite"]["completed"] is True
+    assert len(payload["elite"]["initial_answers"]) == 3
+    assert len(payload["elite"]["critiques"]) == 3
+    assert len(payload["elite"]["revisions"]) == 3
+    assert payload["verdict"]["headline"] == "Ship deliberately."
+
+
+def test_incomplete_elite_exits_one_with_reason(monkeypatch, patch_cli_config):
+    """An incomplete protocol is a failed CLI run even with prior phase answers."""
+
+    class FakeCouncil:
+        def __init__(self, **kwargs):
+            pass
+
+        def elite_sync(self, prompt: str) -> CouncilResult:
+            return _elite_cli_result(
+                completed=False,
+                failure_reason="critique phase requires at least 3 successful responders; got 2",
+            )
+
+    monkeypatch.setattr(cli, "Council", FakeCouncil)
+
+    result = runner.invoke(cli.app, ["ask", "Should we ship?", "--mode", "elite"])
+
+    assert result.exit_code == 1
+    assert "Elite protocol incomplete" in result.output
+    assert "critique phase requires at least 3 successful" in result.output
+    assert "responders; got 2" in result.output
+
+
+def test_elite_stream_is_rejected_before_council_creation(monkeypatch, patch_cli_config):
+    """Elite streaming fails as usage before a provider-capable Council exists."""
+    created = False
+
+    class ForbiddenCouncil:
+        def __init__(self, **kwargs):
+            nonlocal created
+            created = True
+
+    monkeypatch.setattr(cli, "Council", ForbiddenCouncil)
+
+    result = runner.invoke(cli.app, ["ask", "Should we ship?", "--mode", "elite", "--stream"])
+
+    assert result.exit_code == 2
+    assert created is False
+    assert "--stream" in result.output
+    assert "elite" in result.output
+
+
+def test_ask_help_lists_elite_mode():
+    """CLI help advertises elite as a supported mode."""
+    result = runner.invoke(cli.app, ["ask", "--help"])
+    assert result.exit_code == 0
+    assert "elite" in result.output
 
 
 def test_unresolved_council_exits_two(patch_cli_config):

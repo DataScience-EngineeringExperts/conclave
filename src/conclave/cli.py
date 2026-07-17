@@ -4,7 +4,7 @@ Two commands:
 
 * ``conclave ask "<prompt>" --council grok,gemini,claude --mode synthesize``
   Modes: ``synthesize`` (default), ``raw``, ``debate`` (``--rounds N``),
-  ``adversarial`` (``--proposer NAME``).
+  ``adversarial`` (``--proposer NAME``), ``vote``, and ``elite``.
 * ``conclave providers`` -- show which providers currently have a key (without
   ever printing key values).
 """
@@ -297,6 +297,36 @@ def _render_adversarial(result: CouncilResult) -> None:
         err_console.print(f"[yellow]No verdict: {adv.verdict_error}[/yellow]")
 
 
+def _render_elite(result: CouncilResult) -> None:
+    """Render an elite run as a concise phase summary plus canonical verdict."""
+    elite = result.elite
+    if elite is None:
+        err_console.print("[yellow]No elite protocol result produced.[/yellow]")
+        return
+
+    def successful(answers) -> int:
+        return sum(answer.ok for answer in answers)
+
+    required = elite.required_responders
+    summary = " · ".join(
+        (
+            f"Initial {successful(elite.initial_answers)}/{required}",
+            f"Critiques {successful(elite.critiques)}/{required}",
+            f"Revisions {successful(elite.revisions)}/{required}",
+        )
+    )
+    console.print(
+        Panel(
+            summary,
+            title=f"[bold]ELITE DECISION PROTOCOL[/bold] ({elite.protocol_version})",
+            border_style="cyan",
+        )
+    )
+    _print_synthesis(result)
+    _print_verdict(result)
+    _print_verdict_absent_note(result)
+
+
 def _stream_to_terminal(council: Council, prompt: str, *, synthesize: bool) -> CouncilResult:
     """Render a live token stream to the terminal and return the final result.
 
@@ -357,10 +387,11 @@ _RENDERERS = {
     "debate": _render_debate,
     "adversarial": _render_adversarial,
     "vote": _render_vote,
+    "elite": _render_elite,
 }
 
 
-_VALID_MODES = {"synthesize", "raw", "debate", "adversarial", "vote"}
+_VALID_MODES = {"synthesize", "raw", "debate", "adversarial", "vote", "elite"}
 
 # Threshold used when --converge is passed without an explicit --converge-threshold.
 # High by design: an early stop should require answers that are nearly stable
@@ -409,7 +440,7 @@ def ask(
         "synthesize",
         "--mode",
         "-m",
-        help="Run mode: synthesize | raw | debate | adversarial.",
+        help="Run mode: synthesize | raw | debate | adversarial | vote | elite.",
     ),
     synthesizer: str | None = typer.Option(
         None, "--synthesizer", "-s", help="Override the synthesizer/judge model name."
@@ -534,6 +565,8 @@ def ask(
     elif mode_lower == "vote":
         choice_list = [ch.strip() for ch in (choices or "").split(",") if ch.strip()]
         result = c.vote_sync(prompt, choices=choice_list)
+    elif mode_lower == "elite":
+        result = c.elite_sync(prompt)
     else:
         result = c.ask_sync(prompt, synthesize=(mode_lower == "synthesize"))
 
@@ -541,14 +574,22 @@ def ask(
     # purposes regardless of output format. We compute this once and apply the
     # same exit-code contract to both the JSON and human paths.
     no_usable_answers = not result.successful_answers
+    elite_incomplete = mode_lower == "elite" and (
+        result.elite is None or not result.elite.completed
+    )
 
     if as_json:
         # Always emit valid JSON to stdout so a consumer can parse the payload,
         # then signal failure via the exit code if nothing usable came back.
         console.print_json(json.dumps(_result_to_dict(result)))
-        if no_usable_answers:
+        if no_usable_answers or elite_incomplete:
             raise typer.Exit(code=1)
         return
+
+    if elite_incomplete:
+        reason = result.elite.failure_reason if result.elite is not None else "missing result"
+        err_console.print(f"[red]Elite protocol incomplete: {reason}[/red]")
+        raise typer.Exit(code=1)
 
     if no_usable_answers:
         err_console.print(
