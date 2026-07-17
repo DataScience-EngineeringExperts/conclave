@@ -310,9 +310,16 @@ class Council:
         if result.manifest is not None:
             return
         members, skipped = self._available_members()
-        result.manifest = self._build_manifest(
-            mode=mode, members=members, skipped=skipped, answers=result.answers
-        )
+        if mode == "elite" and result.elite is not None:
+            result.manifest = self._build_elite_manifest(
+                members=members,
+                skipped=skipped,
+                result=result,
+            )
+        else:
+            result.manifest = self._build_manifest(
+                mode=mode, members=members, skipped=skipped, answers=result.answers
+            )
 
     async def fan_out(
         self,
@@ -447,6 +454,63 @@ class Council:
         )
         # Stamp VERIFIED only when the serialized manifest is provably clean
         # (the load-bearing CAC-04 acceptance criterion).
+        manifest.secret_safety = verified_secret_safety(manifest)
+        return manifest
+
+    def _build_elite_manifest(
+        self,
+        *,
+        members: list[tuple[str, str]],
+        skipped: list[str],
+        result: CouncilResult,
+    ) -> ModelHarnessManifest:
+        """Assemble a phase-complete manifest for an elite protocol run.
+
+        Elite keeps every attempted member call in phase-specific artifact
+        collections. Flattening those collections here preserves repeated calls
+        as distinct receipts while provider membership remains unique. Failed
+        gates therefore retain the completed and attempted phases without
+        inventing receipts for phases that never ran.
+        """
+        from . import __version__
+
+        elite = result.elite
+        phase_artifacts = (
+            []
+            if elite is None
+            else [
+                ("initial", elite.initial_answers),
+                ("critique", elite.critiques),
+                ("revision", elite.revisions),
+            ]
+        )
+        flattened = [answer for _phase, answers in phase_artifacts for answer in answers]
+        receipts = [
+            receipt_from_answer(
+                answer,
+                temperature=self.temperature,
+                timeout=self.timeout,
+                phase=phase,
+            )
+            for phase, answers in phase_artifacts
+            for answer in answers
+        ]
+        manifest = ModelHarnessManifest(
+            request_id=uuid4().hex,
+            conclave_version=__version__,
+            mode="elite",
+            providers_considered=list(self.requested_models),
+            providers_called=list(dict.fromkeys(name for name, _model_id in members)),
+            providers_skipped=[
+                ProviderSkip(name=name, reason="no API key in environment") for name in skipped
+            ],
+            model_ids=list(dict.fromkeys(model_id for _name, model_id in members)),
+            generation_settings={"temperature": self.temperature, "timeout": self.timeout},
+            receipts=receipts,
+            total_latency_ms=sum(answer.latency_ms for answer in flattened),
+            total_usage=self._sum_usage(flattened),
+            redacted_errors=[answer.error for answer in flattened if answer.error],
+        )
         manifest.secret_safety = verified_secret_safety(manifest)
         return manifest
 

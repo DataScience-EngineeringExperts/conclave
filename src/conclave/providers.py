@@ -32,7 +32,11 @@ logger = get_logger("providers")
 
 
 def receipt_from_answer(
-    answer: ModelAnswer, *, temperature: float, timeout: float
+    answer: ModelAnswer,
+    *,
+    temperature: float,
+    timeout: float,
+    phase: str | None = None,
 ) -> ProviderExecutionReceipt:
     """Map a collected :class:`ModelAnswer` to a :class:`ProviderExecutionReceipt`.
 
@@ -56,11 +60,13 @@ def receipt_from_answer(
         answer: The collected member answer (success or failure).
         temperature: The sampling temperature the council used for the call.
         timeout: The per-call timeout (seconds) the council used.
+        phase: Optional protocol phase provenance for phased modes.
 
     Returns:
         A :class:`ProviderExecutionReceipt` for this member.
     """
     return ProviderExecutionReceipt(
+        phase=phase,
         name=answer.name,
         provider=provider_prefix(answer.model_id),
         model_id=answer.model_id,

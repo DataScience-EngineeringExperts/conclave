@@ -96,6 +96,9 @@ class ProviderExecutionReceipt(BaseModel):
     settings actually used, the latency, the token usage, and a redacted error.
 
     Attributes:
+        phase: Optional protocol phase provenance. ``None`` for legacy and
+            non-phased modes; elite receipts use ``initial``, ``critique``, or
+            ``revision``.
         name: Friendly council member name (e.g. ``"grok"``).
         provider: Provider prefix derived from ``model_id`` (e.g. ``"xai"``).
         model_id: Resolved provider-prefixed model id (e.g. ``"xai/grok-4.3"``).
@@ -110,6 +113,7 @@ class ProviderExecutionReceipt(BaseModel):
             until CAC-02 structured output exists; defined now, populated later.
     """
 
+    phase: str | None = None
     name: str
     provider: str
     model_id: str

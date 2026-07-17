@@ -350,6 +350,32 @@ async def test_secret_safety_forced_error_buffered(monkeypatch):
     _assert_result_canary_free(result)
 
 
+async def test_secret_safety_forced_error_elite(monkeypatch):
+    """Elite phase artifacts and receipts redact a provider error echoing a key."""
+    _plant_all_keys(monkeypatch)
+    monkeypatch.setenv("CONCLAVE_CONFIG", "/nonexistent/conclave.yml")
+
+    async def echoing_401(url, headers, json_body, timeout):
+        return 401, {"error": {"message": f"invalid api key: {PLANTED}"}}
+
+    monkeypatch.setattr("conclave.transport.post_json", echoing_401)
+    council = Council(
+        models=["grok", "gemini", "perplexity"],
+        synthesizer="claude",
+        config=_config(),
+    )
+
+    result = await council.elite("audit prompt")
+
+    assert result.elite is not None
+    assert result.elite.completed is False
+    assert result.elite.critiques == []
+    assert result.elite.revisions == []
+    assert all(not answer.ok for answer in result.elite.initial_answers)
+    _assert_result_canary_free(result)
+    assert [receipt.phase for receipt in result.manifest.receipts] == ["initial"] * 3
+
+
 async def test_secret_safety_forced_error_streaming(monkeypatch, mock_stream_client):
     """1c (streaming): a mid-stream 401 echoing the canary leaks into no event/answer.
 
