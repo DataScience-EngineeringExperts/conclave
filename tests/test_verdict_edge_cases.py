@@ -268,12 +268,17 @@ async def test_partial_failure_verdict_over_responders_only(monkeypatch, patch_c
     assert manifest.providers_skipped == []
     assert manifest.providers_called == ["grok", "gemini", "perplexity"]
     # Its redacted error is recorded, and it has a receipt carrying that error.
-    assert any("provider 503" in e or "[REDACTED]" in e for e in manifest.redacted_errors)
+    assert manifest.redacted_errors == ["provider_error"]
     assert len(manifest.redacted_errors) == 1
     perplexity_receipt = next(r for r in manifest.receipts if r.name == "perplexity")
-    assert perplexity_receipt.error is not None
-    # One receipt per attempted member (success and failure alike).
-    assert len(manifest.receipts) == 3
+    assert perplexity_receipt.error == "provider_error"
+    assert perplexity_receipt.error_category == "provider_error"
+    # Every actual call is retained: three members, prose synthesis, verdict.
+    assert len(manifest.receipts) == 5
+    assert [receipt.phase for receipt in manifest.receipts[-2:]] == [
+        "synthesis",
+        "verdict_extraction",
+    ]
     assert manifest.secret_safety == SECRET_SAFETY_VERIFIED
 
 

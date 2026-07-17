@@ -23,7 +23,7 @@ from .adapters import ProviderError, resolve_adapter
 from .adapters.base import OutputContract, ProviderAdapter, redact
 from .config import ConclaveConfig, load_config
 from .logging import get_logger
-from .manifest import ProviderExecutionReceipt
+from .manifest import ProviderExecutionReceipt, ReceiptErrorCategory, ReceiptOutcome
 from .models import ModelAnswer, TokenUsage, stable_answer_id
 from .registry import provider_prefix
 from .transport import TransportError
@@ -37,6 +37,13 @@ def receipt_from_answer(
     temperature: float,
     timeout: float,
     phase: str | None = None,
+    attempt: int = 1,
+    outcome: ReceiptOutcome | None = None,
+    error_category: ReceiptErrorCategory | None = None,
+    schema_valid: bool | None = None,
+    protocol_version: str | None = None,
+    prompt_version: str | None = None,
+    schema_version: str | None = None,
 ) -> ProviderExecutionReceipt:
     """Map a collected :class:`ModelAnswer` to a :class:`ProviderExecutionReceipt`.
 
@@ -49,12 +56,10 @@ def receipt_from_answer(
     assigns them here).
 
     The ``provider`` prefix is derived from ``answer.model_id`` via
-    :func:`conclave.registry.provider_prefix`. The ``error`` is re-run through
-    :func:`redact` belt-and-suspenders: it is already redacted upstream (every
-    :class:`ModelAnswer.error` conclave produces is scrubbed), and ``redact`` is
-    idempotent and safe on clean text, so this re-application cannot leak a key
-    and cannot raise on the happy path -- preserving the redaction invariant even
-    on an unexpected error string.
+    :func:`conclave.registry.provider_prefix`. Arbitrary provider errors are
+    inspected only to choose a bounded category; the receipt stores that category
+    in both ``error`` (compatibility) and ``error_category``. It never retains raw
+    endpoint URLs, bodies, prompts, credentials, or exception chains.
 
     Args:
         answer: The collected member answer (success or failure).
@@ -65,16 +70,43 @@ def receipt_from_answer(
     Returns:
         A :class:`ProviderExecutionReceipt` for this member.
     """
+    has_error = answer.error is not None
+    category = error_category or (_receipt_error_category(answer.error) if has_error else None)
+    resolved_outcome = outcome or ("failed" if has_error else "success")
     return ProviderExecutionReceipt(
         phase=phase,
+        attempt=attempt,
+        outcome=resolved_outcome,
         name=answer.name,
         provider=provider_prefix(answer.model_id),
         model_id=answer.model_id,
         generation_settings={"temperature": temperature, "timeout": timeout},
         latency_ms=answer.latency_ms,
         usage=answer.usage,
-        error=redact(answer.error) if answer.error else None,
+        # Keep the compatibility field, but store only the bounded category. Raw
+        # provider text can contain endpoints, response bodies, and exception
+        # chains even after credential-shaped values are redacted.
+        error=category,
+        error_category=category,
+        schema_valid=schema_valid,
+        protocol_version=protocol_version,
+        prompt_version=prompt_version,
+        schema_version=schema_version,
     )
+
+
+def _receipt_error_category(error: str) -> ReceiptErrorCategory:
+    """Reduce arbitrary provider error text to a bounded, secret-free category."""
+    scrubbed = redact(error).lower()
+    if "timeout" in scrubbed or "timed out" in scrubbed:
+        return "timeout"
+    if any(token in scrubbed for token in ("401", "403", "unauthorized", "forbidden")):
+        return "authentication"
+    if "429" in scrubbed or "rate limit" in scrubbed:
+        return "rate_limit"
+    if any(token in scrubbed for token in ("connection", "network", "transport", "dns")):
+        return "transport"
+    return "provider_error"
 
 
 def _resolve_key(adapter: ProviderAdapter) -> str | None:

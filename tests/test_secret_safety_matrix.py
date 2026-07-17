@@ -47,6 +47,7 @@ from conclave.manifest import (
     scan_for_secret_material,
 )
 from conclave.models import ModelAnswer
+from conclave.providers import receipt_from_answer
 from tests.conftest import make_response
 
 # The synthesizer/extractor resolved id for the "claude" friendly name below.
@@ -232,6 +233,24 @@ def _assert_result_canary_free(result) -> None:
     # (b) The manifest is structurally clean AND stamped VERIFIED.
     assert result.manifest.secret_safety == SECRET_SAFETY_VERIFIED
     assert scan_for_secret_material(result.manifest) is True
+
+
+def test_receipt_reduces_raw_provider_error_to_secret_free_category() -> None:
+    """Receipts never retain endpoint URLs, response bodies, or echoed credentials."""
+    answer = ModelAnswer(
+        name="grok",
+        model_id="xai/grok-4.3",
+        error=f"RuntimeError: POST https://provider.example/v1 body={PLANTED}",
+    )
+
+    receipt = receipt_from_answer(answer, temperature=0.7, timeout=120.0)
+    payload = receipt.model_dump_json()
+
+    assert receipt.outcome == "failed"
+    assert receipt.error_category == "provider_error"
+    assert receipt.error == "provider_error"
+    assert "provider.example" not in payload
+    assert PLANTED not in payload
 
 
 # --------------------------------------------------------------------------- #

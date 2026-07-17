@@ -60,7 +60,12 @@ from . import transport
 from .adapters.base import redact
 from .config import ConclaveConfig, load_config
 from .logging import get_logger
-from .manifest import ModelHarnessManifest, ProviderSkip, verified_secret_safety
+from .manifest import (
+    ModelHarnessManifest,
+    ProviderExecutionReceipt,
+    ProviderSkip,
+    verified_secret_safety,
+)
 from .models import ELITE_PROTOCOL_VERSION, CouncilResult, ModelAnswer, StreamEvent, TokenUsage
 from .prompts import ELITE_PROMPT_VERSION, SYNTHESIS_PROMPT_VERSION
 from .providers import call_model, receipt_from_answer
@@ -475,13 +480,8 @@ class Council:
             model_ids=[model_id for _name, model_id in members],
             generation_settings={"temperature": self.temperature, "timeout": self.timeout},
             receipts=receipts,
-            total_latency_ms=sum(a.latency_ms for a in answers),
-            total_usage=self._sum_usage(answers),
-            redacted_errors=[a.error for a in answers if a.error],
         )
-        # Stamp VERIFIED only when the serialized manifest is provably clean
-        # (the load-bearing CAC-04 acceptance criterion).
-        manifest.secret_safety = verified_secret_safety(manifest)
+        self._recompute_manifest_accounting(manifest)
         return manifest
 
     def _build_elite_manifest(
@@ -511,13 +511,14 @@ class Council:
                 ("revision", elite.revisions),
             ]
         )
-        flattened = [answer for _phase, answers in phase_artifacts for answer in answers]
         receipts = [
             receipt_from_answer(
                 answer,
                 temperature=self.temperature,
                 timeout=self.timeout,
                 phase=phase,
+                protocol_version=ELITE_PROTOCOL_VERSION,
+                prompt_version=None if phase == "initial" else ELITE_PROMPT_VERSION,
             )
             for phase, answers in phase_artifacts
             for answer in answers
@@ -534,29 +535,48 @@ class Council:
             model_ids=list(dict.fromkeys(model_id for _name, model_id in members)),
             generation_settings={"temperature": self.temperature, "timeout": self.timeout},
             receipts=receipts,
-            total_latency_ms=sum(answer.latency_ms for answer in flattened),
-            total_usage=self._sum_usage(flattened),
-            redacted_errors=[answer.error for answer in flattened if answer.error],
         )
-        manifest.secret_safety = verified_secret_safety(manifest)
+        self._recompute_manifest_accounting(manifest)
         return manifest
 
     @staticmethod
-    def _sum_usage(answers: list[ModelAnswer]) -> TokenUsage | None:
-        """Sum token usage across answers, or ``None`` when none reported usage.
-
-        Returns ``None`` (not a zeroed :class:`~conclave.models.TokenUsage`) when
-        no member reported usage, so the manifest can distinguish "no usage data"
-        from "a real zero".
-        """
-        reported = [a.usage for a in answers if a.usage is not None]
-        if not reported:
-            return None
-        return TokenUsage(
-            prompt_tokens=sum(u.prompt_tokens for u in reported),
-            completion_tokens=sum(u.completion_tokens for u in reported),
-            total_tokens=sum(u.total_tokens for u in reported),
+    def _recompute_manifest_accounting(manifest: ModelHarnessManifest) -> None:
+        """Recompute every manifest aggregate from its complete receipt ledger."""
+        manifest.total_latency_ms = sum(receipt.latency_ms for receipt in manifest.receipts)
+        usages = [receipt.usage for receipt in manifest.receipts if receipt.usage is not None]
+        manifest.total_usage = (
+            TokenUsage(
+                prompt_tokens=sum(usage.prompt_tokens for usage in usages),
+                completion_tokens=sum(usage.completion_tokens for usage in usages),
+                total_tokens=sum(usage.total_tokens for usage in usages),
+            )
+            if usages
+            else None
         )
+        # Cost is known only when every actual call carries a trustworthy priced
+        # value. A partially-known total would be misleading, so unknown remains
+        # None rather than being silently coerced to zero.
+        costs = [receipt.estimated_cost for receipt in manifest.receipts]
+        manifest.estimated_cost = (
+            sum(cost for cost in costs if cost is not None)
+            if costs and all(cost is not None for cost in costs)
+            else None
+        )
+        manifest.redacted_errors = [
+            receipt.error for receipt in manifest.receipts if receipt.error is not None
+        ]
+        manifest.secret_safety = verified_secret_safety(manifest)
+
+    def _append_manifest_receipts(
+        self,
+        result: CouncilResult,
+        receipts: list[ProviderExecutionReceipt],
+    ) -> None:
+        """Append explicit call receipts and refresh all derived manifest fields."""
+        if result.manifest is None or not receipts:
+            return
+        result.manifest.receipts.extend(receipts)
+        self._recompute_manifest_accounting(result.manifest)
 
     async def _ask_uncached(self, prompt: str, synthesize: bool = True) -> CouncilResult:
         """The live ask path (no cache consultation). See :meth:`ask`.
@@ -590,7 +610,23 @@ class Council:
             # raw mode (no synthesizer call) and is opt-out via the constructor
             # flag (resolved inside the helper). The no-members early return above
             # never reaches here, so a memberless run carries no verdict.
-            await self._synthesize(result)
+            synthesis_answer = await self._synthesize(result)
+            if synthesis_answer is not None:
+                self._append_manifest_receipts(
+                    result,
+                    [
+                        receipt_from_answer(
+                            synthesis_answer,
+                            temperature=self.temperature,
+                            timeout=self.timeout,
+                            phase="synthesis",
+                            protocol_version=(
+                                ELITE_PROTOCOL_VERSION if result.mode == "elite" else None
+                            ),
+                            prompt_version=SYNTHESIS_PROMPT_VERSION,
+                        )
+                    ],
+                )
             await self._apply_verdict(result)
         return result
 
@@ -696,7 +732,7 @@ class Council:
         events.append(StreamEvent(type="done", result=result))
         return events
 
-    async def _synthesize(self, result: CouncilResult) -> None:
+    async def _synthesize(self, result: CouncilResult) -> ModelAnswer | None:
         """Run the synthesizer over the successful answers, mutating ``result``.
 
         This is the buffered (non-streaming) synthesize path; the streaming
@@ -727,7 +763,7 @@ class Council:
         if not usable:
             result.synthesis_error = "no successful member answers to synthesize"
             logger.warning(result.synthesis_error)
-            return
+            return None
 
         synth_id = self.config.resolve_model_id(self.synthesizer)
         result.synthesizer = self.synthesizer
@@ -739,7 +775,7 @@ class Council:
                 "returning raw answers only"
             )
             logger.warning(result.synthesis_error)
-            return
+            return None
 
         blocks = "\n\n".join(
             f"### Answer from {a.name} ({a.model_id})"
@@ -756,8 +792,14 @@ class Council:
             result.synthesis = answer.answer
         else:
             result.synthesis_error = answer.error
+        return answer
 
-    async def _apply_verdict(self, result: CouncilResult) -> None:
+    async def _apply_verdict(
+        self,
+        result: CouncilResult,
+        *,
+        record_receipts: bool = True,
+    ) -> None:
         """Run verdict extraction over the answers and hoist it onto ``result``.
 
         The SINGLE shared verdict-resolution path. Both the buffered
@@ -822,7 +864,13 @@ class Council:
             synthesizer_name=synthesizer_name,
             synthesizer_model_id=synth_id,
             config=self.config,
+            temperature=self.temperature,
+            timeout=self.timeout,
+            protocol_version=(ELITE_PROTOCOL_VERSION if result.mode == "elite" else None),
         )
+
+        if record_receipts:
+            self._append_manifest_receipts(result, vsr.attempt_receipts)
 
         result.verdict = vsr.verdict
         if vsr.verdict is not None:
@@ -935,8 +983,22 @@ class Council:
         async def run() -> CouncilResult:
             result = await run_elite(self, prompt)
             if result.elite is not None and result.elite.completed:
-                await self._synthesize(result)
+                synthesis_answer = await self._synthesize(result)
                 self._ensure_manifest(result, "elite")
+                if synthesis_answer is not None:
+                    self._append_manifest_receipts(
+                        result,
+                        [
+                            receipt_from_answer(
+                                synthesis_answer,
+                                temperature=self.temperature,
+                                timeout=self.timeout,
+                                phase="synthesis",
+                                protocol_version=ELITE_PROTOCOL_VERSION,
+                                prompt_version=SYNTHESIS_PROMPT_VERSION,
+                            )
+                        ],
+                    )
                 if result.synthesis is None:
                     result.elite.decision_readiness = "not_ready"
                     result.elite.readiness_reasons = ["synthesis.failed"]

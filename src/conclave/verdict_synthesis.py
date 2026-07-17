@@ -69,11 +69,12 @@ from pydantic import BaseModel, Field, ValidationError
 from . import agreement
 from .adapters.base import OutputContract, redact
 from .logging import get_logger
-from .manifest import VerdictExtraction
+from .manifest import ProviderExecutionReceipt, VerdictExtraction
 from .models import ModelAnswer
-from .providers import call_model
+from .providers import call_model, receipt_from_answer
 from .verdict import (
     VERDICT_EXTRACTION_PROMPT_VERSION,
+    VERDICT_SCHEMA_VERSION,
     CouncilConflict,
     CouncilVerdict,
     VerdictExtractionModel,
@@ -148,11 +149,49 @@ class VerdictSynthesisResult(BaseModel):
             (``"fewer than 2 responding members"``, ``"open-ended prompt (no
             decision/review to adjudicate)"``, or ``"verdict extraction failed
             schema validation"``), or ``None`` when a verdict is present.
+        attempt_receipts: One secret-free receipt for each actual extraction or
+            repair call. The N<2 gate makes no call and therefore yields none.
     """
 
     verdict: CouncilVerdict | None = None
     extraction: VerdictExtraction
     verdict_absent_reason: str | None = Field(default=None)
+    attempt_receipts: list[ProviderExecutionReceipt] = Field(default_factory=list)
+
+
+def _verdict_attempt_receipt(
+    answer: ModelAnswer,
+    *,
+    phase: str,
+    attempt: int,
+    schema_valid: bool | None,
+    temperature: float,
+    timeout: float,
+    protocol_version: str | None,
+) -> ProviderExecutionReceipt:
+    """Build one secret-free receipt for an extraction or repair attempt."""
+    if answer.error is not None:
+        outcome = "failed"
+        error_category = None
+    elif schema_valid:
+        outcome = "success"
+        error_category = None
+    else:
+        outcome = "schema_invalid"
+        error_category = "schema_validation"
+    return receipt_from_answer(
+        answer,
+        temperature=temperature,
+        timeout=timeout,
+        phase=phase,
+        attempt=attempt,
+        outcome=outcome,
+        error_category=error_category,
+        schema_valid=schema_valid,
+        protocol_version=protocol_version,
+        prompt_version=VERDICT_EXTRACTION_PROMPT_VERSION,
+        schema_version=VERDICT_SCHEMA_VERSION,
+    )
 
 
 def _responding(member_answers: list[ModelAnswer]) -> list[ModelAnswer]:
@@ -401,6 +440,9 @@ async def extract_verdict(
     synthesizer_name: str,
     synthesizer_model_id: str,
     config=None,  # noqa: ANN001 -- ConclaveConfig | None; untyped to avoid an import edge
+    temperature: float = 0.7,
+    timeout: float = 120.0,
+    protocol_version: str | None = None,
 ) -> VerdictSynthesisResult:
     """Extract a structured, auditable verdict from a council's member answers.
 
@@ -489,12 +531,25 @@ async def extract_verdict(
         synthesizer_name,
         synthesizer_model_id,
         messages,
+        temperature=temperature,
+        timeout=timeout,
         config=config,
         output_contract=output_contract,
     )
 
     # Step 3 — validate, then repair ONCE on failure, then fall back.
     extraction, errors = _parse_and_validate(answer)
+    attempt_receipts = [
+        _verdict_attempt_receipt(
+            answer,
+            phase="verdict_extraction",
+            attempt=1,
+            schema_valid=None if answer.error is not None else extraction is not None,
+            temperature=temperature,
+            timeout=timeout,
+            protocol_version=protocol_version,
+        )
+    ]
     if extraction is None:
         repair_messages = messages + [
             {
@@ -512,10 +567,23 @@ async def extract_verdict(
             synthesizer_name,
             synthesizer_model_id,
             repair_messages,
+            temperature=temperature,
+            timeout=timeout,
             config=config,
             output_contract=output_contract,
         )
         extraction, errors = _parse_and_validate(retry)
+        attempt_receipts.append(
+            _verdict_attempt_receipt(
+                retry,
+                phase="verdict_repair",
+                attempt=2,
+                schema_valid=None if retry.error is not None else extraction is not None,
+                temperature=temperature,
+                timeout=timeout,
+                protocol_version=protocol_version,
+            )
+        )
 
     if extraction is None:
         # Repair exhausted — degrade gracefully (DD-2), never raise.
@@ -524,6 +592,7 @@ async def extract_verdict(
             verdict=None,
             extraction=extraction_provenance,
             verdict_absent_reason=_REASON_EXTRACTION_FAILED,
+            attempt_receipts=attempt_receipts,
         )
 
     # Step 4 — open-ended prompt → synthesis-only, no verdict (DD-2).
@@ -532,6 +601,7 @@ async def extract_verdict(
             verdict=None,
             extraction=extraction_provenance,
             verdict_absent_reason=_REASON_OPEN_ENDED,
+            attempt_receipts=attempt_receipts,
         )
 
     # Step 5 — compute consensus deterministically + assemble the verdict.
@@ -540,4 +610,5 @@ async def extract_verdict(
         verdict=verdict,
         extraction=extraction_provenance,
         verdict_absent_reason=None,
+        attempt_receipts=attempt_receipts,
     )

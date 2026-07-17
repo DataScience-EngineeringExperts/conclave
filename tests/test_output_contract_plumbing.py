@@ -268,7 +268,16 @@ async def test_extract_verdict_passes_native_output_contract(monkeypatch):
 
     captured = {}
 
-    async def fake_call_model(name, model_id, messages, *, config=None, output_contract=None):
+    async def fake_call_model(
+        name,
+        model_id,
+        messages,
+        *,
+        temperature=0.7,
+        timeout=120.0,
+        config=None,
+        output_contract=None,
+    ):
         captured["output_contract"] = output_contract
         return ModelAnswer(name=name, model_id=model_id, answer="not json")
 
@@ -312,7 +321,16 @@ async def test_extract_verdict_still_degrades_gracefully_on_bad_json(monkeypatch
     """
     import conclave.verdict_synthesis as vs
 
-    async def fake_call_model(name, model_id, messages, *, config=None, output_contract=None):
+    async def fake_call_model(
+        name,
+        model_id,
+        messages,
+        *,
+        temperature=0.7,
+        timeout=120.0,
+        config=None,
+        output_contract=None,
+    ):
         return ModelAnswer(name=name, model_id=model_id, answer="not json")
 
     monkeypatch.setattr(vs, "call_model", fake_call_model)
