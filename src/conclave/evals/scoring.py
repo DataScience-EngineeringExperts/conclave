@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import random
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
+from statistics import median
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -156,6 +159,9 @@ class ReliabilityMetrics(EvalModel):
     adjudication_rate: float = Field(ge=0.0, le=1.0)
     raw_agreement: float | None = Field(default=None, ge=0.0, le=1.0)
     positive_prevalence: float | None = Field(default=None, ge=0.0, le=1.0)
+    successful_runs: int = Field(default=0, ge=0)
+    double_graded_runs: int = Field(default=0, ge=0)
+    double_grading_rate: float | None = Field(default=None, ge=0.0, le=1.0)
     strata: tuple[ReliabilityStratum, ...] = ()
 
 
@@ -196,7 +202,7 @@ class StudyScoreReport(EvalModel):
     adjudications: tuple[AdjudicationRecord, ...]
     resolved_outcomes: tuple[ResolvedOutcome, ...]
     paid_analysis: PaidAnalysisSummary | None = None
-    confirmatory_inference: ConfirmatoryInference | None = None
+    simultaneous_upper_bounds: SimultaneousUpperBounds | None = None
 
 
 class RatioInterval(EvalModel):
@@ -211,23 +217,29 @@ class RatioInterval(EvalModel):
     bootstrap_samples: int = Field(ge=1)
 
 
-class ConfirmatoryInference(EvalModel):
-    """Predeclared inference receipts required before a confirmatory decision."""
+class SimultaneousUpperBounds(EvalModel):
+    """Bonferroni simultaneous one-sided bounds for the three secondary gates."""
 
-    achieved_power: float = Field(gt=0, le=1)
-    secondary_p_values: dict[str, float] = Field(min_length=1)
+    familywise_alpha: Literal[0.05] = 0.05
+    endpoint_count: Literal[3] = 3
+    per_endpoint_alpha: float = Field(gt=0, lt=1)
+    quantile_probability: float = Field(gt=0, lt=1)
+    method: Literal["task_clustered_percentile_bonferroni_v1"] = (
+        "task_clustered_percentile_bonferroni_v1"
+    )
+    reviewer_effort_statistic: Literal["ratio_of_task_medians"] = "ratio_of_task_medians"
+    severe_error_upper_bound: float
+    readiness_error_upper_bound: float
+    reviewer_effort_ratio_upper_bound: float = Field(gt=0)
+    evidence_hash: Sha256Digest
 
     @model_validator(mode="after")
-    def validate_secondary_p_values(self) -> ConfirmatoryInference:
-        required = {
-            "severe_error_noninferiority",
-            "readiness_noninferiority",
-            "reviewer_effort",
-        }
-        if set(self.secondary_p_values) != required:
-            raise ValueError("secondary_p_values must exactly cover the frozen secondary gates")
-        if any(value < 0 or value > 1 for value in self.secondary_p_values.values()):
-            raise ValueError("secondary p-values must be between zero and one")
+    def validate_bonferroni_metadata(self) -> SimultaneousUpperBounds:
+        expected_alpha = self.familywise_alpha / self.endpoint_count
+        if not math.isclose(self.per_endpoint_alpha, expected_alpha, abs_tol=1e-15):
+            raise ValueError("per_endpoint_alpha must equal familywise alpha divided by endpoints")
+        if not math.isclose(self.quantile_probability, 1 - expected_alpha, abs_tol=1e-15):
+            raise ValueError("quantile_probability must equal one minus per-endpoint alpha")
         return self
 
 
@@ -239,6 +251,7 @@ class PaidAnalysisSummary(EvalModel):
     readiness_error_difference: PairedDifference
     reviewer_effort_ratio: float = Field(gt=0)
     reviewer_effort_ratio_interval: RatioInterval
+    latency_baseline_condition_id: ConditionId
     p95_latency_ratio: float = Field(gt=0)
     elite_p95_latency_seconds: float = Field(ge=0)
     total_cost_usd: float = Field(ge=0)
@@ -278,11 +291,22 @@ def evaluate_confirmatory_gates(
         raise ValueError("report preregistration hash does not match the frozen design")
     if report.paid_analysis is None:
         raise ValueError("confirmatory report is missing paid analysis")
-    if report.confirmatory_inference is None:
-        raise ValueError("confirmatory report is missing inference receipts")
+    if report.simultaneous_upper_bounds is None:
+        raise ValueError("confirmatory report is missing simultaneous upper bounds")
     metrics = report.paid_analysis
-    inference = report.confirmatory_inference
+    bounds = report.simultaneous_upper_bounds
     config = design.analysis_gates
+    if bounds.evidence_hash != hash_confirmatory_evidence(report):
+        raise ValueError("simultaneous-bound evidence hash does not match the report")
+    expected_per_endpoint_alpha = config.alpha / 3
+    if not math.isclose(bounds.per_endpoint_alpha, expected_per_endpoint_alpha, abs_tol=1e-15):
+        raise ValueError("simultaneous-bound alpha does not match the frozen design")
+    if not math.isclose(
+        bounds.quantile_probability, 1 - expected_per_endpoint_alpha, abs_tol=1e-15
+    ):
+        raise ValueError("simultaneous-bound quantile does not match the frozen design")
+    if bounds.reviewer_effort_statistic != config.reviewer_effort_statistic:
+        raise ValueError("reviewer-effort statistic does not match the frozen design")
     primary = metrics.primary_paired_difference
     if primary.baseline_condition_id != config.primary_baseline:
         raise ValueError("confirmatory primary baseline does not match the frozen design")
@@ -296,35 +320,64 @@ def evaluate_confirmatory_gates(
         raise ValueError("confirmatory family directions do not match the frozen analysis set")
     if set(metrics.roster_directions) != expected_rosters:
         raise ValueError("confirmatory roster directions do not match the frozen analysis set")
+    family_reliability = {
+        item.stratum_value: item
+        for item in report.reliability.strata
+        if item.stratum_type == "family"
+    }
+    if set(family_reliability) != expected_families:
+        raise ValueError("confirmatory family reliability does not match the frozen analysis set")
+    if metrics.latency_baseline_condition_id != config.latency_baseline:
+        raise ValueError("confirmatory latency baseline does not match the frozen design")
 
-    ordered_p_values = sorted(inference.secondary_p_values.values())
-    holm_passed = all(
-        value <= config.alpha / (len(ordered_p_values) - index)
-        for index, value in enumerate(ordered_p_values)
-    )
     failed = []
     checks = (
         ("sample_size", primary.task_count >= config.minimum_confirmatory_tasks),
-        ("power", inference.achieved_power >= config.power),
-        ("holm_secondary", holm_passed),
         ("minimum_effect", primary.estimate >= config.minimum_effect),
         ("superiority_interval", primary.lower > 0),
         (
             "severe_error_noninferiority",
-            metrics.severe_error_difference.upper <= config.severe_error_noninferiority_margin,
+            bounds.severe_error_upper_bound <= config.severe_error_noninferiority_margin,
         ),
         (
             "readiness_noninferiority",
-            metrics.readiness_error_difference.upper <= config.readiness_noninferiority_margin,
+            bounds.readiness_error_upper_bound <= config.readiness_noninferiority_margin,
         ),
         (
             "reviewer_effort",
-            metrics.reviewer_effort_ratio_interval.upper <= config.reviewer_effort_max_ratio,
+            bounds.reviewer_effort_ratio_upper_bound <= config.reviewer_effort_max_ratio,
         ),
         ("latency_ratio", metrics.p95_latency_ratio <= config.p95_latency_max_ratio),
         (
             "latency_ceiling",
             metrics.elite_p95_latency_seconds <= config.absolute_p95_latency_seconds,
+        ),
+        ("spend_ceiling", metrics.total_cost_usd <= design.approved_spend_ceiling_usd),
+        (
+            "double_grading",
+            report.reliability.double_grading_rate is not None
+            and report.reliability.double_grading_rate >= config.minimum_double_grading_rate,
+        ),
+        (
+            "raw_agreement",
+            report.reliability.raw_agreement is not None
+            and report.reliability.raw_agreement >= config.minimum_raw_agreement,
+        ),
+        (
+            "overall_kappa",
+            report.reliability.cohen_kappa is not None
+            and report.reliability.cohen_kappa >= config.minimum_overall_kappa,
+        ),
+        (
+            "family_kappa",
+            all(
+                item.cohen_kappa is not None and item.cohen_kappa >= config.minimum_family_kappa
+                for item in family_reliability.values()
+            ),
+        ),
+        (
+            "adjudication_rate",
+            report.reliability.adjudication_rate <= config.maximum_adjudication_rate,
         ),
         ("family_direction", all(value > 0 for value in metrics.family_directions.values())),
         ("roster_direction", all(value > 0 for value in metrics.roster_directions.values())),
@@ -413,33 +466,92 @@ def paired_bootstrap_ratio(
     seed: int,
     samples: int,
 ) -> RatioInterval:
-    """Bootstrap a task-clustered ratio of mean repeated-measure effort."""
+    """Bootstrap the preregistered ratio of median task-level reviewer effort."""
 
     if set(numerator_by_task) != set(denominator_by_task) or not numerator_by_task:
         raise ValueError("ratio numerator and denominator must contain the same task IDs")
     task_ids = sorted(numerator_by_task)
-    denominator = sum(denominator_by_task[item] for item in task_ids) / len(task_ids)
-    if denominator <= 0:
-        raise ValueError("paid reviewer-effort baseline must be positive")
-    estimate = (sum(numerator_by_task[item] for item in task_ids) / len(task_ids)) / denominator
+    if any(numerator_by_task[item] <= 0 or denominator_by_task[item] <= 0 for item in task_ids):
+        raise ValueError("task-level reviewer effort must be strictly positive for log ratios")
+    numerator_median = median(numerator_by_task[item] for item in task_ids)
+    denominator_median = median(denominator_by_task[item] for item in task_ids)
+    estimate = math.exp(math.log(numerator_median / denominator_median))
     rng = random.Random(seed)
     bootstrapped = []
     for _ in range(samples):
         sampled = [rng.choice(task_ids) for _ in task_ids]
-        sampled_denominator = sum(denominator_by_task[item] for item in sampled) / len(sampled)
-        if sampled_denominator <= 0:
-            raise ValueError("reviewer-effort bootstrap encountered a zero baseline")
-        sampled_numerator = sum(numerator_by_task[item] for item in sampled) / len(sampled)
-        bootstrapped.append(sampled_numerator / sampled_denominator)
+        sampled_numerator = median(numerator_by_task[item] for item in sampled)
+        sampled_denominator = median(denominator_by_task[item] for item in sampled)
+        bootstrapped.append(math.exp(math.log(sampled_numerator / sampled_denominator)))
     bootstrapped.sort()
     return RatioInterval(
         estimate=estimate,
-        lower=_quantile(bootstrapped, 0.05),
-        upper=_quantile(bootstrapped, 0.95),
+        lower=_quantile(bootstrapped, 0.025),
+        upper=_quantile(bootstrapped, 0.975),
         task_count=len(task_ids),
         bootstrap_seed=seed,
         bootstrap_samples=samples,
     )
+
+
+def _bootstrap_difference_upper_bound(
+    numerator_by_task: Mapping[str, float],
+    denominator_by_task: Mapping[str, float],
+    *,
+    quantile_probability: float,
+    seed: int,
+    samples: int,
+) -> float:
+    """Return an approximate task-clustered percentile upper bound."""
+
+    task_ids = sorted(numerator_by_task)
+    if set(task_ids) != set(denominator_by_task) or not task_ids:
+        raise ValueError("bootstrap inputs must contain the same task IDs")
+    rng = random.Random(seed)
+    bootstrapped = []
+    for _ in range(samples):
+        sampled = [rng.choice(task_ids) for _ in task_ids]
+        bootstrapped.append(
+            sum(numerator_by_task[item] - denominator_by_task[item] for item in sampled)
+            / len(sampled)
+        )
+    return _quantile(sorted(bootstrapped), quantile_probability)
+
+
+def _bootstrap_median_ratio_upper_bound(
+    numerator_by_task: Mapping[str, float],
+    denominator_by_task: Mapping[str, float],
+    *,
+    quantile_probability: float,
+    seed: int,
+    samples: int,
+) -> float:
+    """Return an approximate task-clustered percentile upper bound for effort ratio."""
+
+    task_ids = sorted(numerator_by_task)
+    if set(task_ids) != set(denominator_by_task) or not task_ids:
+        raise ValueError("bootstrap inputs must contain the same task IDs")
+    if any(numerator_by_task[item] <= 0 or denominator_by_task[item] <= 0 for item in task_ids):
+        raise ValueError("task-level reviewer effort must be strictly positive for log ratios")
+    rng = random.Random(seed)
+    bootstrapped = []
+    for _ in range(samples):
+        sampled = [rng.choice(task_ids) for _ in task_ids]
+        sampled_numerator = median(numerator_by_task[item] for item in sampled)
+        sampled_denominator = median(denominator_by_task[item] for item in sampled)
+        bootstrapped.append(math.exp(math.log(sampled_numerator / sampled_denominator)))
+    return _quantile(sorted(bootstrapped), quantile_probability)
+
+
+def hash_confirmatory_evidence(report: StudyScoreReport) -> str:
+    """Hash every report field from which the confirmatory receipt was derived."""
+
+    canonical = json.dumps(
+        report.model_dump(mode="json", exclude={"simultaneous_upper_bounds"}),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
 
 
 def cohen_kappa(first: Sequence[bool], second: Sequence[bool]) -> float | None:
@@ -479,15 +591,13 @@ def _paired_values(
     judgments_by_run: Mapping[str, Sequence[GraderJudgment]], run_ids: Sequence[str]
 ) -> tuple[tuple[str, str] | None, list[tuple[bool, bool]]]:
     graders = sorted({item.grader_id for values in judgments_by_run.values() for item in values})
-    if len(graders) != 2:
-        return None, []
-    first, second = graders
+    grader_pair = (graders[0], graders[1]) if len(graders) == 2 else None
     pairs = []
     for run_id in sorted(run_ids):
-        by_grader = {item.grader_id: item.critical_error_free for item in judgments_by_run[run_id]}
-        if first in by_grader and second in by_grader:
-            pairs.append((by_grader[first], by_grader[second]))
-    return (first, second), pairs
+        ordered = sorted(judgments_by_run.get(run_id, ()), key=lambda item: item.grader_id)
+        if len(ordered) == 2 and ordered[0].grader_id != ordered[1].grader_id:
+            pairs.append((ordered[0].critical_error_free, ordered[1].critical_error_free))
+    return grader_pair, pairs
 
 
 def _agreement_statistics(
@@ -506,7 +616,14 @@ def _reliability(
     judgments_by_run: Mapping[str, Sequence[GraderJudgment]],
     adjudicated_runs: set[str],
     manifest: StudyManifest,
+    study_run: StudyRun,
 ) -> ReliabilityMetrics:
+    analysis_ids = {run.planned_run_id for run in analysis_planned_runs(manifest)}
+    judgments_by_run = {
+        run_id: values for run_id, values in judgments_by_run.items() if run_id in analysis_ids
+    }
+    outcomes = {record.planned_run_id: record.outcome for record in study_run.records}
+    successful_runs = sum(outcomes[run_id] == "success" for run_id in analysis_ids)
     disagreements = sum(
         len({item.critical_error_free for item in values}) > 1
         for values in judgments_by_run.values()
@@ -564,6 +681,9 @@ def _reliability(
         adjudication_rate=rate,
         raw_agreement=raw_agreement,
         positive_prevalence=prevalence,
+        successful_runs=successful_runs,
+        double_graded_runs=len(pairs),
+        double_grading_rate=(len(pairs) / successful_runs if successful_runs else None),
         strata=tuple(strata),
     )
 
@@ -649,7 +769,6 @@ def score_study(
     blind_map: BlindMap | None = None,
     bootstrap_seed: int,
     bootstrap_samples: int,
-    confirmatory_inference: ConfirmatoryInference | None = None,
 ) -> StudyScoreReport:
     """Score one frozen study without dropping failures or modifying raw judgments."""
 
@@ -660,8 +779,6 @@ def score_study(
         or bootstrap_samples != manifest.frozen_design.bootstrap.samples
     ):
         raise ValueError("paid scoring must use the frozen bootstrap seed and sample count")
-    if confirmatory_inference is not None and manifest.evidence_classification != "confirmatory":
-        raise ValueError("confirmatory inference can only be attached to confirmatory evidence")
     validate_run_records(manifest, study_run.records)
     planned_by_id = {run.planned_run_id: run for run in manifest.planned_runs}
     run_by_id = {record.planned_run_id: record for record in study_run.records}
@@ -817,7 +934,6 @@ def score_study(
         effort_cells = {
             run.planned_run_id: (
                 sum(item.reviewer_seconds or 0 for item in judgments_by_run[run.planned_run_id])
-                / len(judgments_by_run[run.planned_run_id])
                 if judgments_by_run[run.planned_run_id]
                 else 0.0
             )
@@ -848,15 +964,16 @@ def score_study(
             seed=frozen_seed,
             samples=frozen_samples,
         )
+        latency_baseline = design.analysis_gates.latency_baseline
         latencies = {
             condition: sorted(
                 (run_by_id[run.planned_run_id].latency_ms or 0.0) / 1000
                 for run in analysis_runs
                 if run.condition_id == condition
             )
-            for condition in (baseline, "elite_full")
+            for condition in (latency_baseline, "elite_full")
         }
-        baseline_p95 = _quantile(latencies[baseline], 0.95)
+        baseline_p95 = _quantile(latencies[latency_baseline], 0.95)
         elite_p95 = _quantile(latencies["elite_full"], 0.95)
         if baseline_p95 <= 0:
             raise ValueError("paid latency baseline must be positive")
@@ -898,6 +1015,7 @@ def score_study(
             readiness_error_difference=readiness_difference,
             reviewer_effort_ratio=effort_interval.estimate,
             reviewer_effort_ratio_interval=effort_interval,
+            latency_baseline_condition_id=latency_baseline,
             p95_latency_ratio=elite_p95 / baseline_p95,
             elite_p95_latency_seconds=elite_p95,
             total_cost_usd=sum(record.cost_usd for record in study_run.records),
@@ -909,7 +1027,7 @@ def score_study(
             family_directions=directional_effects("family"),
             roster_directions=directional_effects("roster"),
         )
-    return StudyScoreReport(
+    report = StudyScoreReport(
         study_id=manifest.study_id,
         evidence_classification=manifest.evidence_classification,
         frozen_design_hash=manifest.frozen_design_hash,
@@ -934,10 +1052,43 @@ def score_study(
         ),
         condition_metrics=tuple(condition_metrics),
         paired_differences=paired,
-        reliability=_reliability(judgments_by_run, set(adjudication_by_run), manifest),
+        reliability=_reliability(judgments_by_run, set(adjudication_by_run), manifest, study_run),
         raw_judgments=tuple(raw_judgments),
         adjudications=tuple(adjudications),
         resolved_outcomes=tuple(resolved),
         paid_analysis=paid_analysis,
-        confirmatory_inference=confirmatory_inference,
     )
+    if manifest.evidence_classification != "confirmatory":
+        return report
+    assert manifest.frozen_design is not None
+    design = manifest.frozen_design
+    config = design.analysis_gates
+    per_endpoint_alpha = config.alpha / 3
+    quantile_probability = 1 - per_endpoint_alpha
+    bounds = SimultaneousUpperBounds(
+        per_endpoint_alpha=per_endpoint_alpha,
+        quantile_probability=quantile_probability,
+        severe_error_upper_bound=_bootstrap_difference_upper_bound(
+            severe_means["elite_full"],
+            severe_means[baseline],
+            quantile_probability=quantile_probability,
+            seed=design.bootstrap.seed,
+            samples=design.bootstrap.samples,
+        ),
+        readiness_error_upper_bound=_bootstrap_difference_upper_bound(
+            readiness_means["elite_full"],
+            readiness_means[baseline],
+            quantile_probability=quantile_probability,
+            seed=design.bootstrap.seed,
+            samples=design.bootstrap.samples,
+        ),
+        reviewer_effort_ratio_upper_bound=_bootstrap_median_ratio_upper_bound(
+            effort_means["elite_full"],
+            effort_means[baseline],
+            quantile_probability=quantile_probability,
+            seed=design.bootstrap.seed,
+            samples=design.bootstrap.samples,
+        ),
+        evidence_hash=hash_confirmatory_evidence(report),
+    )
+    return report.model_copy(update={"simultaneous_upper_bounds": bounds})

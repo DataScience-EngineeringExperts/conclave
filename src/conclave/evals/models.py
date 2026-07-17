@@ -131,10 +131,19 @@ class AnalysisGateConfig(EvalModel):
     severe_error_noninferiority_margin: Literal[0.02] = 0.02
     readiness_noninferiority_margin: Literal[0.05] = 0.05
     reviewer_effort_max_ratio: Literal[1.20] = 1.20
+    reviewer_effort_statistic: Literal["ratio_of_task_medians"] = "ratio_of_task_medians"
+    latency_baseline: Literal["single_frontier"] = "single_frontier"
     p95_latency_max_ratio: Literal[3.0] = 3.0
     absolute_p95_latency_seconds: float = Field(gt=0)
     minimum_confirmatory_tasks: int = Field(ge=2)
-    multiplicity_rule: Literal["holm_secondary"] = "holm_secondary"
+    minimum_double_grading_rate: Literal[0.95] = 0.95
+    minimum_raw_agreement: Literal[0.80] = 0.80
+    minimum_overall_kappa: Literal[0.60] = 0.60
+    minimum_family_kappa: Literal[0.50] = 0.50
+    maximum_adjudication_rate: Literal[0.20] = 0.20
+    multiplicity_rule: Literal["bonferroni_simultaneous_upper_bounds"] = (
+        "bonferroni_simultaneous_upper_bounds"
+    )
     unit: Literal["task"] = "task"
 
     @model_validator(mode="after")
