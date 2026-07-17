@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Elite Decision Protocol (unreleased).** A quality-first `elite` mode for consequential
+  decisions: independent member answers → concurrent council-wide evidence audits → concurrent
+  member revisions → the existing synthesis and canonical auditable verdict. It is available
+  through `--mode elite`, `Council.elite()`, and `elite_sync()` in source; no version, tag, or
+  package publication is claimed here.
+- **Fixed three-success phase gate.** Each of Elite's `initial`, `critique`, and `revision`
+  phases requires three successful responders. Larger councils may survive partial failures
+  while three remain. A failed gate stops later calls and returns an incomplete result with a
+  phase-specific reason, attempted artifacts, no synthesis/verdict, and CLI exit code 1.
+- **Phase-auditable results.** `EliteResult` preserves initial answers, critiques, and revisions;
+  the manifest records a separate redacted receipt with `phase` provenance for every attempted
+  member call, aggregates phase usage/latency, and retains the existing secret-safety scan.
+  Elite is buffered-only: `--stream` is rejected before provider calls. The quality tradeoff is
+  explicit—up to `3N + 2` calls for N members versus the ordinary single-fan-out workflow.
+
 ### Fixed
 
 - **`ModelHarnessManifest` now rides on *every* mode's result — a true invariant.**
@@ -26,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- Added Elite CLI/library examples and reconciled the PDD, system diagram, README, and index
+  around its unreleased status, fixed gate, partial-failure behavior, phased receipts, and
+  latency/cost tradeoff.
 - Reconciled `README.md`, `SYSTEM_CONTEXT_DIAGRAM.md`, and the PDD so the
   manifest-on-every-result claim is now accurate, and documented the constrained-choice
   **`vote` mode** as **shipped** (CAC-09 / #3) rather than "absorbed by `provider_votes`"

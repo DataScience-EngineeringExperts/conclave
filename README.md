@@ -12,9 +12,10 @@ It is **library-first** (the CLI is a thin shell over the same `Council` you imp
 returns **structured results** (per-model latency, token usage, and error capture), and is
 **partial-failure resilient** — one provider erroring never aborts the run. Keys are
 **bring-your-own**, referenced by environment-variable *name* only — never stored or
-logged. It ships four modes: **synthesize** (merge answers into one), **raw** (no merge),
+logged. It ships six modes: **synthesize** (merge answers into one), **raw** (no merge),
 **debate** (multi-round, members revise after seeing peers' anonymized answers), and
-**adversarial** (propose → refute → verdict). conclave is intentionally lightweight — a
+**adversarial** (propose → refute → verdict), **vote** (fixed-choice tally), and
+**elite** (quality-first evidence audit and revision). conclave is intentionally lightweight — a
 small council primitive, not an agent framework.
 
 **The v1.1 wedge — the auditable council.** Every run also yields **a multi-model council
@@ -23,8 +24,8 @@ verdict you can act on — structured, scored for agreement, fully auditable**: 
 a deterministic `consensus_score` (arithmetic over the model's clustering, *never* an
 LLM-emitted number); and a redacted `ModelHarnessManifest` recording how the run executed and
 which model produced the disagreement analysis. The verdict is **default-on**, and the manifest
-rides on **every** result — for all five modes (`synthesize`, `raw`, `debate`, `adversarial`,
-`vote`), not just `ask`. A constrained-choice **`vote` mode** (`--mode vote --choices ...`) also
+rides on **every** result — for all six modes (`synthesize`, `raw`, `debate`, `adversarial`,
+`vote`, `elite`), not just `ask`. A constrained-choice **`vote` mode** (`--mode vote --choices ...`) also
 shipped in v1.1 (CAC-09 / #3) — distinct from the verdict's `provider_votes`, which score
 free-form agreement rather than tally a fixed ballot.
 
@@ -125,17 +126,23 @@ conclave ask "Defend event sourcing for this ledger." \
 conclave ask "Which datastore for this workload?" \
   -c grok,gemini,claude --mode vote --choices "Postgres,DynamoDB,MongoDB"
 
-# Machine-readable output (works for every mode; carries rounds/adversarial/vote too)
+# Elite (unreleased): independent answers -> evidence audits -> revisions -> verdict
+conclave ask "Should we adopt a service mesh for 8 services?" \
+  -c grok,gemini,claude --mode elite
+
+# Machine-readable output (works for every mode; carries elite phase artifacts too)
 conclave ask "..." -c grok,perplexity --mode debate --json
 ```
 
-Mode flags at a glance: `--mode synthesize|raw|debate|adversarial|vote`. `--rounds N`
+Mode flags at a glance: `--mode synthesize|raw|debate|adversarial|vote|elite`. `--rounds N`
 (default 2) is the *maximum* round count for `debate`; `--converge-threshold FLOAT`
 (or `--converge`/`--no-converge`) optionally stops a debate early once answers
 stabilize round-over-round (off by default — `--rounds` runs in full). `--proposer
 NAME` (default: first member) applies to `adversarial`. `--choices "A,B,C"` (two or
 more) is required for `vote`. `--synthesizer/-s` overrides the synthesizer *and* the
-adversarial judge. Every mode's result carries the auditable `ModelHarnessManifest`.
+adversarial judge and Elite's final synthesizer. Every mode's result carries the auditable
+`ModelHarnessManifest`. Elite is currently **unreleased**; use it from this source branch until
+a future release explicitly includes it.
 
 `--council` accepts either a comma-separated list of friendly names or the name
 of a council defined in your config (see below). The built-in `default` council
@@ -152,6 +159,7 @@ Streaming and the non-streaming default produce the **same** final
 `CouncilResult`; `--stream` only changes how output is rendered. It is ignored
 with `--json` (which always emits the full structured payload), and on a cache
 hit the cached text is rendered in one shot rather than as a fake token stream.
+`--stream` is rejected for `elite` before any provider call; Elite runs are buffered only.
 
 ## Quickstart (library)
 
@@ -171,6 +179,55 @@ for answer in result.answers:
 
 print("SYNTHESIS:\n", result.synthesis)
 ```
+
+### Elite Decision Protocol (unreleased)
+
+Elite is the quality-first path for consequential decisions. It trades latency and provider
+spend for a stronger answer: three concurrent member phases, followed by conclave's existing
+synthesis and canonical structured verdict.
+
+1. **Initial:** members answer independently.
+2. **Evidence audit:** every surviving member audits the anonymized panel for supported,
+   conflicting, and externally unverified claims.
+3. **Revision:** survivors revise their own answer using the full anonymized panel and audits.
+4. **Final:** conclave synthesizes successful revisions, then applies the existing auditable
+   verdict and deterministic consensus calculation.
+
+Each member phase has a fixed gate of **three successful responders**. A council larger than
+three may lose members and continue while at least three remain. If any gate falls below three,
+the protocol stops immediately: `result.elite.completed` is `False`, `failure_reason` names the
+failed phase, later phases are not called, and synthesis/verdict extraction do not run. Attempted
+answers and failures remain in `initial_answers`, `critiques`, or `revisions`; the CLI exits 1
+(and `--json` still emits the full result). This is stricter than the ordinary modes' best-effort
+partial-failure behavior by design.
+
+```python
+from conclave import Council
+
+council = Council(
+    models=["grok", "gemini", "claude", "perplexity"],
+    synthesizer="claude",
+)
+
+result = council.elite_sync("Should we adopt a service mesh for 8 services?")
+# or: result = await council.elite("Should we adopt a service mesh for 8 services?")
+
+if result.elite.completed:
+    print(result.synthesis)
+    print(result.verdict)
+else:
+    print(result.elite.failure_reason)
+
+for receipt in result.manifest.receipts:
+    print(receipt.phase, receipt.name, receipt.error)  # initial/critique/revision
+```
+
+Elite normally makes up to `3N + 2` calls for `N` members: three concurrent member phases,
+one synthesis call, and one verdict-extraction call. Failures reduce later member calls, and
+`Council(extract_verdict=False)` removes the final extraction call. The manifest keeps a
+separate receipt for every attempted `initial`, `critique`, and `revision` call, aggregates
+their latency/usage, preserves redacted failures, and remains secret-scanned. Elite does **not**
+stream.
 
 ## Auditable verdict
 
@@ -268,7 +325,7 @@ Event types: `member_delta` / `member_done` (per member, interleaved),
 A member that cannot stream, or any mid-stream failure, degrades gracefully —
 partial text is preserved and the error lands on that member's `ModelAnswer`,
 never raising (the same never-raises contract as `ask`). Streaming applies to
-`synthesize`/`raw` only; `debate`/`adversarial` are not streamed.
+`synthesize`/`raw` only; `debate`/`adversarial`/`vote`/`elite` are not streamed.
 
 ### Debate and adversarial modes
 

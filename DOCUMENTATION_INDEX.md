@@ -7,7 +7,7 @@ the canonical authority spec on top of those.
 
 - **Repo:** `/Users/ernestprovo/dev/conclave/`
 - **Version:** 1.1.0 · **License:** MIT
-- **Last updated:** 2026-06-21
+- **Last updated:** 2026-07-17
 
 ---
 
@@ -15,15 +15,15 @@ the canonical authority spec on top of those.
 
 | # | Doc | Path | Purpose |
 |---|-----|------|---------|
-| 1 | **README** (project overview) | [`README.md`](README.md) | What conclave is, install, BYO-keys, CLI + library quickstart, config, test. The fast on-ramp. |
-| 2 | **System Context Diagram** | [`SYSTEM_CONTEXT_DIAGRAM.md`](SYSTEM_CONTEXT_DIAGRAM.md) | Mermaid system-context view: user/consumer → CLI/library → Council → provider highway (httpx transport + adapter registry) → 9 providers; the v1.1 verdict pipeline (`extract_verdict` → deterministic `agreement` → `CouncilVerdict`) and the first-class secret-free `ModelHarnessManifest`; config + env-var key inputs; custom OpenAI-compatible endpoints; mcp-warden as dev-time consumer. |
+| 1 | **README** (project overview) | [`README.md`](README.md) | Install, BYO-keys, six-mode CLI/library quickstart, and the unreleased quality-first Elite protocol. |
+| 2 | **System Context Diagram** | [`SYSTEM_CONTEXT_DIAGRAM.md`](SYSTEM_CONTEXT_DIAGRAM.md) | Mermaid context for the provider highway, six modes, unreleased Elite gated phases, verdict pipeline, phased manifest receipts, and mcp-warden boundary. |
 | 3 | **Documentation Index** | [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md) | This file. Master map of all docs + source layout. |
 
 ## Authority spec
 
 | Doc | Path | Purpose |
 |-----|------|---------|
-| **Product Design Document** | [`docs/PRODUCT_DESIGN_DOCUMENT.md`](docs/PRODUCT_DESIGN_DOCUMENT.md) | **Canonical** product spec and roadmap, reframed in v1.1 to **the auditable multi-model council**. Problem & vision, personas, BYO-keys/key-handling security, council modes (synthesize/raw/debate/adversarial/vote — `vote` shipped as a constrained-choice ballot, CAC-09 / #3, complementary to the verdict's `provider_votes`), the v1.1 auditable verdict (§4a — CouncilResult v2, deterministic consensus, native structured output, the manifest), provider matrix, architecture, scope + non-goals, demand-gated v1.2 roadmap, the mcp-warden dev-time boundary, licensing & positioning, open questions. **When docs disagree, the PDD wins.** |
+| **Product Design Document** | [`docs/PRODUCT_DESIGN_DOCUMENT.md`](docs/PRODUCT_DESIGN_DOCUMENT.md) | **Canonical** product spec: six modes including implemented-but-unreleased Elite, its fixed three-success phase gate and cost/latency tradeoff, the v1.1 auditable verdict, manifest, architecture, boundaries, and roadmap. **When docs disagree, the PDD wins.** |
 
 ---
 
@@ -34,15 +34,15 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 
 | Module | Path | Responsibility |
 |--------|------|----------------|
-| Package API | [`src/conclave/__init__.py`](src/conclave/__init__.py) | Public exports: `Council`, `CouncilResult`, `ModelAnswer`, `TokenUsage`, `StreamEvent`, `DebateRound`, `AdversarialResult`, `ConclaveConfig`, `load_config`, `aclose`, `guard_transport_logging`, `__version__`; **v1.1 verdict surface** — `CouncilVerdict`, `CouncilConflict`, `CouncilPosition`, `ProviderVote`, `MinorityReport`, `extract_verdict`, `VerdictSynthesisResult`, `VerdictExtractionModel`, `ModelHarnessManifest`, `ProviderExecutionReceipt`, `ProviderSkip`, `VerdictExtraction`, `verdict_json_schema`, `member_answer_json_schema`, `verdict_extraction_json_schema`, `VERDICT_SCHEMA_VERSION`, `VERDICT_EXTRACTION_PROMPT_VERSION`. |
-| Council | [`src/conclave/council.py`](src/conclave/council.py) | Primary importable entry point. Reusable primitives (`fan_out`, `synthesize_blocks`) + the public mode API (`ask`/`debate`/`adversarial`, async + sync) + streaming (`ask_stream`/`stream_sync`, synthesize/raw). Runs **default-on** verdict extraction via `_apply_verdict` on both buffered + streaming paths (opt out with `Council(extract_verdict=False)`). |
-| Modes | [`src/conclave/modes.py`](src/conclave/modes.py) | `debate` (multi-round, anonymized peers, drop-out) and `adversarial` (propose → refute → verdict) orchestration, built on `Council.fan_out`/`synthesize_blocks`. |
+| Package API | [`src/conclave/__init__.py`](src/conclave/__init__.py) | Public exports include `Council`, result types, verdict/manifest surface, and unreleased `EliteResult` plus Elite protocol constants. |
+| Council | [`src/conclave/council.py`](src/conclave/council.py) | Six-mode async/sync API; completed Elite runs synthesize revisions and apply the canonical verdict; incomplete runs retain artifacts without either. |
+| Modes | [`src/conclave/modes.py`](src/conclave/modes.py) | Debate, adversarial, vote, and unreleased Elite orchestration; Elite gates initial/audit/revision at three successes. |
 | Verdict types | [`src/conclave/verdict.py`](src/conclave/verdict.py) | Public verdict/member Pydantic types (`CouncilVerdict`, `CouncilPosition`, `CouncilConflict`, `ProviderVote`, `MinorityReport`) + the LCD JSON Schemas (`verdict_json_schema`/`member_answer_json_schema`/`verdict_extraction_json_schema`) usable across all three native structured-output surfaces; `VERDICT_SCHEMA_VERSION`/`VERDICT_EXTRACTION_PROMPT_VERSION`. |
 | Agreement | [`src/conclave/agreement.py`](src/conclave/agreement.py) | Deterministic consensus: `consensus_score` (`position_cluster_ratio_v1` — largest cluster / positioned members; `None` for N<2) + `consensus_label` buckets. Pure arithmetic, no `difflib`, never LLM-emitted. |
 | Verdict synthesis | [`src/conclave/verdict_synthesis.py`](src/conclave/verdict_synthesis.py) | `extract_verdict` engine: one extraction call clustering stances, native `output_contract` enforcement + prompt-level fallback, validate → repair-once → graceful `verdict=None`; the three verdict-absent reasons; provenance on every return path. |
-| Manifest | [`src/conclave/manifest.py`](src/conclave/manifest.py) | `ModelHarnessManifest` (first-class on every result) + `ProviderExecutionReceipt`/`ProviderSkip`/`VerdictExtraction` + `scan_for_secret_material()` → `secret_safety` stamp. No key values; `estimated_cost` left `None`. |
+| Manifest | [`src/conclave/manifest.py`](src/conclave/manifest.py) | Secret-scanned manifest on every result; Elite receipts preserve `initial`/`critique`/`revision` phase provenance. |
 | Streaming | [`src/conclave/streaming.py`](src/conclave/streaming.py) | `stream_ask` — council-level streaming engine behind `Council.ask_stream`: concurrent member interleaving via an `asyncio.Queue`, optional synthesizer streaming, terminal `done` event with the full `CouncilResult` (synthesize/raw only). |
-| Prompts | [`src/conclave/prompts.py`](src/conclave/prompts.py) | Role/template strings for debate + adversarial and the anonymized peer-block builder. |
+| Prompts | [`src/conclave/prompts.py`](src/conclave/prompts.py) | Debate/adversarial/vote plus anonymized Elite evidence-audit and revision prompts. |
 | Providers | [`src/conclave/providers.py`](src/conclave/providers.py) | Async `call_model` (buffered) + `call_model_stream` (SSE) paths: resolve the adapter, read the key by name at call time, call transport, parse; latency/usage/redacted-error capture; never raises (partial text preserved on mid-stream failure). |
 | Transport | [`src/conclave/transport.py`](src/conclave/transport.py) | `post_json` + `stream_sse` — the single async httpx network boundary (buffered POST and `client.stream(...)` SSE) for the whole provider highway. |
 | Adapter registry | [`src/conclave/adapters/__init__.py`](src/conclave/adapters/__init__.py) | `resolve_adapter(model_id, config)` — provider registry + **extension seam** (one registration per family; config-only for OpenAI-compatible endpoints). |
@@ -52,8 +52,8 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 | Gemini adapter | [`src/conclave/adapters/gemini.py`](src/conclave/adapters/gemini.py) | `GeminiAdapter` — native `generateContent`, OpenAI-role mapping, `usageMetadata`. |
 | Registry | [`src/conclave/registry.py`](src/conclave/registry.py) | Friendly-name → model-id defaults; provider → env-var mapping; key **presence** logic (never values). |
 | Config | [`src/conclave/config.py`](src/conclave/config.py) | Loads/merges `~/.conclave/config.yml` over defaults; resolves model ids and named/CSV councils; parses the `endpoints:` section (custom OpenAI-compatible providers). |
-| Models | [`src/conclave/models.py`](src/conclave/models.py) | Pydantic result contract: `TokenUsage`, `ModelAnswer` (stable `answer_id`), `StreamEvent`, `DebateRound`, `AdversarialResult`, `CouncilResult` v2 (`mode`/`rounds`/`adversarial`/`synthesis_error`/`prompt_version` **plus** `verdict`/`consensus_score`/`consensus_method`/`consensus_label`/`conflicts`/`provider_votes`/`minority_reports`/`manifest`, all backward-compatible). Stable downstream surface. |
-| CLI | [`src/conclave/cli.py`](src/conclave/cli.py) | `conclave ask` (synthesize/raw/debate/adversarial; `--rounds`/`--proposer`/`--stream`) + `conclave providers`; rich panels incl. the green `VERDICT (<type>)` panel (consensus/conflicts/minority blocks, or a dim `No verdict: <reason>` note), live `--stream` output, and `--json` carrying the full verdict + manifest; never prints key values. |
+| Models | [`src/conclave/models.py`](src/conclave/models.py) | Stable Pydantic contract, including `EliteResult` phase artifacts and backward-compatible `CouncilResult.elite`. |
+| CLI | [`src/conclave/cli.py`](src/conclave/cli.py) | Six-mode `conclave ask` plus `providers`; Elite adds a phase summary, full JSON, incomplete exit 1, and explicit stream rejection. |
 | Logging | [`src/conclave/logging.py`](src/conclave/logging.py) | Logger factory; stderr; verbosity via `CONCLAVE_LOG_LEVEL` (default `WARNING`). |
 
 ## Tests
@@ -63,6 +63,7 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 | Council tests | [`tests/test_council.py`](tests/test_council.py) | Fan-out, partial failure, synthesis behavior. |
 | Synthesizer tests | [`tests/test_synthesizer.py`](tests/test_synthesizer.py) | Pins the synthesizer/judge contract: default + configurable (arg/config/CLI `--synthesizer`) selection; observable degradation (unkeyed/failed → `synthesis_error`/`verdict_error`, never silent) for synthesize, debate, and the adversarial judge; versioned synthesis prompt (`SYNTHESIS_PROMPT_VERSION` + `result.prompt_version`) with prompt-text + version pins. |
 | Modes tests | [`tests/test_modes.py`](tests/test_modes.py) | Debate multi-round flow, mid-round drop-out, peer anonymization; adversarial proposer/critic/verdict, proposal/critic failure paths, no-key judge, sync wrappers. |
+| Elite tests | [`tests/test_elite_mode.py`](tests/test_elite_mode.py) | Three-phase gates, anonymized prompts, partial failures, synthesis/verdict behavior, cache and public API. |
 | Adapter tests | [`tests/test_adapters.py`](tests/test_adapters.py) | Per-adapter `build_request` + `parse_response` for openai-compat/anthropic/gemini: system-hoist, max_tokens, role mapping, usage parsing, empty/malformed/error-status raises. |
 | Provider highway tests | [`tests/test_providers.py`](tests/test_providers.py) | `resolve_adapter` (built-in prefixes, per-provider URLs, custom endpoints, unknown-prefix raise), end-to-end `call_model`, and `redact()` (bearer/`sk-`/env-var-value/`x-api-key` scrubbing; pre-redacted provider errors). |
 | Registry/config tests | [`tests/test_registry_config.py`](tests/test_registry_config.py) | Name resolution, key-presence logic, config merge. |
@@ -81,7 +82,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 |------|------|---------|
 | Packaging | [`pyproject.toml`](pyproject.toml) | hatchling build, deps (httpx, pydantic, rich, typer, pyyaml — no LLM SDK), dev extras, console script, pytest config. License: MIT. **PyPI distribution name `conclave-cli`** (the name `conclave` is an unrelated project); command + import stay `conclave`. |
 | Release runbook | [`RELEASING.md`](RELEASING.md) | Operator runbook: one-time PyPI OIDC Trusted-Publisher setup for `conclave-cli`, cut-a-release checklist (bump→tag→publish Release), post-release verification (Sigstore bundle, PEP 740 attestations), rollback/yank. |
-| Changelog | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog history per release (SemVer). The `[Unreleased]` entry covers the manifest-on-every-result invariant fix and the `vote`-mode-shipped doc reconciliation; `[1.1.0]` covers the auditable council — CouncilResult v2, deterministic consensus, native structured output, the manifest; the 1.0.0 entry covers the distribution rename, key-leak hardening, synthesizer versioning, and release engineering. |
+| Changelog | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog history. `[Unreleased]` includes Elite and does not claim a version or publication. |
 | Dev lockfile | [`requirements-dev.lock`](requirements-dev.lock) | Hash-pinned dev + runtime tree for reproducible installs/CI. Regenerate via `uv pip compile --universal --generate-hashes --python-version 3.11 --extra dev pyproject.toml -o requirements-dev.lock`. |
 | License | [`LICENSE`](LICENSE) | MIT License. Copyright (c) 2026 Ernest Provo. Matches the `pyproject.toml` license field. |
 | Security policy | [`SECURITY.md`](SECURITY.md) | BYO-keys vulnerability reporting policy: how to report, scope, and the key-handling guarantees consumers can rely on. |
@@ -100,6 +101,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 
 | Date | Change |
 |------|--------|
+| 2026-07-17 | Documented the implemented-but-unreleased Elite Decision Protocol: fixed three-success gates, initial/audit/revision artifacts, existing final verdict, phased receipts, failure semantics, cost/latency tradeoff, and no streaming. |
 | 2026-07-13 | **Manifest-on-every-result invariant fix + doc reconciliation.** `ModelHarnessManifest` now attaches on all five modes (was `None` for `debate`/`adversarial`/`vote`) via a single-site fix at `Council._cached_run` → new `_ensure_manifest`; regression tests in `tests/test_manifest_all_modes.py`. Docs corrected so the manifest-on-every-result claim is accurate and the `vote` mode is documented as **shipped** (CAC-09 / #3), not "absorbed" — across README, `SYSTEM_CONTEXT_DIAGRAM.md`, PDD (§1/§3/§4a/§8/§9/§12), and `CHANGELOG.md` (`[Unreleased]`). Verdict scope unchanged (still `synthesize`/`ask`-only; not layered on `adversarial`). |
 | 2026-06-21 | **v1.1 docs pivot — the auditable multi-model council.** PDD reframed to the auditable-council wedge (new §4a: CouncilResult v2, deterministic `position_cluster_ratio_v1` consensus, native + fallback structured output, the verdict-optional rule, the secret-free `ModelHarnessManifest`); `vote` mode marked **absorbed** by `provider_votes` across PDD §1/§4/§8/§9/§12; demand-gated v1.2 "Operable Council" roadmap. System Context diagram gains the verdict pipeline + manifest (mermaid re-validated). README gains an "Auditable verdict" section (CLI panel + library example). `CHANGELOG.md` `[1.1.0]` added. v0.x mode-detail prose archived to [`docs/archive/pdd-v0.x-modes-detail.md`](docs/archive/pdd-v0.x-modes-detail.md) to keep the PDD under 500 lines. New modules documented: `verdict.py`, `agreement.py`, `verdict_synthesis.py`, `manifest.py`. |
 | 2026-06-14 | v1.0.0 release. Version bump 0.3.0 → 1.0.0; new `CHANGELOG.md` (Keep-a-Changelog). Integrates the three v1.0 PRs below. |
