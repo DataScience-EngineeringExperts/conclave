@@ -99,6 +99,8 @@ def test_elite_result_defaults_to_incomplete_v1_protocol() -> None:
     assert result.required_responders == ELITE_MIN_RESPONDERS
     assert result.completed is False
     assert result.failure_reason is None
+    assert result.decision_readiness == "indeterminate"
+    assert result.readiness_reasons == ["adjudication.not_evaluated"]
 
 
 def test_elite_result_rejects_fewer_than_three_required_responders() -> None:
@@ -239,6 +241,8 @@ async def test_run_elite_executes_three_stages_and_captures_artifacts(
     assert result.mode == "elite"
     assert result.elite is not None
     assert result.elite.completed is True
+    assert result.elite.decision_readiness == "indeterminate"
+    assert result.elite.readiness_reasons == ["adjudication.pending"]
     assert result.elite.failure_reason is None
     assert len(result.elite.initial_answers) == 3
     assert len(result.elite.critiques) == 3
@@ -349,6 +353,8 @@ async def test_run_elite_stops_after_failed_initial_gate(monkeypatch, patch_call
     assert result.elite is not None
     assert result.elite.completed is False
     assert result.elite.failure_reason == "initial phase required 3 successful responders; got 2"
+    assert result.elite.decision_readiness == "not_ready"
+    assert result.elite.readiness_reasons == ["protocol.initial_responder_gate_failed"]
     assert phases == ["initial"] * 3
     assert result.elite.critiques == []
     assert result.elite.revisions == []
@@ -379,6 +385,8 @@ async def test_run_elite_stops_after_failed_critique_gate(monkeypatch, patch_cal
     assert result.elite is not None
     assert result.elite.completed is False
     assert result.elite.failure_reason == "critique phase required 3 successful responders; got 2"
+    assert result.elite.decision_readiness == "not_ready"
+    assert result.elite.readiness_reasons == ["protocol.critique_responder_gate_failed"]
     assert phases == ["initial"] * 3 + ["critique"] * 3
     assert len(result.elite.critiques) == 3
     assert result.elite.revisions == []
@@ -407,6 +415,8 @@ async def test_run_elite_stops_after_failed_revision_gate(monkeypatch, patch_cal
     assert result.elite is not None
     assert result.elite.completed is False
     assert result.elite.failure_reason == "revision phase required 3 successful responders; got 2"
+    assert result.elite.decision_readiness == "not_ready"
+    assert result.elite.readiness_reasons == ["protocol.revision_responder_gate_failed"]
     assert len(result.elite.revisions) == 3
     assert len(result.answers) == 3
     assert all(answer.answer.startswith("initial") for answer in result.answers)
@@ -440,6 +450,8 @@ async def test_council_elite_synthesizes_revisions_and_applies_canonical_verdict
 
     assert result.elite is not None
     assert result.elite.completed is True
+    assert result.elite.decision_readiness == "ready"
+    assert result.elite.readiness_reasons == []
     assert result.synthesis == "elite synthesis"
     assert len(synthesis_inputs) == 1
     assert "revision from xai/grok-4.3" in synthesis_inputs[0]
@@ -483,6 +495,8 @@ async def test_council_elite_incomplete_skips_synthesis_and_verdict(
 
     assert result.elite is not None
     assert result.elite.completed is False
+    assert result.elite.decision_readiness == "not_ready"
+    assert result.elite.readiness_reasons == ["protocol.initial_responder_gate_failed"]
     assert result.synthesis is None
     assert result.verdict is None
     assert calls == {"synthesis": 0, "verdict": 0}
@@ -506,3 +520,85 @@ def test_council_elite_sync_exposes_completed_protocol(monkeypatch, patch_call_m
     assert result.elite is not None
     assert result.elite.completed is True
     assert result.synthesis is not None
+    assert result.elite.decision_readiness == "indeterminate"
+    assert result.elite.readiness_reasons == ["adjudication.disabled"]
+
+
+async def test_council_elite_synthesis_failure_is_not_ready(monkeypatch, patch_call_model) -> None:
+    _all_keys(monkeypatch)
+
+    def handler(model_id, messages):
+        system = next(
+            (message["content"] for message in messages if message["role"] == "system"), ""
+        )
+        if system.startswith("You are the synthesizer of a council"):
+            raise RuntimeError("synth unavailable")
+        return make_response(f"{_phase(messages)} from {model_id}")
+
+    patch_call_model(handler)
+    result = await Council(
+        models=["grok", "gemini", "perplexity"],
+        config=_elite_config(),
+    ).elite("Choose.")
+
+    assert result.elite is not None
+    assert result.elite.completed is True
+    assert result.synthesis is None
+    assert result.elite.decision_readiness == "not_ready"
+    assert result.elite.readiness_reasons == ["synthesis.failed"]
+
+
+async def test_council_elite_failed_verdict_repair_is_not_ready(
+    monkeypatch, patch_call_model
+) -> None:
+    _all_keys(monkeypatch)
+
+    def handler(model_id, messages):
+        if _is_verdict_call(messages):
+            return make_response("not valid verdict json")
+        system = next(
+            (message["content"] for message in messages if message["role"] == "system"), ""
+        )
+        if system.startswith("You are the synthesizer of a council"):
+            return make_response("elite synthesis")
+        return make_response(f"{_phase(messages)} from {model_id}")
+
+    patch_call_model(handler)
+    result = await Council(
+        models=["grok", "gemini", "perplexity"],
+        config=_elite_config(),
+    ).elite("Choose.")
+
+    assert result.elite is not None
+    assert result.elite.completed is True
+    assert result.elite.decision_readiness == "not_ready"
+    assert result.elite.readiness_reasons == ["adjudication.verdict_extraction_failed"]
+
+
+async def test_council_elite_open_ended_verdict_is_indeterminate(
+    monkeypatch, patch_call_model
+) -> None:
+    _all_keys(monkeypatch)
+
+    def handler(model_id, messages):
+        if _is_verdict_call(messages):
+            payload = json.loads(_elite_verdict_json())
+            payload["verdict_applies"] = False
+            return make_response(json.dumps(payload))
+        system = next(
+            (message["content"] for message in messages if message["role"] == "system"), ""
+        )
+        if system.startswith("You are the synthesizer of a council"):
+            return make_response("elite synthesis")
+        return make_response(f"{_phase(messages)} from {model_id}")
+
+    patch_call_model(handler)
+    result = await Council(
+        models=["grok", "gemini", "perplexity"],
+        config=_elite_config(),
+    ).elite("Explore the topic.")
+
+    assert result.elite is not None
+    assert result.elite.completed is True
+    assert result.elite.decision_readiness == "indeterminate"
+    assert result.elite.readiness_reasons == ["adjudication.open_ended"]

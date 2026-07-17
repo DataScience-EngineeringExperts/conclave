@@ -212,6 +212,8 @@ async def test_elite_cache_hit_preserves_artifacts_and_isolated_mode(
     assert live.cached is False
     assert live.elite is not None
     assert live.elite.completed is True
+    assert live.elite.decision_readiness == "indeterminate"
+    assert live.elite.readiness_reasons == ["adjudication.disabled"]
     assert cached.cached is True
     assert cached.elite == live.elite
     assert counting_call_model["n"] == calls_after_live
@@ -222,6 +224,34 @@ async def test_elite_cache_hit_preserves_artifacts_and_isolated_mode(
     assert normal.elite is None
     assert counting_call_model["n"] > calls_after_live
     assert len(list(cache_home.glob("*.json"))) == 2
+
+
+def test_current_cache_shape_without_readiness_defaults_indeterminate(cache_home):
+    """A legacy Elite payload in the current envelope can never replay as ready."""
+    from conclave.models import CouncilResult, EliteResult
+
+    key = "legacy-elite-readiness"
+    cache_home.mkdir(parents=True, exist_ok=True)
+    result = CouncilResult(
+        prompt="q",
+        mode="elite",
+        elite=EliteResult(completed=True),
+    ).model_dump(mode="json")
+    del result["elite"]["decision_readiness"]
+    del result["elite"]["readiness_reasons"]
+    envelope = {
+        "cache_format_version": cache_mod.CACHE_FORMAT_VERSION,
+        "result": result,
+    }
+    (cache_home / f"{key}.json").write_text(json.dumps(envelope), encoding="utf-8")
+
+    cached = cache_mod.load(key)
+
+    assert cached is not None
+    assert cached.elite is not None
+    assert cached.elite.completed is True
+    assert cached.elite.decision_readiness == "indeterminate"
+    assert cached.elite.readiness_reasons == ["adjudication.not_evaluated"]
 
 
 async def test_changing_model_id_misses(monkeypatch, counting_call_model, cache_home):

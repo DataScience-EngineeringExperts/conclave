@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,8 @@ from .verdict import (
 
 ELITE_PROTOCOL_VERSION = "elite_v1"
 ELITE_MIN_RESPONDERS = 3
+
+DecisionReadiness = Literal["ready", "not_ready", "indeterminate"]
 
 _ANSWER_ID_VERSION = "answer_v1"
 
@@ -152,12 +155,14 @@ class ModelAnswer(BaseModel):
 
 
 class EliteResult(BaseModel):
-    """Phase artifacts and completion state for an elite protocol run."""
+    """Protocol completion and independently adjudicated decision readiness."""
 
     protocol_version: str = ELITE_PROTOCOL_VERSION
     required_responders: int = Field(default=ELITE_MIN_RESPONDERS, ge=ELITE_MIN_RESPONDERS)
     completed: bool = False
     failure_reason: str | None = None
+    decision_readiness: DecisionReadiness = "indeterminate"
+    readiness_reasons: list[str] = Field(default_factory=lambda: ["adjudication.not_evaluated"])
     initial_answers: list[ModelAnswer] = Field(default_factory=list)
     critiques: list[ModelAnswer] = Field(default_factory=list)
     revisions: list[ModelAnswer] = Field(default_factory=list)

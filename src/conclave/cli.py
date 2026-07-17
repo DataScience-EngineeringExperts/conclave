@@ -315,9 +315,12 @@ def _render_elite(result: CouncilResult) -> None:
             f"Revisions {successful(elite.revisions)}/{required}",
         )
     )
+    readiness = f"Decision readiness: {elite.decision_readiness.upper()}"
+    if elite.readiness_reasons:
+        readiness += f" ({', '.join(elite.readiness_reasons)})"
     console.print(
         Panel(
-            summary,
+            f"{summary}\n{readiness}",
             title=f"[bold]ELITE DECISION PROTOCOL[/bold] ({elite.protocol_version})",
             border_style="cyan",
         )
@@ -574,22 +577,35 @@ def ask(
     # purposes regardless of output format. We compute this once and apply the
     # same exit-code contract to both the JSON and human paths.
     no_usable_answers = not result.successful_answers
-    elite_incomplete = mode_lower == "elite" and (
-        result.elite is None or not result.elite.completed
+    elite_not_ready = mode_lower == "elite" and (
+        result.elite is None or result.elite.decision_readiness != "ready"
     )
 
     if as_json:
         # Always emit valid JSON to stdout so a consumer can parse the payload,
         # then signal failure via the exit code if nothing usable came back.
         console.print_json(json.dumps(_result_to_dict(result)))
-        if no_usable_answers or elite_incomplete:
+        if no_usable_answers or elite_not_ready:
             raise typer.Exit(code=1)
         return
 
-    if elite_incomplete:
-        reason = result.elite.failure_reason if result.elite is not None else "missing result"
-        err_console.print(f"[red]Elite protocol incomplete: {reason}[/red]")
-        raise typer.Exit(code=1)
+    if mode_lower == "elite":
+        if result.elite is None:
+            err_console.print("[red]Elite decision not ready: missing result[/red]")
+            raise typer.Exit(code=1)
+        _render_elite(result)
+        if not result.elite.completed:
+            reason = result.elite.failure_reason or ", ".join(result.elite.readiness_reasons)
+            err_console.print(f"[red]Elite protocol incomplete: {reason}[/red]")
+            raise typer.Exit(code=1)
+        if result.elite.decision_readiness != "ready":
+            reasons = ", ".join(result.elite.readiness_reasons) or "no reason recorded"
+            err_console.print(
+                "[red]Elite decision not ready: "
+                f"{result.elite.decision_readiness} ({reasons})[/red]"
+            )
+            raise typer.Exit(code=1)
+        return
 
     if no_usable_answers:
         err_console.print(

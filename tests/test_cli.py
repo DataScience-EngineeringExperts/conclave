@@ -104,7 +104,13 @@ def test_unknown_mode_exits_two(patch_cli_config):
     assert result.exit_code == 2
 
 
-def _elite_cli_result(*, completed: bool = True, failure_reason: str | None = None):
+def _elite_cli_result(
+    *,
+    completed: bool = True,
+    failure_reason: str | None = None,
+    decision_readiness: str = "ready",
+    readiness_reasons: list[str] | None = None,
+):
     """Build a compact elite result for CLI-only behavior tests."""
     initials = [
         ModelAnswer(name=f"member-{i}", model_id=f"provider/model-{i}", answer=f"initial-{i}")
@@ -126,6 +132,8 @@ def _elite_cli_result(*, completed: bool = True, failure_reason: str | None = No
         elite=EliteResult(
             completed=completed,
             failure_reason=failure_reason,
+            decision_readiness=decision_readiness,
+            readiness_reasons=readiness_reasons or [],
             initial_answers=initials,
             critiques=critiques if completed else [],
             revisions=revisions if completed else [],
@@ -167,6 +175,7 @@ def test_elite_mode_dispatches_and_renders_protocol_summary(monkeypatch, patch_c
     assert "Initial 3/3" in result.output
     assert "Critiques 3/3" in result.output
     assert "Revisions 3/3" in result.output
+    assert "Decision readiness: READY" in result.output
     assert "VERDICT" in result.output
     assert "Ship deliberately." in result.output
 
@@ -189,6 +198,8 @@ def test_elite_json_emits_full_council_result(monkeypatch, patch_cli_config):
     payload = json.loads(result.stdout)
     assert payload["mode"] == "elite"
     assert payload["elite"]["completed"] is True
+    assert payload["elite"]["decision_readiness"] == "ready"
+    assert payload["elite"]["readiness_reasons"] == []
     assert len(payload["elite"]["initial_answers"]) == 3
     assert len(payload["elite"]["critiques"]) == 3
     assert len(payload["elite"]["revisions"]) == 3
@@ -206,6 +217,8 @@ def test_incomplete_elite_exits_one_with_reason(monkeypatch, patch_cli_config):
             return _elite_cli_result(
                 completed=False,
                 failure_reason="critique phase requires at least 3 successful responders; got 2",
+                decision_readiness="not_ready",
+                readiness_reasons=["protocol.critique_responder_gate_failed"],
             )
 
     monkeypatch.setattr(cli, "Council", FakeCouncil)
@@ -216,6 +229,47 @@ def test_incomplete_elite_exits_one_with_reason(monkeypatch, patch_cli_config):
     assert "Elite protocol incomplete" in result.output
     assert "critique phase requires at least 3 successful" in result.output
     assert "responders; got 2" in result.output
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize(
+    ("decision_readiness", "reason"),
+    [
+        ("indeterminate", "adjudication.disabled"),
+        ("not_ready", "synthesis.failed"),
+    ],
+)
+def test_elite_non_ready_state_exits_one_with_machine_reason(
+    monkeypatch, patch_cli_config, as_json, decision_readiness, reason
+):
+    """Protocol completion cannot produce CLI success without adjudicated readiness."""
+
+    class FakeCouncil:
+        def __init__(self, **kwargs):
+            pass
+
+        def elite_sync(self, prompt: str) -> CouncilResult:
+            return _elite_cli_result(
+                decision_readiness=decision_readiness,
+                readiness_reasons=[reason],
+            )
+
+    monkeypatch.setattr(cli, "Council", FakeCouncil)
+    args = ["ask", "Should we ship?", "--mode", "elite"]
+    if as_json:
+        args.append("--json")
+
+    result = runner.invoke(cli.app, args)
+
+    assert result.exit_code == 1
+    if as_json:
+        payload = json.loads(result.stdout)
+        assert payload["elite"]["completed"] is True
+        assert payload["elite"]["decision_readiness"] == decision_readiness
+        assert payload["elite"]["readiness_reasons"] == [reason]
+    else:
+        assert f"Decision readiness: {decision_readiness.upper()}" in result.output
+        assert reason in result.output
 
 
 def test_elite_stream_is_rejected_before_council_creation(monkeypatch, patch_cli_config):

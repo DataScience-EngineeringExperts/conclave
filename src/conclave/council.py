@@ -937,10 +937,45 @@ class Council:
             if result.elite is not None and result.elite.completed:
                 await self._synthesize(result)
                 self._ensure_manifest(result, "elite")
-                await self._apply_verdict(result)
+                if result.synthesis is None:
+                    result.elite.decision_readiness = "not_ready"
+                    result.elite.readiness_reasons = ["synthesis.failed"]
+                elif not self.extract_verdict_enabled:
+                    result.elite.decision_readiness = "indeterminate"
+                    result.elite.readiness_reasons = ["adjudication.disabled"]
+                else:
+                    await self._apply_verdict(result)
+                    self._set_elite_readiness(result)
             return result
 
         return await self._cached_run(prompt, "elite", run)
+
+    @staticmethod
+    def _set_elite_readiness(result: CouncilResult) -> None:
+        """Classify Elite readiness after required synthesis and adjudication."""
+        elite = result.elite
+        if elite is None:
+            return
+        if result.verdict is not None:
+            elite.decision_readiness = "ready"
+            elite.readiness_reasons = []
+            return
+
+        absent_reason = (
+            result.manifest.verdict_absent_reason if result.manifest is not None else None
+        )
+        if absent_reason == "verdict extraction failed schema validation":
+            elite.decision_readiness = "not_ready"
+            elite.readiness_reasons = ["adjudication.verdict_extraction_failed"]
+        elif absent_reason == "fewer than 2 responding members":
+            elite.decision_readiness = "not_ready"
+            elite.readiness_reasons = ["adjudication.insufficient_responders"]
+        elif absent_reason == "open-ended prompt (no decision/review to adjudicate)":
+            elite.decision_readiness = "indeterminate"
+            elite.readiness_reasons = ["adjudication.open_ended"]
+        else:
+            elite.decision_readiness = "indeterminate"
+            elite.readiness_reasons = ["adjudication.unknown"]
 
     async def aclose(self) -> None:
         """Close the shared pooled HTTP client.

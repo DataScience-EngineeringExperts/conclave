@@ -101,6 +101,8 @@ async def run_elite(council: Council, prompt: str) -> CouncilResult:
 
     result.answers = revision_successes
     elite.completed = True
+    elite.decision_readiness = "indeterminate"
+    elite.readiness_reasons = ["adjudication.pending"]
     return result
 
 
@@ -128,6 +130,8 @@ def _elite_gate(
             f"{phase} phase required {elite.required_responders} successful responders; "
             f"got {len(successful)}"
         )
+        elite.decision_readiness = "not_ready"
+        elite.readiness_reasons = [f"protocol.{phase}_responder_gate_failed"]
         logger.warning(elite.failure_reason)
     return successful
 
