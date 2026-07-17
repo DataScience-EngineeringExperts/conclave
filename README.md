@@ -154,6 +154,8 @@ is all known providers.
 The source branch also exposes an H1 evidence harness. It makes no decision-quality claim and
 never calls providers: `run` only validates an existing replay artifact against its frozen
 manifest. Grader output and the restricted blind map must remain separate.
+The frozen 24-task exploratory pack and its no-promotion boundary are documented in
+[`studies/elite_pilot_v1/README.md`](studies/elite_pilot_v1/README.md).
 
 ```bash
 conclave eval plan tasks.json manifest.json --study-id pilot --replicates 2 --seed 19 --max-output-tokens 1200
