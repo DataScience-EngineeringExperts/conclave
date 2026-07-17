@@ -38,6 +38,7 @@ async def test_runner_executes_complete_matrix_with_cell_budget_and_immutable_re
             completion_tokens=11,
             latency_ms=2.5,
             cost_usd=0.01,
+            cost_receipt_complete=True,
             deviation_codes=("retry_used",),
         )
 
@@ -60,6 +61,7 @@ async def test_runner_executes_complete_matrix_with_cell_budget_and_immutable_re
     assert study_run.total_cost_usd == pytest.approx(0.24)
     assert study_run.total_deviation_count == 24
     assert study_run.records[0].deviation_codes == ("retry_used",)
+    assert study_run.records[0].cost_receipt_complete is True
     with pytest.raises(ValidationError):
         study_run.records[0].output = "changed"
 

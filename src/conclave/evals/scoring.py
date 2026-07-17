@@ -12,7 +12,6 @@ from pydantic import Field, model_validator
 
 from .blinding import BlindMap
 from .models import (
-    AnalysisGateConfig,
     ConditionId,
     EvalModel,
     RunOutcome,
@@ -176,6 +175,10 @@ class StudyScoreReport(EvalModel):
 
     study_id: str = Field(min_length=1)
     evidence_classification: str = "synthetic_exploratory"
+    frozen_design_hash: Sha256Digest | None = None
+    analysis_code_hash: Sha256Digest | None = None
+    preregistration_id: str | None = None
+    preregistration_hash: Sha256Digest | None = None
     decision_eligibility: str = "not_yet_eligible"
     decision_gates: dict[str, str] = Field(
         default_factory=lambda: {
@@ -193,6 +196,39 @@ class StudyScoreReport(EvalModel):
     adjudications: tuple[AdjudicationRecord, ...]
     resolved_outcomes: tuple[ResolvedOutcome, ...]
     paid_analysis: PaidAnalysisSummary | None = None
+    confirmatory_inference: ConfirmatoryInference | None = None
+
+
+class RatioInterval(EvalModel):
+    """Task-clustered ratio estimate and percentile interval."""
+
+    estimate: float = Field(gt=0)
+    lower: float = Field(gt=0)
+    upper: float = Field(gt=0)
+    confidence_level: Literal[0.95] = 0.95
+    task_count: int = Field(ge=1)
+    bootstrap_seed: int
+    bootstrap_samples: int = Field(ge=1)
+
+
+class ConfirmatoryInference(EvalModel):
+    """Predeclared inference receipts required before a confirmatory decision."""
+
+    achieved_power: float = Field(gt=0, le=1)
+    secondary_p_values: dict[str, float] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_secondary_p_values(self) -> ConfirmatoryInference:
+        required = {
+            "severe_error_noninferiority",
+            "readiness_noninferiority",
+            "reviewer_effort",
+        }
+        if set(self.secondary_p_values) != required:
+            raise ValueError("secondary_p_values must exactly cover the frozen secondary gates")
+        if any(value < 0 or value > 1 for value in self.secondary_p_values.values()):
+            raise ValueError("secondary p-values must be between zero and one")
+        return self
 
 
 class PaidAnalysisSummary(EvalModel):
@@ -202,27 +238,15 @@ class PaidAnalysisSummary(EvalModel):
     severe_error_difference: PairedDifference
     readiness_error_difference: PairedDifference
     reviewer_effort_ratio: float = Field(gt=0)
+    reviewer_effort_ratio_interval: RatioInterval
     p95_latency_ratio: float = Field(gt=0)
     elite_p95_latency_seconds: float = Field(ge=0)
     total_cost_usd: float = Field(ge=0)
+    analysis_cost_usd: float = Field(ge=0)
     deviation_count: int = Field(ge=0)
     excluded_task_ids: tuple[str, ...]
     family_directions: dict[str, float]
     roster_directions: dict[str, float]
-
-
-class ConfirmatoryGateMetrics(EvalModel):
-    """Frozen inputs consumed by the deterministic confirmatory gate."""
-
-    primary_effect: float
-    primary_lower_95: float
-    severe_error_upper_95: float
-    readiness_error_upper_95: float
-    reviewer_effort_upper_ratio_95: float = Field(gt=0)
-    p95_latency_ratio: float = Field(gt=0)
-    elite_p95_latency_seconds: float = Field(ge=0)
-    family_directions: dict[str, float] = Field(min_length=1)
-    roster_directions: dict[str, float] = Field(min_length=1)
 
 
 class ConfirmatoryGateResult(EvalModel):
@@ -234,37 +258,68 @@ class ConfirmatoryGateResult(EvalModel):
 
 def evaluate_confirmatory_gates(
     *,
-    evidence_classification: str,
-    config: AnalysisGateConfig,
-    metrics: ConfirmatoryGateMetrics,
-    expected_frozen_design_hash: str,
-    observed_frozen_design_hash: str,
-    expected_preregistration_hash: str,
-    observed_preregistration_hash: str,
+    manifest: StudyManifest,
+    report: StudyScoreReport,
 ) -> ConfirmatoryGateResult:
-    """Refuse non-confirmatory/drifted artifacts, then evaluate every canonical gate."""
+    """Derive every decision input from one frozen manifest and its bound score report."""
 
-    if evidence_classification != "confirmatory":
+    design = manifest.frozen_design
+    if manifest.evidence_classification != "confirmatory" or design is None:
         raise ValueError("confirmatory gate evaluation requires a confirmatory manifest")
-    if expected_frozen_design_hash != observed_frozen_design_hash:
-        raise ValueError("observed frozen design hash does not match the preregistered artifact")
-    if expected_preregistration_hash != observed_preregistration_hash:
-        raise ValueError("observed preregistration hash does not match the frozen artifact")
+    if report.study_id != manifest.study_id or report.evidence_classification != "confirmatory":
+        raise ValueError("confirmatory report identity does not match the manifest")
+    if report.frozen_design_hash != manifest.frozen_design_hash:
+        raise ValueError("report frozen design hash does not match the manifest")
+    if report.analysis_code_hash != design.analysis_code_hash:
+        raise ValueError("report analysis code hash does not match the frozen design")
+    if report.preregistration_id != design.preregistration_id:
+        raise ValueError("report preregistration ID does not match the frozen design")
+    if report.preregistration_hash != design.preregistration_hash:
+        raise ValueError("report preregistration hash does not match the frozen design")
+    if report.paid_analysis is None:
+        raise ValueError("confirmatory report is missing paid analysis")
+    if report.confirmatory_inference is None:
+        raise ValueError("confirmatory report is missing inference receipts")
+    metrics = report.paid_analysis
+    inference = report.confirmatory_inference
+    config = design.analysis_gates
+    primary = metrics.primary_paired_difference
+    if primary.baseline_condition_id != config.primary_baseline:
+        raise ValueError("confirmatory primary baseline does not match the frozen design")
+    analysis_runs = analysis_planned_runs(manifest)
+    analysis_task_ids = {run.task_id for run in analysis_runs}
+    if primary.task_count != len(analysis_task_ids):
+        raise ValueError("confirmatory task count does not match the frozen analysis set")
+    expected_families = {design.task_family_map[task_id] for task_id in analysis_task_ids}
+    expected_rosters = {roster.roster_id for roster in design.rosters}
+    if set(metrics.family_directions) != expected_families:
+        raise ValueError("confirmatory family directions do not match the frozen analysis set")
+    if set(metrics.roster_directions) != expected_rosters:
+        raise ValueError("confirmatory roster directions do not match the frozen analysis set")
+
+    ordered_p_values = sorted(inference.secondary_p_values.values())
+    holm_passed = all(
+        value <= config.alpha / (len(ordered_p_values) - index)
+        for index, value in enumerate(ordered_p_values)
+    )
     failed = []
     checks = (
-        ("minimum_effect", metrics.primary_effect >= config.minimum_effect),
-        ("superiority_interval", metrics.primary_lower_95 > 0),
+        ("sample_size", primary.task_count >= config.minimum_confirmatory_tasks),
+        ("power", inference.achieved_power >= config.power),
+        ("holm_secondary", holm_passed),
+        ("minimum_effect", primary.estimate >= config.minimum_effect),
+        ("superiority_interval", primary.lower > 0),
         (
             "severe_error_noninferiority",
-            metrics.severe_error_upper_95 <= config.severe_error_noninferiority_margin,
+            metrics.severe_error_difference.upper <= config.severe_error_noninferiority_margin,
         ),
         (
             "readiness_noninferiority",
-            metrics.readiness_error_upper_95 <= config.readiness_noninferiority_margin,
+            metrics.readiness_error_difference.upper <= config.readiness_noninferiority_margin,
         ),
         (
             "reviewer_effort",
-            metrics.reviewer_effort_upper_ratio_95 <= config.reviewer_effort_max_ratio,
+            metrics.reviewer_effort_ratio_interval.upper <= config.reviewer_effort_max_ratio,
         ),
         ("latency_ratio", metrics.p95_latency_ratio <= config.p95_latency_max_ratio),
         (
@@ -346,6 +401,42 @@ def paired_bootstrap_difference(
         upper=_quantile(bootstrapped, 0.975),
         confidence_level=confidence_level,
         task_count=len(differences),
+        bootstrap_seed=seed,
+        bootstrap_samples=samples,
+    )
+
+
+def paired_bootstrap_ratio(
+    numerator_by_task: Mapping[str, float],
+    denominator_by_task: Mapping[str, float],
+    *,
+    seed: int,
+    samples: int,
+) -> RatioInterval:
+    """Bootstrap a task-clustered ratio of mean repeated-measure effort."""
+
+    if set(numerator_by_task) != set(denominator_by_task) or not numerator_by_task:
+        raise ValueError("ratio numerator and denominator must contain the same task IDs")
+    task_ids = sorted(numerator_by_task)
+    denominator = sum(denominator_by_task[item] for item in task_ids) / len(task_ids)
+    if denominator <= 0:
+        raise ValueError("paid reviewer-effort baseline must be positive")
+    estimate = (sum(numerator_by_task[item] for item in task_ids) / len(task_ids)) / denominator
+    rng = random.Random(seed)
+    bootstrapped = []
+    for _ in range(samples):
+        sampled = [rng.choice(task_ids) for _ in task_ids]
+        sampled_denominator = sum(denominator_by_task[item] for item in sampled) / len(sampled)
+        if sampled_denominator <= 0:
+            raise ValueError("reviewer-effort bootstrap encountered a zero baseline")
+        sampled_numerator = sum(numerator_by_task[item] for item in sampled) / len(sampled)
+        bootstrapped.append(sampled_numerator / sampled_denominator)
+    bootstrapped.sort()
+    return RatioInterval(
+        estimate=estimate,
+        lower=_quantile(bootstrapped, 0.05),
+        upper=_quantile(bootstrapped, 0.95),
+        task_count=len(task_ids),
         bootstrap_seed=seed,
         bootstrap_samples=samples,
     )
@@ -488,6 +579,10 @@ def _validate_paid_grading(
     if manifest.evidence_classification == "synthetic_exploratory":
         return
     run_by_id = {record.planned_run_id: record for record in study_run.records}
+    if any(record.latency_ms is None for record in study_run.records):
+        raise ValueError("every paid cell requires a non-null latency receipt")
+    if any(not record.cost_receipt_complete for record in study_run.records):
+        raise ValueError("every paid cell requires a complete cost receipt")
     required_fields = (
         "severe_error",
         "rubric_dimensions",
@@ -531,7 +626,18 @@ def analysis_planned_runs(manifest: StudyManifest):
         if manifest.frozen_design is not None
         else set()
     )
-    return tuple(run for run in manifest.planned_runs if run.task_id not in excluded)
+    included = tuple(run for run in manifest.planned_runs if run.task_id not in excluded)
+    if manifest.frozen_design is not None:
+        included_tasks = {run.task_id for run in included}
+        for family in sorted(set(manifest.frozen_design.task_family_map.values())):
+            family_tasks = {
+                task_id
+                for task_id, task_family in manifest.frozen_design.task_family_map.items()
+                if task_family == family
+            }
+            if not family_tasks & included_tasks:
+                raise ValueError(f"task exclusions cannot empty frozen family {family}")
+    return included
 
 
 def score_study(
@@ -543,11 +649,19 @@ def score_study(
     blind_map: BlindMap | None = None,
     bootstrap_seed: int,
     bootstrap_samples: int,
+    confirmatory_inference: ConfirmatoryInference | None = None,
 ) -> StudyScoreReport:
     """Score one frozen study without dropping failures or modifying raw judgments."""
 
     if study_run.study_id != manifest.study_id:
         raise ValueError("study run and manifest study_id values must match")
+    if manifest.frozen_design is not None and (
+        bootstrap_seed != manifest.frozen_design.bootstrap.seed
+        or bootstrap_samples != manifest.frozen_design.bootstrap.samples
+    ):
+        raise ValueError("paid scoring must use the frozen bootstrap seed and sample count")
+    if confirmatory_inference is not None and manifest.evidence_classification != "confirmatory":
+        raise ValueError("confirmatory inference can only be attached to confirmatory evidence")
     validate_run_records(manifest, study_run.records)
     planned_by_id = {run.planned_run_id: run for run in manifest.planned_runs}
     run_by_id = {record.planned_run_id: record for record in study_run.records}
@@ -728,10 +842,12 @@ def score_study(
             samples=frozen_samples,
             baseline_condition_id=baseline,
         )
-        baseline_effort = sum(effort_means[baseline].values()) / len(effort_means[baseline])
-        elite_effort = sum(effort_means["elite_full"].values()) / len(effort_means["elite_full"])
-        if baseline_effort <= 0:
-            raise ValueError("paid reviewer-effort baseline must be positive")
+        effort_interval = paired_bootstrap_ratio(
+            effort_means["elite_full"],
+            effort_means[baseline],
+            seed=frozen_seed,
+            samples=frozen_samples,
+        )
         latencies = {
             condition: sorted(
                 (run_by_id[run.planned_run_id].latency_ms or 0.0) / 1000
@@ -780,10 +896,12 @@ def score_study(
             primary_paired_difference=primary,
             severe_error_difference=severe_difference,
             readiness_error_difference=readiness_difference,
-            reviewer_effort_ratio=elite_effort / baseline_effort,
+            reviewer_effort_ratio=effort_interval.estimate,
+            reviewer_effort_ratio_interval=effort_interval,
             p95_latency_ratio=elite_p95 / baseline_p95,
             elite_p95_latency_seconds=elite_p95,
-            total_cost_usd=sum(run_by_id[run.planned_run_id].cost_usd for run in analysis_runs),
+            total_cost_usd=sum(record.cost_usd for record in study_run.records),
+            analysis_cost_usd=sum(run_by_id[run.planned_run_id].cost_usd for run in analysis_runs),
             deviation_count=sum(
                 len(run_by_id[run.planned_run_id].deviation_codes) for run in analysis_runs
             ),
@@ -794,6 +912,22 @@ def score_study(
     return StudyScoreReport(
         study_id=manifest.study_id,
         evidence_classification=manifest.evidence_classification,
+        frozen_design_hash=manifest.frozen_design_hash,
+        analysis_code_hash=(
+            manifest.frozen_design.analysis_code_hash
+            if manifest.frozen_design is not None
+            else None
+        ),
+        preregistration_id=(
+            manifest.frozen_design.preregistration_id
+            if manifest.frozen_design is not None
+            else None
+        ),
+        preregistration_hash=(
+            manifest.frozen_design.preregistration_hash
+            if manifest.frozen_design is not None
+            else None
+        ),
         total_planned_runs=len(manifest.planned_runs),
         run_outcome_distribution=dict(
             sorted(Counter(item.outcome for item in study_run.records).items())
@@ -805,4 +939,5 @@ def score_study(
         adjudications=tuple(adjudications),
         resolved_outcomes=tuple(resolved),
         paid_analysis=paid_analysis,
+        confirmatory_inference=confirmatory_inference,
     )

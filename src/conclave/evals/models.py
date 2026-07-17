@@ -133,6 +133,7 @@ class AnalysisGateConfig(EvalModel):
     reviewer_effort_max_ratio: Literal[1.20] = 1.20
     p95_latency_max_ratio: Literal[3.0] = 3.0
     absolute_p95_latency_seconds: float = Field(gt=0)
+    minimum_confirmatory_tasks: int = Field(ge=2)
     multiplicity_rule: Literal["holm_secondary"] = "holm_secondary"
     unit: Literal["task"] = "task"
 
@@ -261,6 +262,7 @@ class ProtocolExecution(EvalModel):
     latency_ms: float | None = Field(default=None, ge=0)
     error_category: str | None = None
     cost_usd: float = Field(default=0.0, ge=0)
+    cost_receipt_complete: bool = False
     deviation_codes: tuple[str, ...] = ()
 
 
@@ -274,6 +276,7 @@ class RunRecord(EvalModel):
     latency_ms: float | None = Field(default=None, ge=0)
     error_category: str | None = None
     cost_usd: float = Field(default=0.0, ge=0)
+    cost_receipt_complete: bool = False
     deviation_codes: tuple[str, ...] = ()
 
 

@@ -76,7 +76,9 @@ def _design(
         randomization=RandomizationConfig(master_seed=20260717),
         bootstrap=BootstrapConfig(seed=991, samples=10000),
         analysis_gates=AnalysisGateConfig(
-            primary_baseline="self_refine", absolute_p95_latency_seconds=180
+            primary_baseline="self_refine",
+            absolute_p95_latency_seconds=180,
+            minimum_confirmatory_tasks=2,
         ),
         price_snapshot=PriceSnapshot(
             snapshot_id="prices-2026-07-17",

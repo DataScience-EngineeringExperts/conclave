@@ -107,6 +107,7 @@ async def _execute_cell(
                 latency_ms=execution.latency_ms,
                 error_category="output_budget_exceeded",
                 cost_usd=execution.cost_usd,
+                cost_receipt_complete=execution.cost_receipt_complete,
                 deviation_codes=execution.deviation_codes,
             )
         if execution.outcome == "success" and execution.output is None:
@@ -117,6 +118,7 @@ async def _execute_cell(
                 latency_ms=execution.latency_ms,
                 error_category="missing_success_output",
                 cost_usd=execution.cost_usd,
+                cost_receipt_complete=execution.cost_receipt_complete,
                 deviation_codes=execution.deviation_codes,
             )
         return RunRecord(
@@ -127,6 +129,7 @@ async def _execute_cell(
             latency_ms=execution.latency_ms,
             error_category=execution.error_category,
             cost_usd=execution.cost_usd,
+            cost_receipt_complete=execution.cost_receipt_complete,
             deviation_codes=execution.deviation_codes,
         )
     except TimeoutError:

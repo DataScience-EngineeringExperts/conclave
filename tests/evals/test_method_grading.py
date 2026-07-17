@@ -61,7 +61,9 @@ def _paid_study():
         randomization=RandomizationConfig(master_seed=17),
         bootstrap=BootstrapConfig(seed=19, samples=100),
         analysis_gates=AnalysisGateConfig(
-            primary_baseline="self_refine", absolute_p95_latency_seconds=180
+            primary_baseline="self_refine",
+            absolute_p95_latency_seconds=180,
+            minimum_confirmatory_tasks=2,
         ),
         price_snapshot=PriceSnapshot(
             snapshot_id="prices-v1",
@@ -87,6 +89,7 @@ def _paid_study():
             error_category="executor_error" if index == 0 else None,
             latency_ms=100.0 + index,
             cost_usd=0.01,
+            cost_receipt_complete=True,
             deviation_codes=("retry_used",) if index == 1 else (),
         )
         for index, planned in enumerate(manifest.planned_runs)
@@ -206,8 +209,8 @@ def test_paid_scoring_requires_two_complete_independent_judgments_per_success() 
             manifest=manifest,
             study_run=study_run,
             raw_judgments=complete[:-1],
-            bootstrap_seed=7,
-            bootstrap_samples=20,
+            bootstrap_seed=19,
+            bootstrap_samples=100,
         )
     incomplete = complete[0].model_copy(update={"reviewer_seconds": None})
     with pytest.raises(ValueError, match="complete paid-study fields"):
@@ -215,17 +218,88 @@ def test_paid_scoring_requires_two_complete_independent_judgments_per_success() 
             manifest=manifest,
             study_run=study_run,
             raw_judgments=(incomplete, *complete[1:]),
-            bootstrap_seed=7,
-            bootstrap_samples=20,
+            bootstrap_seed=19,
+            bootstrap_samples=100,
         )
     with pytest.raises(ValueError, match="non-success"):
         score_study(
             manifest=manifest,
             study_run=study_run,
             raw_judgments=(*complete, _judgment(study_run.records[0].planned_run_id, "grader-a")),
+            bootstrap_seed=19,
+            bootstrap_samples=100,
+        )
+
+
+def test_paid_scoring_requires_complete_cost_and_latency_receipts() -> None:
+    manifest, study_run = _paid_study()
+    successful = [record for record in study_run.records if record.outcome == "success"]
+    judgments = tuple(
+        _judgment(record.planned_run_id, grader)
+        for record in successful
+        for grader in ("grader-a", "grader-b")
+    )
+    missing_latency = study_run.model_copy(
+        update={
+            "records": (
+                study_run.records[0].model_copy(update={"latency_ms": None}),
+                *study_run.records[1:],
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="latency receipt"):
+        score_study(
+            manifest=manifest,
+            study_run=missing_latency,
+            raw_judgments=judgments,
+            bootstrap_seed=19,
+            bootstrap_samples=100,
+        )
+    missing_cost = study_run.model_copy(
+        update={
+            "records": (
+                study_run.records[0].model_copy(update={"cost_receipt_complete": False}),
+                *study_run.records[1:],
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="cost receipt"):
+        score_study(
+            manifest=manifest,
+            study_run=missing_cost,
+            raw_judgments=judgments,
+            bootstrap_seed=19,
+            bootstrap_samples=100,
+        )
+
+
+def test_paid_scoring_uses_frozen_bootstrap_and_reports_effort_interval_and_cost_sets() -> None:
+    manifest, study_run = _paid_study()
+    successful = [record for record in study_run.records if record.outcome == "success"]
+    judgments = tuple(
+        _judgment(record.planned_run_id, grader)
+        for record in successful
+        for grader in ("grader-a", "grader-b")
+    )
+    with pytest.raises(ValueError, match="frozen bootstrap"):
+        score_study(
+            manifest=manifest,
+            study_run=study_run,
+            raw_judgments=judgments,
             bootstrap_seed=7,
             bootstrap_samples=20,
         )
+    report = score_study(
+        manifest=manifest,
+        study_run=study_run,
+        raw_judgments=judgments,
+        bootstrap_seed=19,
+        bootstrap_samples=100,
+    )
+    assert report.paid_analysis.primary_paired_difference.bootstrap_seed == 19
+    assert report.paid_analysis.reviewer_effort_ratio_interval.upper >= 1
+    assert report.paid_analysis.total_cost_usd == pytest.approx(study_run.total_cost_usd)
+    assert report.paid_analysis.analysis_cost_usd <= report.paid_analysis.total_cost_usd
 
 
 def test_paid_reliability_reports_raw_agreement_prevalence_and_strata() -> None:
@@ -240,8 +314,8 @@ def test_paid_reliability_reports_raw_agreement_prevalence_and_strata() -> None:
         manifest=manifest,
         study_run=study_run,
         raw_judgments=tuple(judgments),
-        bootstrap_seed=7,
-        bootstrap_samples=20,
+        bootstrap_seed=19,
+        bootstrap_samples=100,
     )
 
     assert report.evidence_classification == "paid_exploratory_pilot"
