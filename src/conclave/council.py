@@ -827,6 +827,24 @@ class Council:
             proposer=proposer,
         )
 
+    async def elite(self, prompt: str) -> CouncilResult:
+        """Run the evidence-audited Elite Decision Protocol.
+
+        Completed runs synthesize the council's revised answers and apply the
+        canonical structured verdict. A run that fails any three-responder gate
+        returns its phase artifacts without synthesis or verdict extraction.
+        """
+        from .modes import run_elite
+
+        async def run() -> CouncilResult:
+            result = await run_elite(self, prompt)
+            if result.elite is not None and result.elite.completed:
+                await self._synthesize(result)
+                await self._apply_verdict(result)
+            return result
+
+        return await self._cached_run(prompt, "elite", run)
+
     async def aclose(self) -> None:
         """Close the shared pooled HTTP client.
 
@@ -938,6 +956,10 @@ class Council:
         return self._run_sync(
             lambda: self.adversarial(prompt, proposer=proposer), "adversarial_sync"
         )
+
+    def elite_sync(self, prompt: str) -> CouncilResult:
+        """Synchronous wrapper around :meth:`elite`."""
+        return self._run_sync(lambda: self.elite(prompt), "elite_sync")
 
     async def vote(self, prompt: str, choices: list[str]) -> CouncilResult:
         """Run a constrained-choice vote. See :func:`conclave.modes.run_vote`.

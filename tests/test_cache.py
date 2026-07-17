@@ -191,6 +191,37 @@ async def test_changing_mode_misses(monkeypatch, counting_call_model, cache_home
     assert r.cached is False
 
 
+async def test_elite_cache_hit_preserves_artifacts_and_isolated_mode(
+    monkeypatch, counting_call_model, cache_home
+):
+    _set_keys(monkeypatch)
+    council = Council(
+        models=["grok", "gemini", "perplexity"],
+        synthesizer="claude",
+        config=_config(),
+        cache=True,
+        extract_verdict=False,
+    )
+
+    live = await council.elite("same prompt")
+    calls_after_live = counting_call_model["n"]
+    cached = await council.elite("same prompt")
+
+    assert live.cached is False
+    assert live.elite is not None
+    assert live.elite.completed is True
+    assert cached.cached is True
+    assert cached.elite == live.elite
+    assert counting_call_model["n"] == calls_after_live
+
+    normal = await council.ask("same prompt")
+
+    assert normal.cached is False
+    assert normal.elite is None
+    assert counting_call_model["n"] > calls_after_live
+    assert len(list(cache_home.glob("*.json"))) == 2
+
+
 async def test_changing_model_id_misses(monkeypatch, counting_call_model, cache_home):
     """Same friendly name but a different resolved model id -> different key."""
     _set_keys(monkeypatch)

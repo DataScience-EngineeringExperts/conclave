@@ -1,5 +1,7 @@
 """Tests for the Elite Decision Protocol."""
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -52,6 +54,39 @@ def _phase(messages) -> str:
     if system == ELITE_REVISION_SYSTEM:
         return "revision"
     return "initial"
+
+
+def _is_verdict_call(messages) -> bool:
+    return bool(messages) and messages[0].get("content", "").startswith(
+        "You are the verdict extractor"
+    )
+
+
+def _elite_verdict_json() -> str:
+    members = ["grok", "gemini", "perplexity"]
+    return json.dumps(
+        {
+            "verdict_applies": True,
+            "verdict_type": "decision",
+            "headline": "Proceed.",
+            "recommendation": "Choose the strongest option.",
+            "positions": [
+                {
+                    "label": "proceed",
+                    "summary": "The revised council agrees.",
+                    "providers": members,
+                    "evidence_answer_ids": [],
+                }
+            ],
+            "provider_votes": [
+                {"provider": member, "position_label": "proceed"} for member in members
+            ],
+            "minority_reports": [],
+            "conflicts": [],
+            "caveats": [],
+            "dissent_summary": None,
+        }
+    )
 
 
 def test_elite_result_defaults_to_incomplete_v1_protocol() -> None:
@@ -328,3 +363,94 @@ async def test_run_elite_stops_after_failed_revision_gate(monkeypatch, patch_cal
     assert len(result.elite.revisions) == 3
     assert len(result.answers) == 3
     assert all(answer.answer.startswith("initial") for answer in result.answers)
+
+
+async def test_council_elite_synthesizes_revisions_and_applies_canonical_verdict(
+    monkeypatch, patch_call_model
+) -> None:
+    _all_keys(monkeypatch)
+    synthesis_inputs: list[str] = []
+
+    def handler(model_id, messages):
+        if _is_verdict_call(messages):
+            return make_response(_elite_verdict_json())
+        system = next(
+            (message["content"] for message in messages if message["role"] == "system"), ""
+        )
+        if system.startswith("You are the synthesizer of a council"):
+            synthesis_inputs.append(messages[-1]["content"])
+            return make_response("elite synthesis")
+        phase = _phase(messages)
+        return make_response(f"{phase} from {model_id}")
+
+    patch_call_model(handler)
+    council = Council(
+        models=["grok", "gemini", "perplexity"],
+        config=_elite_config(),
+    )
+
+    result = await council.elite("Choose the strongest option.")
+
+    assert result.elite is not None
+    assert result.elite.completed is True
+    assert result.synthesis == "elite synthesis"
+    assert len(synthesis_inputs) == 1
+    assert "revision from xai/grok-4.3" in synthesis_inputs[0]
+    assert "initial from xai/grok-4.3" not in synthesis_inputs[0]
+    assert result.verdict is not None
+    assert result.consensus_score == result.verdict.consensus_score == 1.0
+    assert result.provider_votes == result.verdict.provider_votes
+
+
+async def test_council_elite_incomplete_skips_synthesis_and_verdict(
+    monkeypatch, patch_call_model
+) -> None:
+    _all_keys(monkeypatch)
+    calls = {"synthesis": 0, "verdict": 0}
+
+    def handler(model_id, messages):
+        if model_id == "gemini/gemini-2.5-pro":
+            raise RuntimeError("initial unavailable")
+        return make_response(f"initial from {model_id}")
+
+    async def unexpected_synthesis(_result):
+        calls["synthesis"] += 1
+
+    async def unexpected_verdict(_result):
+        calls["verdict"] += 1
+
+    patch_call_model(handler)
+    council = Council(
+        models=["grok", "gemini", "perplexity"],
+        config=_elite_config(),
+    )
+    monkeypatch.setattr(council, "_synthesize", unexpected_synthesis)
+    monkeypatch.setattr(council, "_apply_verdict", unexpected_verdict)
+
+    result = await council.elite("Choose.")
+
+    assert result.elite is not None
+    assert result.elite.completed is False
+    assert result.synthesis is None
+    assert result.verdict is None
+    assert calls == {"synthesis": 0, "verdict": 0}
+
+
+def test_council_elite_sync_exposes_completed_protocol(monkeypatch, patch_call_model) -> None:
+    _all_keys(monkeypatch)
+
+    def handler(model_id, messages):
+        return make_response(f"{_phase(messages)} from {model_id}")
+
+    patch_call_model(handler)
+    council = Council(
+        models=["grok", "gemini", "perplexity"],
+        config=_elite_config(),
+        extract_verdict=False,
+    )
+
+    result = council.elite_sync("Choose.")
+
+    assert result.elite is not None
+    assert result.elite.completed is True
+    assert result.synthesis is not None
