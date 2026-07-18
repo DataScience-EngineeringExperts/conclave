@@ -3,11 +3,11 @@
 These exercise ``conclave.cli.ask`` through Typer's ``CliRunner`` (no real keys,
 no network). Two concerns are pinned here:
 
-* **Exit-code contract (#17).** A run that produces zero *usable* member answers
-  exits non-zero (code 1) on both the human and ``--json`` paths, and under
-  ``--json`` the full JSON payload is still emitted to stdout so a script can
-  parse the result *and* detect the failure via the exit code. A run with at
-  least one usable answer exits 0.
+* **Exit-code contract (#17).** A run that produces zero *usable* member answers,
+  or an Elite run whose ``decision_readiness`` is not ``ready``, exits non-zero
+  (code 1) on both the human and ``--json`` paths. Under ``--json`` the full JSON
+  payload is still emitted to stdout so a script can parse the result *and*
+  detect the failure via the exit code. Other runs with a usable answer exit 0.
 * **Pooled-client lifecycle (#20).** The synchronous council wrappers close the
   shared httpx client when the run completes, so ``transport.aclose()`` is
   actually invoked and no client leaks past the CLI command.

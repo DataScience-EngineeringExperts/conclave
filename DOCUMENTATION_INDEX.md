@@ -15,15 +15,15 @@ the canonical authority spec on top of those.
 
 | # | Doc | Path | Purpose |
 |---|-----|------|---------|
-| 1 | **README** (project overview) | [`README.md`](README.md) | Install, BYO-keys, six-mode CLI/library quickstart, and the unreleased quality-first Elite protocol. |
-| 2 | **System Context Diagram** | [`SYSTEM_CONTEXT_DIAGRAM.md`](SYSTEM_CONTEXT_DIAGRAM.md) | Mermaid context for the provider highway, six modes, unreleased Elite gated phases, verdict pipeline, phased manifest receipts, and mcp-warden boundary. |
+| 1 | **README** (project overview) | [`README.md`](README.md) | Install, BYO-keys, five released-mode CLI/library quickstart, and the source-only unreleased Elite protocol. |
+| 2 | **System Context Diagram** | [`SYSTEM_CONTEXT_DIAGRAM.md`](SYSTEM_CONTEXT_DIAGRAM.md) | Mermaid context for the provider highway, five released modes, source-only Elite gated phases, verdict pipeline, phased manifest receipts, and mcp-warden boundary. |
 | 3 | **Documentation Index** | [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md) | This file. Master map of all docs + source layout. |
 
 ## Authority spec
 
 | Doc | Path | Purpose |
 |-----|------|---------|
-| **Product Design Document** | [`docs/PRODUCT_DESIGN_DOCUMENT.md`](docs/PRODUCT_DESIGN_DOCUMENT.md) | **Canonical** product spec: six modes including implemented-but-unreleased Elite, its fixed three-success phase gate and cost/latency tradeoff, the v1.1 execution-traceable verdict, manifest, architecture, boundaries, and roadmap. **When docs disagree, the PDD wins.** |
+| **Product Design Document** | [`docs/PRODUCT_DESIGN_DOCUMENT.md`](docs/PRODUCT_DESIGN_DOCUMENT.md) | **Canonical** product spec: five released modes plus implemented-but-unreleased Elite, its fixed three-success phase gate and cost/latency tradeoff, the v1.1 execution-traceable verdict, manifest, architecture, boundaries, and roadmap. **When docs disagree, the PDD wins.** |
 
 ## Product plans
 
@@ -45,11 +45,11 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 | Module | Path | Responsibility |
 |--------|------|----------------|
 | Package API | [`src/conclave/__init__.py`](src/conclave/__init__.py) | Public exports include `Council`, result types, verdict/manifest surface, and unreleased `EliteResult` plus Elite protocol constants. |
-| Council | [`src/conclave/council.py`](src/conclave/council.py) | Six-mode async/sync API; Elite keeps protocol completion separate from `ready`/`not_ready`/`indeterminate` decision readiness. |
+| Council | [`src/conclave/council.py`](src/conclave/council.py) | Five released async/sync modes plus source-only Elite; Elite keeps protocol completion separate from `ready`/`not_ready`/`indeterminate` decision readiness. |
 | Modes | [`src/conclave/modes.py`](src/conclave/modes.py) | Debate, adversarial, vote, and unreleased Elite orchestration; Elite gates initial/claim-audit/revision at three successes. |
 | Verdict types | [`src/conclave/verdict.py`](src/conclave/verdict.py) | Public verdict/member Pydantic types (`CouncilVerdict`, `CouncilPosition`, `CouncilConflict`, `ProviderVote`, `MinorityReport`) + the LCD JSON Schemas (`verdict_json_schema`/`member_answer_json_schema`/`verdict_extraction_json_schema`) usable across all three native structured-output surfaces; `VERDICT_SCHEMA_VERSION`/`VERDICT_EXTRACTION_PROMPT_VERSION`. |
 | Agreement | [`src/conclave/agreement.py`](src/conclave/agreement.py) | Deterministic consensus: `consensus_score` (`position_cluster_ratio_v1` — largest cluster / positioned members; `None` for N<2) + `consensus_label` buckets. Pure arithmetic, no `difflib`, never LLM-emitted. |
-| Verdict synthesis | [`src/conclave/verdict_synthesis.py`](src/conclave/verdict_synthesis.py) | `extract_verdict` engine: one extraction call clustering stances, native `output_contract` enforcement + prompt-level fallback, validate → repair-once → graceful `verdict=None`; the three verdict-absent reasons; provenance on every return path. |
+| Verdict synthesis | [`src/conclave/verdict_synthesis.py`](src/conclave/verdict_synthesis.py) | `extract_verdict` engine: one initial extraction call and at most one repair, native `output_contract` enforcement + prompt-level fallback, validate → repair-once → graceful `verdict=None`; the three verdict-absent reasons; provenance on every return path. |
 | Manifest | [`src/conclave/manifest.py`](src/conclave/manifest.py) | Secret-scanned manifest on every result; buffered Elite receipts cover all attempted phases through synthesis, extraction, and repair. Unknown cost remains `None`. |
 | Streaming | [`src/conclave/streaming.py`](src/conclave/streaming.py) | `stream_ask` — council-level streaming engine behind `Council.ask_stream`: concurrent member interleaving via an `asyncio.Queue`, optional synthesizer streaming, terminal `done` event with the full `CouncilResult` (synthesize/raw only). |
 | Prompts | [`src/conclave/prompts.py`](src/conclave/prompts.py) | Debate/adversarial/vote plus anonymized Elite claim-audit and revision prompts; answer IDs provide within-run provenance, not external grounding. |
@@ -63,7 +63,7 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 | Registry | [`src/conclave/registry.py`](src/conclave/registry.py) | Friendly-name → model-id defaults; provider → env-var mapping; key **presence** logic (never values). |
 | Config | [`src/conclave/config.py`](src/conclave/config.py) | Loads/merges `~/.conclave/config.yml` over defaults; resolves model ids and named/CSV councils; parses the `endpoints:` section (custom OpenAI-compatible providers). |
 | Models | [`src/conclave/models.py`](src/conclave/models.py) | Stable Pydantic contract, including `EliteResult` phase artifacts and backward-compatible `CouncilResult.elite`. |
-| CLI | [`src/conclave/cli.py`](src/conclave/cli.py) | Six-mode `conclave ask` plus `providers`; Elite adds a phase summary, full JSON, incomplete exit 1, and explicit stream rejection. |
+| CLI | [`src/conclave/cli.py`](src/conclave/cli.py) | Five released `conclave ask` modes plus source-only Elite and `providers`; Elite exits 1 unless decision readiness is `ready`, emits full JSON before failure, and rejects streaming. |
 | Experimental evals | [`src/conclave/evals/`](src/conclave/evals/) | Versioned DSE-708 planning, strict replay, failure-inclusive running, blinding, scoring, and exploratory reports; no product-quality claim. |
 | Eval CLI | [`src/conclave/eval_cli.py`](src/conclave/eval_cli.py) | Offline-only `conclave eval plan/run/blind/report`; `run` validates replay artifacts and cannot call providers. |
 | Logging | [`src/conclave/logging.py`](src/conclave/logging.py) | Logger factory; stderr; verbosity via `CONCLAVE_LOG_LEVEL` (default `WARNING`). |
@@ -79,7 +79,7 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 | Adapter tests | [`tests/test_adapters.py`](tests/test_adapters.py) | Per-adapter `build_request` + `parse_response` for openai-compat/anthropic/gemini: system-hoist, max_tokens, role mapping, usage parsing, empty/malformed/error-status raises. |
 | Provider highway tests | [`tests/test_providers.py`](tests/test_providers.py) | `resolve_adapter` (built-in prefixes, per-provider URLs, custom endpoints, unknown-prefix raise), end-to-end `call_model`, and `redact()` (bearer/`sk-`/env-var-value/`x-api-key` scrubbing; pre-redacted provider errors). |
 | Registry/config tests | [`tests/test_registry_config.py`](tests/test_registry_config.py) | Name resolution, key-presence logic, config merge. |
-| CLI tests | [`tests/test_cli.py`](tests/test_cli.py) | Typer `CliRunner`: exit-code contract (0 success / 1 zero-usable-answers / 2 usage error), `--json` payload + exit code, human renderers per mode, `providers` table never prints secrets, aclose lifecycle. |
+| CLI tests | [`tests/test_cli.py`](tests/test_cli.py) | Typer `CliRunner`: exit-code contract (0 usable result and ready Elite / 1 zero-usable or non-ready Elite / 2 usage error), `--json` payload + exit code, human renderers per mode, `providers` table never prints secrets, aclose lifecycle. |
 | Eval tests | [`tests/evals/`](tests/evals/) | Frozen matrix, replay fail-closed behavior, runner denominators, blinding, scoring, reporting, and offline CLI. |
 | Transport tests | [`tests/test_transport.py`](tests/test_transport.py) | `post_json` via httpx `MockTransport`: success/error-status/non-JSON fallback, timeout & connect/HTTP errors → `TransportError` (key never leaks), client reuse/pooling, aclose idempotency. |
 | Streaming tests | [`tests/test_streaming.py`](tests/test_streaming.py) | Per-adapter SSE via `MockTransport` (openai-compat/anthropic/gemini): incremental chunks + assembled answer == concatenation == buffered result; mid-stream malformed-frame/connection-drop/non-2xx → error set with partial text preserved (never raises); key redaction in stream errors; buffered `ask()` never opens a stream; `Council.ask_stream` interleaving + terminal `done` shape; CLI `--stream` smoke + exit-code contract + debate rejection; `--stream` + cache one-shot replay. |

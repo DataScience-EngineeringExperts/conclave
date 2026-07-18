@@ -3,7 +3,7 @@
 This is the §9 #4 roadmap item: an opt-in cache keyed on
 ``(prompt, council, mode, model ids)`` so repeated or eval runs are cheap. It is
 **off by default** and **never persists key material** -- the cache key and the
-stored payload are derived solely from the normalized prompt, the ordered council
+stored payload are derived solely from the exact prompt content, the ordered council
 member friendly-names + resolved model ids, the run mode, the synthesizer/judge
 identity, and the mode parameters that affect output. No environment variable is
 read here; no key value reaches the key string or the on-disk artifact.
@@ -38,7 +38,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -57,9 +56,7 @@ logger = get_logger("cache")
 
 # Bumped if the cache-key composition or stored schema changes incompatibly, so
 # old entries simply miss instead of being mis-served against new code.
-CACHE_FORMAT_VERSION = "2"
-
-_WHITESPACE = re.compile(r"\s+")
+CACHE_FORMAT_VERSION = "3"
 _SECRET_QUERY_PARTS = (
     "authorization",
     "auth",
@@ -98,15 +95,6 @@ def cache_dir() -> Path:
     xdg = os.environ.get("XDG_CACHE_HOME", "").strip()
     base = Path(xdg) if xdg else Path.home() / ".cache"
     return base / "conclave"
-
-
-def _normalize_prompt(prompt: str) -> str:
-    """Collapse runs of whitespace and strip ends for a stable prompt key.
-
-    Two prompts that differ only in incidental whitespace should hit the same
-    cache entry; semantic content is otherwise preserved verbatim.
-    """
-    return _WHITESPACE.sub(" ", prompt).strip()
 
 
 def _digest(value: str) -> str:
@@ -195,7 +183,7 @@ def build_identity(
             "verdict_schema": verdict_schema_version,
             "verdict_extraction_prompt": verdict_prompt_version,
         },
-        "prompt_fingerprint": _digest(_normalize_prompt(prompt)),
+        "prompt_fingerprint": _digest(prompt),
         "mode": mode,
         # Pairs as lists so JSON round-trips; order preserved deliberately.
         "members": [[name, model_id] for name, model_id in members],
@@ -252,7 +240,7 @@ def make_key(
 
     Identity covers:
 
-    * normalized prompt,
+    * exact prompt content,
     * run mode,
     * ordered ``(friendly_name, resolved_model_id)`` member pairs (order matters --
       see module docstring),
@@ -263,7 +251,7 @@ def make_key(
       future source-bundle digest.
 
     Args:
-        prompt: The raw user prompt (normalized internally).
+        prompt: The exact raw user prompt.
         mode: ``"synthesize" | "raw" | "debate" | "adversarial"``.
         members: Ordered ``(friendly_name, resolved_model_id)`` pairs actually run.
         synthesizer: Synthesizer/judge friendly name (``None`` when not applicable).
