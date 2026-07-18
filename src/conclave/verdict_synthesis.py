@@ -5,8 +5,9 @@ Authoritative spec: ``03_DESIGN_DECISIONS_v1.1.md`` DD-1 (consensus method
 plus ``00_SCOPE_PLAN.md`` §4 (the three honesty corrections).
 
 This is a self-contained, council-agnostic engine. Given the prompt and the
-council members' raw answers, it asks ONE synthesizer model to produce a
-structured *judgment* (the clustering of stances, the conflicts, the votes), then
+council members' raw answers, it asks a synthesizer model to produce a structured
+*judgment* (the clustering of stances, the conflicts, the votes), with at most one
+repair call when the initial output is invalid, then
 computes the consensus number **itself, deterministically**, from that clustering
 — the model never emits the consensus score. CAC-06 wires :func:`extract_verdict`
 into ``council.ask``; this module does not wire itself.
@@ -69,11 +70,12 @@ from pydantic import BaseModel, Field, ValidationError
 from . import agreement
 from .adapters.base import OutputContract, redact
 from .logging import get_logger
-from .manifest import VerdictExtraction
+from .manifest import ProviderExecutionReceipt, VerdictExtraction
 from .models import ModelAnswer
-from .providers import call_model
+from .providers import call_model, receipt_from_answer
 from .verdict import (
     VERDICT_EXTRACTION_PROMPT_VERSION,
+    VERDICT_SCHEMA_VERSION,
     CouncilConflict,
     CouncilVerdict,
     VerdictExtractionModel,
@@ -102,7 +104,9 @@ _REASON_EXTRACTION_FAILED = "verdict extraction failed schema validation"
 _EXTRACTION_SYSTEM = (
     "You are the verdict extractor for an auditable multi-model council. You are "
     "given the original prompt and each council member's answer, labeled with a "
-    "stable evidence id. Produce ONE JSON object that conforms exactly to the "
+    "stable answer id. These IDs provide within-run answer provenance only; they "
+    "do not prove claims against external sources. Produce ONE JSON object that "
+    "conforms exactly to the "
     "provided JSON Schema and nothing else.\n\n"
     "Your job is to ADJUDICATE, not to re-answer:\n"
     "- Set verdict_applies=false when the prompt is open-ended generation (a poem, "
@@ -111,8 +115,9 @@ _EXTRACTION_SYSTEM = (
     "- Set verdict_type to 'decision' (a question with an answer), 'review' (an "
     "accept/revise/reject judgment), or 'synthesis' (open-ended consolidation).\n"
     "- Cluster the members into positions[]; each position lists the providers in "
-    "it and the evidence_answer_ids (the labels shown) backing it, so a human can "
-    "verify every assignment against the raw answer.\n"
+    "it and the evidence_answer_ids (the compatibility field containing the answer "
+    "IDs shown) tracing it, so a human can verify every assignment against the raw "
+    "answer.\n"
     "- Record one provider_vote per member that took a stance (position_label must "
     "match a positions[].label); omit a member that took no clean stance.\n"
     "- Add conflicts[] only when there are two or more positions in tension.\n\n"
@@ -145,11 +150,49 @@ class VerdictSynthesisResult(BaseModel):
             (``"fewer than 2 responding members"``, ``"open-ended prompt (no
             decision/review to adjudicate)"``, or ``"verdict extraction failed
             schema validation"``), or ``None`` when a verdict is present.
+        attempt_receipts: One secret-free receipt for each actual extraction or
+            repair call. The N<2 gate makes no call and therefore yields none.
     """
 
     verdict: CouncilVerdict | None = None
     extraction: VerdictExtraction
     verdict_absent_reason: str | None = Field(default=None)
+    attempt_receipts: list[ProviderExecutionReceipt] = Field(default_factory=list)
+
+
+def _verdict_attempt_receipt(
+    answer: ModelAnswer,
+    *,
+    phase: str,
+    attempt: int,
+    schema_valid: bool | None,
+    temperature: float,
+    timeout: float,
+    protocol_version: str | None,
+) -> ProviderExecutionReceipt:
+    """Build one secret-free receipt for an extraction or repair attempt."""
+    if answer.error is not None:
+        outcome = "failed"
+        error_category = None
+    elif schema_valid:
+        outcome = "success"
+        error_category = None
+    else:
+        outcome = "schema_invalid"
+        error_category = "schema_validation"
+    return receipt_from_answer(
+        answer,
+        temperature=temperature,
+        timeout=timeout,
+        phase=phase,
+        attempt=attempt,
+        outcome=outcome,
+        error_category=error_category,
+        schema_valid=schema_valid,
+        protocol_version=protocol_version,
+        prompt_version=VERDICT_EXTRACTION_PROMPT_VERSION,
+        schema_version=VERDICT_SCHEMA_VERSION,
+    )
 
 
 def _responding(member_answers: list[ModelAnswer]) -> list[ModelAnswer]:
@@ -170,31 +213,30 @@ def _responding(member_answers: list[ModelAnswer]) -> list[ModelAnswer]:
     return [a for a in member_answers if a.ok and a.answer and a.answer.strip()]
 
 
-def _evidence_label(answer: ModelAnswer, index: int) -> str:
-    """Return a stable evidence label for one responding member.
+def _answer_label(answer: ModelAnswer, index: int) -> str:
+    """Return a stable within-run provenance label for one responding member.
 
     Prefers the conclave-assigned ``answer_id`` (which backs
-    ``evidence_answer_ids`` on the verdict's positions). Falls back to the member
-    ``name`` and then to a positional ``member-{index}`` so the model always has a
-    stable, citable handle even when ``answer_id`` is ``None`` (DD-2 positions must
-    cite evidence regardless).
+    ``evidence_answer_ids`` compatibility field on verdict positions). Successful
+    answers normally always carry this ID. The positional fallback deliberately
+    avoids exposing a provider/model name as a substitute identity.
 
     Args:
         answer: One responding member answer.
         index: Its 0-based position in the responding list (fallback id source).
 
     Returns:
-        A non-empty label string the model can cite as an evidence id.
+        A non-empty label string the model can cite as an answer id.
     """
-    return answer.answer_id or answer.name or f"member-{index}"
+    return answer.answer_id or f"unidentified-answer-{index + 1}"
 
 
 def _build_messages(prompt: str, responders: list[ModelAnswer]) -> list[dict[str, str]]:
     """Build the extraction messages from the prompt + every responding answer.
 
     Each responding member's answer is included verbatim, labeled with its stable
-    evidence id (:func:`_evidence_label`) so the model can populate
-    ``evidence_answer_ids``. The LCD extraction schema is embedded in the user
+    answer id (:func:`_answer_label`) so the model can populate the compatibility
+    field ``evidence_answer_ids``. The LCD extraction schema is embedded in the user
     message (prompt-level structured output — see the module docstring). Messages
     are built from answer TEXT + evidence labels only; the synthesizer call routes
     through :func:`conclave.providers.call_model`, which redacts, so no key
@@ -209,8 +251,8 @@ def _build_messages(prompt: str, responders: list[ModelAnswer]) -> list[dict[str
     """
     blocks = []
     for i, ans in enumerate(responders):
-        label = _evidence_label(ans, i)
-        blocks.append(f"### Member answer (evidence id: {label}) — from {ans.name}\n{ans.answer}")
+        label = _answer_label(ans, i)
+        blocks.append(f"### Member answer (answer id: {label}) — from {ans.name}\n{ans.answer}")
     answers_block = "\n\n".join(blocks)
 
     schema_json = json.dumps(verdict_extraction_json_schema(), indent=2)
@@ -399,6 +441,9 @@ async def extract_verdict(
     synthesizer_name: str,
     synthesizer_model_id: str,
     config=None,  # noqa: ANN001 -- ConclaveConfig | None; untyped to avoid an import edge
+    temperature: float = 0.7,
+    timeout: float = 120.0,
+    protocol_version: str | None = None,
 ) -> VerdictSynthesisResult:
     """Extract a structured, auditable verdict from a council's member answers.
 
@@ -409,8 +454,8 @@ async def extract_verdict(
        ``"fewer than 2 responding members"`` and NO LLM call (consensus is
        undefined for N<2, DD-1 edge case).
     2. **Extract.** Build the ``[system, user]`` messages from the prompt + every
-       responding answer (labeled by evidence id) with the LCD extraction schema
-       embedded, and make ONE :func:`conclave.providers.call_model` call.
+       responding answer (labeled by within-run answer id) with the LCD extraction schema
+       embedded, and make the initial :func:`conclave.providers.call_model` call.
     3. **Validate → repair-once → fallback.** Parse JSON + validate via Pydantic.
        On failure, re-call ONCE with the stringified errors appended; if it still
        fails (or the extractor errored / returned empty), return ``verdict=None``
@@ -471,7 +516,7 @@ async def extract_verdict(
             verdict_absent_reason=_REASON_TOO_FEW,
         )
 
-    # Step 2 — one extraction call. Request native structured output (capable
+    # Step 2 — initial extraction call. Request native structured output (capable
     # providers enforce the schema) AND keep the embedded schema in the messages as
     # the belt-and-suspenders fallback for providers without strict support. Built
     # once and reused for the initial call and the repair retry below; schema_name
@@ -487,12 +532,25 @@ async def extract_verdict(
         synthesizer_name,
         synthesizer_model_id,
         messages,
+        temperature=temperature,
+        timeout=timeout,
         config=config,
         output_contract=output_contract,
     )
 
     # Step 3 — validate, then repair ONCE on failure, then fall back.
     extraction, errors = _parse_and_validate(answer)
+    attempt_receipts = [
+        _verdict_attempt_receipt(
+            answer,
+            phase="verdict_extraction",
+            attempt=1,
+            schema_valid=None if answer.error is not None else extraction is not None,
+            temperature=temperature,
+            timeout=timeout,
+            protocol_version=protocol_version,
+        )
+    ]
     if extraction is None:
         repair_messages = messages + [
             {
@@ -510,10 +568,23 @@ async def extract_verdict(
             synthesizer_name,
             synthesizer_model_id,
             repair_messages,
+            temperature=temperature,
+            timeout=timeout,
             config=config,
             output_contract=output_contract,
         )
         extraction, errors = _parse_and_validate(retry)
+        attempt_receipts.append(
+            _verdict_attempt_receipt(
+                retry,
+                phase="verdict_repair",
+                attempt=2,
+                schema_valid=None if retry.error is not None else extraction is not None,
+                temperature=temperature,
+                timeout=timeout,
+                protocol_version=protocol_version,
+            )
+        )
 
     if extraction is None:
         # Repair exhausted — degrade gracefully (DD-2), never raise.
@@ -522,6 +593,7 @@ async def extract_verdict(
             verdict=None,
             extraction=extraction_provenance,
             verdict_absent_reason=_REASON_EXTRACTION_FAILED,
+            attempt_receipts=attempt_receipts,
         )
 
     # Step 4 — open-ended prompt → synthesis-only, no verdict (DD-2).
@@ -530,6 +602,7 @@ async def extract_verdict(
             verdict=None,
             extraction=extraction_provenance,
             verdict_absent_reason=_REASON_OPEN_ENDED,
+            attempt_receipts=attempt_receipts,
         )
 
     # Step 5 — compute consensus deterministically + assemble the verdict.
@@ -538,4 +611,5 @@ async def extract_verdict(
         verdict=verdict,
         extraction=extraction_provenance,
         verdict_absent_reason=None,
+        attempt_receipts=attempt_receipts,
     )

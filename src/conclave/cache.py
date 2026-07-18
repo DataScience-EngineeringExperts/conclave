@@ -3,7 +3,7 @@
 This is the §9 #4 roadmap item: an opt-in cache keyed on
 ``(prompt, council, mode, model ids)`` so repeated or eval runs are cheap. It is
 **off by default** and **never persists key material** -- the cache key and the
-stored payload are derived solely from the normalized prompt, the ordered council
+stored payload are derived solely from the exact prompt content, the ordered council
 member friendly-names + resolved model ids, the run mode, the synthesizer/judge
 identity, and the mode parameters that affect output. No environment variable is
 read here; no key value reaches the key string or the on-disk artifact.
@@ -11,9 +11,10 @@ read here; no key value reaches the key string or the on-disk artifact.
 Storage
 =======
 Entries live one-per-file under ``$XDG_CACHE_HOME/conclave`` (falling back to
-``~/.cache/conclave``). Each file is named ``<sha256-hex>.json`` and holds the
-JSON serialization of a :class:`conclave.models.CouncilResult` (via
-``model_dump(mode="json")``), which by construction carries no secrets.
+``~/.cache/conclave``). Each file is named ``<sha256-hex>.json`` and holds a
+versioned envelope around the JSON serialization of a
+:class:`conclave.models.CouncilResult`. Unversioned/old-format envelopes are
+misses, never migrated or replayed against current protocol semantics.
 
 Graceful degradation
 ====================
@@ -37,21 +38,52 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
+from collections.abc import Mapping
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import ValidationError
 
 from .logging import get_logger
-from .models import CouncilResult
+from .models import ELITE_PROTOCOL_VERSION, CouncilResult
+from .prompts import ELITE_PROMPT_VERSION, SYNTHESIS_PROMPT_VERSION
+from .verdict import (
+    VERDICT_EXTRACTION_PROMPT_VERSION,
+    VERDICT_SCHEMA_VERSION,
+)
 
 logger = get_logger("cache")
 
 # Bumped if the cache-key composition or stored schema changes incompatibly, so
 # old entries simply miss instead of being mis-served against new code.
-_CACHE_VERSION = 1
-
-_WHITESPACE = re.compile(r"\s+")
+CACHE_FORMAT_VERSION = "3"
+_SECRET_QUERY_PARTS = (
+    "authorization",
+    "auth",
+    "credential",
+    "passwd",
+    "password",
+    "secret",
+    "signature",
+    "token",
+)
+_SECRET_QUERY_KEYS = {
+    "access_key",
+    "api_key",
+    "apikey",
+    "code",
+    "key",
+    "sig",
+}
+_SECRET_VALUE_MARKERS = (
+    "akia",
+    "authorization:",
+    "bearer ",
+    "ghp_",
+    "sk-",
+    "sk_",
+    "x-api-key",
+)
 
 
 def cache_dir() -> Path:
@@ -65,13 +97,120 @@ def cache_dir() -> Path:
     return base / "conclave"
 
 
-def _normalize_prompt(prompt: str) -> str:
-    """Collapse runs of whitespace and strip ends for a stable prompt key.
+def _digest(value: str) -> str:
+    """Return a one-way identity fingerprint without retaining ``value``."""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
-    Two prompts that differ only in incidental whitespace should hit the same
-    cache entry; semantic content is otherwise preserved verbatim.
+
+def _endpoint_fingerprint(raw_url: str) -> str:
+    """Fingerprint output-affecting endpoint routing without credential material.
+
+    Userinfo, fragments, and secret-like query parameters are deliberately
+    excluded. Safe query parameters (for example an API version) remain part of
+    the fingerprint because they can change model behavior. Only the digest is
+    returned; the normalized URL never enters an identity document or diagnostic.
     """
-    return _WHITESPACE.sub(" ", prompt).strip()
+    parsed = urlsplit(raw_url)
+    hostname = (parsed.hostname or "").lower()
+    try:
+        port = parsed.port
+    except ValueError:
+        # A malformed configured port will fail at request time, but cache
+        # identity construction must remain safe and deterministic first.
+        port = None
+        hostname = f"{hostname}:invalid-port"
+    if port is not None:
+        hostname = f"{hostname}:{port}"
+    safe_query = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        key_lower = key.lower()
+        value_lower = value.lower()
+        if key_lower in _SECRET_QUERY_KEYS or any(
+            part in key_lower for part in _SECRET_QUERY_PARTS
+        ):
+            continue
+        if any(marker in value_lower for marker in _SECRET_VALUE_MARKERS):
+            continue
+        safe_query.append((key, value))
+    safe_query.sort()
+    normalized = urlunsplit(
+        (
+            parsed.scheme.lower(),
+            hostname,
+            parsed.path.rstrip("/") or "/",
+            urlencode(safe_query),
+            "",
+        )
+    )
+    return _digest(normalized)
+
+
+def build_identity(
+    *,
+    prompt: str,
+    mode: str,
+    members: list[tuple[str, str]],
+    synthesizer: str | None,
+    synthesizer_model_id: str | None,
+    temperature: float,
+    timeout: float = 120.0,
+    rounds: int | None = None,
+    proposer: str | None = None,
+    converge_threshold: float | None = None,
+    choices: list[str] | None = None,
+    extract_verdict: bool = True,
+    endpoint_urls: Mapping[str, str] | None = None,
+    source_bundle_digest: str | None = None,
+    cache_format_version: str = CACHE_FORMAT_VERSION,
+    protocol_version: str = ELITE_PROTOCOL_VERSION,
+    synthesis_prompt_version: str = SYNTHESIS_PROMPT_VERSION,
+    elite_prompt_version: str = ELITE_PROMPT_VERSION,
+    verdict_schema_version: str = VERDICT_SCHEMA_VERSION,
+    verdict_prompt_version: str = VERDICT_EXTRACTION_PROMPT_VERSION,
+) -> dict[str, object]:
+    """Build the canonical, secret-free identity document for a council run.
+
+    Raw endpoint URLs and source bundle values never enter the returned document;
+    only sanitized one-way fingerprints do. API keys are not accepted and no
+    environment value is read here.
+    """
+    payload: dict[str, object] = {
+        "versions": {
+            "cache_format": cache_format_version,
+            "elite_protocol": protocol_version,
+            "synthesis_prompt": synthesis_prompt_version,
+            "elite_prompt": elite_prompt_version,
+            "verdict_schema": verdict_schema_version,
+            "verdict_extraction_prompt": verdict_prompt_version,
+        },
+        "prompt_fingerprint": _digest(prompt),
+        "mode": mode,
+        # Pairs as lists so JSON round-trips; order preserved deliberately.
+        "members": [[name, model_id] for name, model_id in members],
+        "synthesizer": [synthesizer, synthesizer_model_id],
+        "generation": {"temperature": temperature, "timeout": timeout},
+        "extract_verdict": extract_verdict,
+        "endpoint_fingerprints": {
+            prefix: _endpoint_fingerprint(url)
+            for prefix, url in sorted((endpoint_urls or {}).items())
+        },
+        # Re-hash the caller-supplied digest. This keeps even a malformed caller
+        # value out of the inspectable identity while preserving invalidation.
+        "source_bundle_fingerprint": (
+            _digest(source_bundle_digest) if source_bundle_digest is not None else None
+        ),
+        "mode_params": {},
+    }
+    mode_params = payload["mode_params"]
+    assert isinstance(mode_params, dict)
+    if mode == "debate":
+        mode_params["rounds"] = rounds
+        mode_params["converge_threshold"] = converge_threshold
+    if mode == "adversarial":
+        mode_params["proposer"] = proposer
+    if mode == "vote":
+        mode_params["choices"] = choices or []
+    return payload
 
 
 def make_key(
@@ -82,26 +221,37 @@ def make_key(
     synthesizer: str | None,
     synthesizer_model_id: str | None,
     temperature: float,
+    timeout: float = 120.0,
     rounds: int | None = None,
     proposer: str | None = None,
     converge_threshold: float | None = None,
     choices: list[str] | None = None,
+    extract_verdict: bool = True,
+    endpoint_urls: Mapping[str, str] | None = None,
+    source_bundle_digest: str | None = None,
+    cache_format_version: str = CACHE_FORMAT_VERSION,
+    protocol_version: str = ELITE_PROTOCOL_VERSION,
+    synthesis_prompt_version: str = SYNTHESIS_PROMPT_VERSION,
+    elite_prompt_version: str = ELITE_PROMPT_VERSION,
+    verdict_schema_version: str = VERDICT_SCHEMA_VERSION,
+    verdict_prompt_version: str = VERDICT_EXTRACTION_PROMPT_VERSION,
 ) -> str:
-    """Build the stable cache key (sha256 hex) for a council run.
+    """Build the stable SHA-256 cache key from canonical secret-free identity.
 
-    The key is a SHA-256 over a canonical JSON document of only output-affecting,
-    secret-free identity:
+    Identity covers:
 
-    * normalized prompt,
+    * exact prompt content,
     * run mode,
     * ordered ``(friendly_name, resolved_model_id)`` member pairs (order matters --
       see module docstring),
     * synthesizer/judge friendly name + resolved model id,
-    * temperature, and mode params (``rounds`` + ``converge_threshold`` for
-      debate, ``proposer`` for adversarial) when they apply.
+    * generation settings and mode parameters,
+    * protocol/prompt/schema/cache-format versions,
+    * verdict extraction behavior, custom endpoint routing, and an optional
+      future source-bundle digest.
 
     Args:
-        prompt: The raw user prompt (normalized internally).
+        prompt: The exact raw user prompt.
         mode: ``"synthesize" | "raw" | "debate" | "adversarial"``.
         members: Ordered ``(friendly_name, resolved_model_id)`` pairs actually run.
         synthesizer: Synthesizer/judge friendly name (``None`` when not applicable).
@@ -117,26 +267,28 @@ def make_key(
     Returns:
         A 64-char lowercase hex SHA-256 digest. Contains zero key material.
     """
-    payload: dict[str, object] = {
-        "v": _CACHE_VERSION,
-        "prompt": _normalize_prompt(prompt),
-        "mode": mode,
-        # Pairs as lists so JSON round-trips; order preserved deliberately.
-        "members": [[name, model_id] for name, model_id in members],
-        "synthesizer": synthesizer,
-        "synthesizer_model_id": synthesizer_model_id,
-        "temperature": temperature,
-    }
-    if mode == "debate":
-        payload["rounds"] = rounds
-        # Early-stop changes how many rounds actually run and thus the output;
-        # it must distinguish a converged run from a fixed-rounds run.
-        payload["converge_threshold"] = converge_threshold
-    if mode == "adversarial":
-        payload["proposer"] = proposer
-    if mode == "vote":
-        payload["choices"] = choices or []
-
+    payload = build_identity(
+        prompt=prompt,
+        mode=mode,
+        members=members,
+        synthesizer=synthesizer,
+        synthesizer_model_id=synthesizer_model_id,
+        temperature=temperature,
+        timeout=timeout,
+        rounds=rounds,
+        proposer=proposer,
+        converge_threshold=converge_threshold,
+        choices=choices,
+        extract_verdict=extract_verdict,
+        endpoint_urls=endpoint_urls,
+        source_bundle_digest=source_bundle_digest,
+        cache_format_version=cache_format_version,
+        protocol_version=protocol_version,
+        synthesis_prompt_version=synthesis_prompt_version,
+        elite_prompt_version=elite_prompt_version,
+        verdict_schema_version=verdict_schema_version,
+        verdict_prompt_version=verdict_prompt_version,
+    )
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -170,7 +322,9 @@ def load(key: str) -> CouncilResult | None:
 
     try:
         data = json.loads(raw)
-        result = CouncilResult.model_validate(data)
+        if not isinstance(data, dict) or data.get("cache_format_version") != CACHE_FORMAT_VERSION:
+            return None
+        result = CouncilResult.model_validate(data.get("result"))
     except (json.JSONDecodeError, ValidationError, TypeError) as exc:
         logger.warning("corrupt cache entry %s: %s; treating as miss", path, exc)
         return None
@@ -205,12 +359,17 @@ def store(key: str, result: CouncilResult) -> None:
         # conclave.providers, BEFORE it is placed on the result and therefore long
         # before it reaches this write. Member/synthesis answer TEXT is provider
         # content, never key material. The cache KEY (make_key) is composed solely
-        # of prompt + mode + member/synthesizer NAMES + model ids + params -- no
-        # env var name or value is read here. Net: no raw key (name or value) can
-        # reach a cache file or filename. Do not move any un-redacted capture into
-        # the result after this contract -- it would persist a secret to disk.
-        payload = result.model_dump(mode="json")
-        payload["cached"] = False
+        # of canonical secret-free identity and then SHA-256 hashed. Custom
+        # endpoint URLs are sanitized and fingerprinted; no env var or key value
+        # is read here. Net: no raw key or credential-bearing URL can reach a
+        # cache file or filename. Do not move any un-redacted capture into the
+        # result after this contract -- it would persist a secret to disk.
+        result_payload = result.model_dump(mode="json")
+        result_payload["cached"] = False
+        payload = {
+            "cache_format_version": CACHE_FORMAT_VERSION,
+            "result": result_payload,
+        }
         # Atomic-ish write: write to a temp sibling then replace, so a crash mid
         # write never leaves a half-written (corrupt) entry behind.
         tmp = path.with_suffix(".json.tmp")

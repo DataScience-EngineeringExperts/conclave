@@ -239,7 +239,12 @@ async def stream_ask(
         # no-op when disabled, never raises, and only attaches secret-free content.
         async for event in _stream_synthesis(council, result):
             yield event
-        await council._apply_verdict(result)
+        # Streaming synthesis has its own token transport and does not yet emit a
+        # synthesis receipt. Preserve the established streaming manifest as a
+        # member-call ledger rather than appending only half of the downstream
+        # call sequence. Complete receipt capture is currently the buffered/Elite
+        # contract.
+        await council._apply_verdict(result, record_receipts=False)
 
     yield StreamEvent(type="done", result=result)
 

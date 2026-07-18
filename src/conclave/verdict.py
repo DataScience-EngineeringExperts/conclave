@@ -57,7 +57,7 @@ CONFIDENCE_LEVELS = ("low", "medium", "high")
 # audit can tell WHICH extractor wording produced a given clustering. Opaque
 # string; only equality/inequality is meaningful. Bump on any change to the
 # extraction system prompt in :mod:`conclave.verdict_synthesis`.
-VERDICT_EXTRACTION_PROMPT_VERSION = "1"
+VERDICT_EXTRACTION_PROMPT_VERSION = "2"
 
 
 class CouncilPosition(BaseModel):
@@ -66,8 +66,10 @@ class CouncilPosition(BaseModel):
     The verdict-extraction step (CAC-05) clusters semantically-equivalent member
     positions into these. This is the element shape reused by both the verdict's
     ``positions`` and the human-readable side of a conflict. Every cluster carries
-    its ``providers`` and ``evidence_answer_ids`` so a human can verify each
-    assignment against the member's raw answer (DD-1 invariant 2).
+    its ``providers`` and ``evidence_answer_ids`` so a human can trace each
+    assignment to the member's raw answer (DD-1 invariant 2). Despite the legacy
+    compatibility name, these IDs are within-run answer provenance, not proof
+    against external sources.
 
     See DD-2 verdict schema.
 
@@ -76,8 +78,9 @@ class CouncilPosition(BaseModel):
         summary: One-line human-readable summary of the clustered stance.
         providers: Provider names whose answers fall in this cluster (e.g.
             ``["anthropic", "openai"]``). Names only — never key material.
-        evidence_answer_ids: Stable ``answer_id`` values backing this cluster
-            (e.g. ``["anthropic-1", "openai-1"]``), for human verification.
+        evidence_answer_ids: Stable ``answer_id`` values tracing this cluster to
+            council answers, for within-run verification. The field name is kept
+            for serialized compatibility; the IDs are not external evidence.
     """
 
     label: str
@@ -134,7 +137,8 @@ class MinorityReport(BaseModel):
     Attributes:
         providers: Provider names holding the minority view. Names only.
         claim: The minority claim itself.
-        evidence_answer_ids: Stable ``answer_id`` values backing the claim.
+        evidence_answer_ids: Stable ``answer_id`` values tracing the claim to
+            council answers. Compatibility name only; not external evidence.
         why_it_matters: Optional rationale for surfacing the dissent despite it
             being a minority view.
     """

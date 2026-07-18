@@ -47,6 +47,7 @@ from conclave.manifest import (
     scan_for_secret_material,
 )
 from conclave.models import ModelAnswer
+from conclave.providers import receipt_from_answer
 from tests.conftest import make_response
 
 # The synthesizer/extractor resolved id for the "claude" friendly name below.
@@ -234,6 +235,24 @@ def _assert_result_canary_free(result) -> None:
     assert scan_for_secret_material(result.manifest) is True
 
 
+def test_receipt_reduces_raw_provider_error_to_secret_free_category() -> None:
+    """Receipts never retain endpoint URLs, response bodies, or echoed credentials."""
+    answer = ModelAnswer(
+        name="grok",
+        model_id="xai/grok-4.3",
+        error=f"RuntimeError: POST https://provider.example/v1 body={PLANTED}",
+    )
+
+    receipt = receipt_from_answer(answer, temperature=0.7, timeout=120.0)
+    payload = receipt.model_dump_json()
+
+    assert receipt.outcome == "failed"
+    assert receipt.error_category == "provider_error"
+    assert receipt.error == "provider_error"
+    assert "provider.example" not in payload
+    assert PLANTED not in payload
+
+
 # --------------------------------------------------------------------------- #
 # 1a — buffered Council.ask(synthesize=True) WITH a real verdict.
 # --------------------------------------------------------------------------- #
@@ -348,6 +367,32 @@ async def test_secret_safety_forced_error_buffered(monkeypatch):
     # full result + manifest remain canary-free and VERIFIED.
     assert result.verdict is None
     _assert_result_canary_free(result)
+
+
+async def test_secret_safety_forced_error_elite(monkeypatch):
+    """Elite phase artifacts and receipts redact a provider error echoing a key."""
+    _plant_all_keys(monkeypatch)
+    monkeypatch.setenv("CONCLAVE_CONFIG", "/nonexistent/conclave.yml")
+
+    async def echoing_401(url, headers, json_body, timeout):
+        return 401, {"error": {"message": f"invalid api key: {PLANTED}"}}
+
+    monkeypatch.setattr("conclave.transport.post_json", echoing_401)
+    council = Council(
+        models=["grok", "gemini", "perplexity"],
+        synthesizer="claude",
+        config=_config(),
+    )
+
+    result = await council.elite("audit prompt")
+
+    assert result.elite is not None
+    assert result.elite.completed is False
+    assert result.elite.critiques == []
+    assert result.elite.revisions == []
+    assert all(not answer.ok for answer in result.elite.initial_answers)
+    _assert_result_canary_free(result)
+    assert [receipt.phase for receipt in result.manifest.receipts] == ["initial"] * 3
 
 
 async def test_secret_safety_forced_error_streaming(monkeypatch, mock_stream_client):

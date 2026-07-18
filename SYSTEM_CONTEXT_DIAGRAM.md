@@ -5,8 +5,9 @@ the system context: how a user (or a downstream consumer) drives conclave, how c
 environment-variable keys feed in, how requests reach the nine first-class providers through
 conclave's own **provider highway** (an httpx transport + per-provider adapter registry — no
 LLM-SDK dependency), how the v1.1 **verdict pipeline** turns the member answers into a
-structured, agreement-scored, **auditable** verdict plus a redacted execution manifest, and
-where the sibling **mcp-warden** project sits as a **dev-time** consumer.
+structured, agreement-scored, **execution-traceable** verdict plus a redacted execution manifest, and
+how the implemented-but-unreleased **Elite Decision Protocol** adds gated claim audit and
+revision before that verdict. It also shows where **mcp-warden** sits as a dev-time consumer.
 
 > Authority note: behavioral details here are descriptive. The canonical spec is
 > [`docs/PRODUCT_DESIGN_DOCUMENT.md`](docs/PRODUCT_DESIGN_DOCUMENT.md).
@@ -30,6 +31,7 @@ flowchart TB
         lib["Library API · from conclave import Council (__init__.py)"]
         council["Council orchestrator<br/>fan_out · synthesize_blocks · skip-no-key (council.py)"]
         modes["Deliberation modes<br/>debate · adversarial · vote (modes.py + prompts.py)"]
+        elite["Elite (UNRELEASED)<br/>initial → claim audit → revision<br/>fixed 3-success gate each phase"]
         registry["Registry · name to model-id<br/>key PRESENCE only, never values (registry.py)"]
         config["Config loader · custom endpoints (config.py)"]
         models["Result contract · CouncilResult v2<br/>answers · verdict · consensus · manifest (models.py)"]
@@ -43,10 +45,10 @@ flowchart TB
         end
         subgraph verdictpipe["Verdict pipeline (v1.1 · default-on)"]
             applyverdict["_apply_verdict<br/>buffered + streaming (council.py)"]
-            extract["extract_verdict<br/>ONE call · cluster stances · repair-once · never raises (verdict_synthesis.py)"]
+            extract["extract_verdict<br/>1 initial call + up to 1 repair · cluster stances · never raises (verdict_synthesis.py)"]
             agree["agreement.position_cluster_ratio_v1<br/>DETERMINISTIC arithmetic · no difflib · never LLM-emitted (agreement.py)"]
             verdictobj["CouncilVerdict<br/>positions + evidence_answer_ids · conflicts · provider_votes · minority_reports (verdict.py)"]
-            manifest["ModelHarnessManifest<br/>first-class · secret-free · extraction provenance (manifest.py)"]
+            manifest["ModelHarnessManifest<br/>first-class · secret-free · phased receipts (manifest.py)"]
         end
     end
 
@@ -76,6 +78,8 @@ flowchart TB
     lib --> council
     council --> modes
     modes -->|"reuse fan_out + synthesize_blocks"| council
+    council --> elite
+    elite -->|"3+ revisions: existing synthesis + verdict<br/>under 3: stop incomplete"| council
     council --> provider
     provider --> adreg
     adreg --> oai
@@ -96,8 +100,8 @@ flowchart TB
     transport --> together
     provider --> models
 
-    council -->|"member answers ready"| applyverdict
-    applyverdict -->|"synthesizer clusters stances<br/>(ONE extraction call, output_contract)"| extract
+    council -->|"member answers or completed Elite revisions"| applyverdict
+    applyverdict -->|"synthesizer clusters stances<br/>(initial call + optional repair, output_contract)"| extract
     extract -->|"clustering"| agree
     agree -->|"consensus_score/label<br/>(arithmetic over the clustering)"| verdictobj
     extract -->|"positions · conflicts · provider_votes"| verdictobj
@@ -132,11 +136,12 @@ flowchart TB
   speaks native `generateContent` (OpenAI roles mapped, `systemInstruction` hoisted,
   `usageMetadata` parsed). Every adapter builds a request and hands it to the **single**
   network boundary — `transport.post_json` (`transport.py`), one async httpx call site.
-- **The verdict pipeline is default-on and auditable (PDD §4a).** Once the council has the
+- **The verdict pipeline is default-on and execution-traceable (PDD §4a).** Once the council has the
   member answers, `_apply_verdict` (`council.py`, run on both the buffered and streaming
-  paths, *after* the manifest exists) drives `extract_verdict` (`verdict_synthesis.py`): a
-  **single** extraction call asks the synthesizer model to *cluster* the members' stances —
-  not to re-answer, and crucially **not to emit a number**. That clustering feeds
+  paths, *after* the manifest exists) drives `extract_verdict` (`verdict_synthesis.py`): an
+  initial extraction call asks the synthesizer model to *cluster* the members' stances —
+  not to re-answer, and crucially **not to emit a number**. Invalid output permits one repair
+  call. The validated clustering feeds
   `agreement.position_cluster_ratio_v1` (`agreement.py`), which computes the `consensus_score`
   as pure **deterministic arithmetic** (largest cluster / positioned members; no `difflib`,
   never model-emitted). The assembled `CouncilVerdict` (`verdict.py`) carries positions with
@@ -148,12 +153,22 @@ flowchart TB
   (`manifest.py`) rides on **every** result — first-class, not a debug flag — recording which
   model + prompt version produced the clustering (provenance) and stamping `secret_safety`
   only after the serialized manifest is scanned clean. This is enforced as a true invariant at
-  the single chokepoint `Council._cached_run` → `_ensure_manifest`: **all five modes**
-  (`synthesize`, `raw`, `debate`, `adversarial`, `vote`) funnel through it, so a result can
+  the single chokepoint `Council._cached_run` → `_ensure_manifest`: all five released modes
+  (`synthesize`, `raw`, `debate`, `adversarial`, `vote`) plus source-only `elite` funnel through
+  it, so a result can
   never escape without a manifest — including the zero-members early return and cache hits.
   A verdict is *optional*: open-ended
   prompts, fewer than two responding members, or extraction failure leave `verdict = None`
   with the synthesis and member answers intact and the reason recorded on the manifest.
+- **Elite is quality-first and unreleased.** Its three concurrent member phases are independent
+  answers, council-wide anonymized claim audits, and member revisions. Answer IDs trace outputs
+  within the run; they are not external citations. Each phase requires
+  three successful responders. Larger councils may lose members and continue while three remain;
+  a failed gate stops later calls and returns an incomplete result with artifacts and phased
+  receipts for attempted work, but no synthesis or verdict. Completion is separate from decision
+  readiness (`ready`/`not_ready`/`indeterminate`). Completed runs feed revisions into the existing
+  synthesis and verdict pipeline. This normally costs up to `3N + 2` calls (`3N + 3` with repair) and more
+  wall-clock time than ordinary modes; `--stream` is rejected because Elite is buffered only.
 - **Streaming shares the same boundary (PDD §9 #5).** A `--stream` run (and the library
   `Council.ask_stream` async generator) flows through a streaming sibling of the call path:
   `call_model_stream` (`providers.py`) → `transport.stream_sse` (`transport.py`, the single
@@ -161,7 +176,7 @@ flowchart TB
   `parse_sse_event` (OpenAI-compat `data:`/`[DONE]` deltas; Anthropic named SSE events;
   Gemini `streamGenerateContent?alt=sse`). `streaming.py` interleaves members concurrently
   and emits `StreamEvent`s, ending with a `done` event whose `CouncilResult` matches the
-  non-streaming shape. Streaming covers `synthesize`/`raw` only; the never-raises +
+  non-streaming shape. Streaming covers `synthesize`/`raw` only; Elite has no streaming; the never-raises +
   `redact()` invariants hold identically, with partial text preserved on mid-stream failure.
 - **`resolve_adapter` is the extension seam.** Adding a *new provider family* is one
   registration in `adapters/__init__.py`; adding an *OpenAI-compatible endpoint* is

@@ -6,7 +6,7 @@ It records, in one secret-free object:
 
 * WHAT ran — ``request_id``, ``conclave_version``, deliberation ``mode``,
   providers considered / called / **skipped (with reasons)**, the concrete
-  resolved model ids, the generation settings used, per-member execution
+  resolved model ids, the generation settings used, per-call execution
   receipts, total latency, and total token usage;
 * cost (carefully — Scope Plan §8) — token ``total_usage`` is always present;
   ``estimated_cost`` is left ``None`` (a wrong number inside an audit receipt is
@@ -19,10 +19,10 @@ It records, in one secret-free object:
   leaves them ``None``.
 
 **Secret-safety (Scope Plan §5 — non-negotiable).** Key VALUES never appear in a
-manifest. Per-member errors are redacted upstream (in :mod:`conclave.providers`)
-before they reach a receipt, and :func:`receipt_from_answer` re-applies
-:func:`conclave.adapters.base.redact` belt-and-suspenders. After assembling the
-manifest the council runs :func:`scan_for_secret_material` and stamps
+manifest. Arbitrary provider errors are reduced to bounded categories before
+they reach a receipt, so raw endpoints, bodies, prompts, and exception chains are
+never retained. After assembling the manifest the council runs
+:func:`scan_for_secret_material` and stamps
 ``secret_safety`` VERIFIED only when the serialized manifest is provably clean.
 
 This module deliberately does NOT import :mod:`conclave.models`; the dependency
@@ -33,6 +33,8 @@ runs the other way (``models`` imports the manifest types and calls
 """
 
 from __future__ import annotations
+
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -49,6 +51,16 @@ SECRET_SAFETY_UNVERIFIED = "unverified"
 # material. The redaction marker ``[REDACTED]`` is intentionally NOT here — a
 # redacted error string legitimately carries it and must not trip the scan.
 _FORBIDDEN_SUBSTRINGS = ("sk-", "bearer", "authorization", "api_key", "x-api-key")
+
+ReceiptOutcome = Literal["success", "failed", "schema_invalid"]
+ReceiptErrorCategory = Literal[
+    "authentication",
+    "rate_limit",
+    "timeout",
+    "transport",
+    "provider_error",
+    "schema_validation",
+]
 
 
 class ProviderSkip(BaseModel):
@@ -93,9 +105,15 @@ class ProviderExecutionReceipt(BaseModel):
     Built from a returned :class:`~conclave.models.ModelAnswer` by
     :func:`receipt_from_answer` (a skipped member has a :class:`ProviderSkip`
     instead, never a receipt). Carries only non-secret, auditable facts: the
-    settings actually used, the latency, the token usage, and a redacted error.
+    settings actually used, the latency, the token usage, and a bounded error
+    category.
 
     Attributes:
+        phase: Optional protocol phase provenance. Elite also records synthesis,
+            verdict extraction, and repair calls.
+        attempt: One-based attempt number within a phase.
+        outcome: Bounded outcome such as ``success``, ``failed``, or
+            ``schema_invalid``.
         name: Friendly council member name (e.g. ``"grok"``).
         provider: Provider prefix derived from ``model_id`` (e.g. ``"xai"``).
         model_id: Resolved provider-prefixed model id (e.g. ``"xai/grok-4.3"``).
@@ -103,21 +121,32 @@ class ProviderExecutionReceipt(BaseModel):
             (``{"temperature": ..., "timeout": ...}``).
         latency_ms: Wall-clock latency of the call in milliseconds.
         usage: Token usage if the provider reported it, else ``None``.
-        error: Redacted error message if the call failed, else ``None``. This
-            field NEVER holds key material — it is redacted upstream and again on
-            construction (belt-and-suspenders).
+        estimated_cost: Trustworthy per-call cost when a dated pricing source is
+            available. Conclave currently has no pricing table, so this stays
+            ``None`` rather than inventing a number.
+        error: Compatibility field containing only the bounded error category,
+            never raw provider text, URLs, bodies, prompts, or exception chains.
+        error_category: Secret-free bounded failure category.
         schema_valid: Whether the member's structured output validated. ``None``
             until CAC-02 structured output exists; defined now, populated later.
     """
 
+    phase: str | None = None
+    attempt: int = Field(default=1, ge=1)
+    outcome: ReceiptOutcome = "success"
     name: str
     provider: str
     model_id: str
     generation_settings: dict[str, float] = Field(default_factory=dict)
     latency_ms: float = 0.0
     usage: TokenUsage | None = None
+    estimated_cost: float | None = None
     error: str | None = None
+    error_category: ReceiptErrorCategory | None = None
     schema_valid: bool | None = None
+    protocol_version: str | None = None
+    prompt_version: str | None = None
+    schema_version: str | None = None
 
 
 class ModelHarnessManifest(BaseModel):

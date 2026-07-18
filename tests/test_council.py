@@ -68,6 +68,60 @@ async def test_fan_out_collects_all_members(monkeypatch, patch_call_model):
     assert result.synthesizer == "claude"
 
 
+async def test_resolved_config_identity_reaches_every_model_call(monkeypatch):
+    """One resolved config instance reaches members, synthesis, and verdict repair."""
+    _all_keys(monkeypatch)
+
+    import conclave.council as council_mod
+    import conclave.verdict_synthesis as verdict_synthesis_mod
+    from conclave.models import ModelAnswer
+
+    resolved_config = _config()
+    received: list[tuple[str, ConclaveConfig | None]] = []
+
+    async def config_spy(
+        name,
+        model_id,
+        messages,
+        *,
+        temperature=0.7,
+        timeout=120.0,
+        config=None,
+        **kwargs,
+    ):
+        system = messages[0]["content"] if messages else ""
+        if system.startswith("You are the verdict extractor"):
+            phase = "verdict_repair" if len(messages) == 3 else "verdict_extraction"
+            answer = "not valid json"
+        elif system == council_mod._SYNTH_SYSTEM:
+            phase = "synthesis"
+            answer = "merged"
+        else:
+            phase = "member"
+            answer = "member answer"
+        received.append((phase, config))
+        return ModelAnswer(name=name, model_id=model_id, answer=answer)
+
+    monkeypatch.setattr(council_mod, "call_model", config_spy)
+    monkeypatch.setattr(verdict_synthesis_mod, "call_model", config_spy)
+
+    council = Council(
+        models=["grok", "gemini"],
+        synthesizer="claude",
+        config=resolved_config,
+    )
+    await council.ask("Should we proceed?")
+
+    assert [phase for phase, _config_value in received].count("member") == 2
+    assert {phase for phase, _config_value in received} == {
+        "member",
+        "synthesis",
+        "verdict_extraction",
+        "verdict_repair",
+    }
+    assert all(config_value is resolved_config for _phase, config_value in received)
+
+
 async def test_concurrency_is_real(monkeypatch):
     """Members run concurrently: total time ~= slowest call, not the sum."""
     _all_keys(monkeypatch)
@@ -76,7 +130,9 @@ async def test_concurrency_is_real(monkeypatch):
     from conclave.models import ModelAnswer
 
     # Replace call_model with a coroutine that sleeps, to prove gather concurrency.
-    async def sleepy_call_model(name, model_id, messages, *, temperature=0.7, timeout=120.0):
+    async def sleepy_call_model(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None
+    ):
         await asyncio.sleep(0.2)
         return ModelAnswer(name=name, model_id=model_id, answer=f"ok {model_id}")
 

@@ -13,6 +13,7 @@ Per-adapter ``build_request`` / ``parse_response`` tests live in
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -245,6 +246,26 @@ async def test_call_model_success_via_patched_transport(monkeypatch):
     # The real adapter built the request that reached the transport.
     assert captured["url"] == "https://api.openai.com/v1/chat/completions"
     assert captured["headers"]["Authorization"] == "Bearer sk-test"
+
+
+async def test_call_model_success_assigns_stable_conclave_answer_identity(monkeypatch):
+    """Successful responses receive deterministic, opaque Conclave-owned IDs."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("CONCLAVE_CONFIG", "/nonexistent/conclave.yml")
+
+    async def fake_post_json(url, headers, json_body, timeout):
+        return 200, {"choices": [{"message": {"content": "sensitive answer text"}}]}
+
+    monkeypatch.setattr("conclave.transport.post_json", fake_post_json)
+    messages = [{"role": "user", "content": "hi"}]
+
+    first = await call_model("openai", "openai/gpt-4.1", messages)
+    second = await call_model("openai", "openai/gpt-4.1", messages)
+
+    assert first.ok and second.ok
+    assert first.answer_id == second.answer_id
+    assert re.fullmatch(r"ca_[0-9a-f]{24}", first.answer_id or "")
+    assert "sensitive" not in (first.answer_id or "")
 
 
 async def test_call_model_transport_error_becomes_model_answer_error(monkeypatch):

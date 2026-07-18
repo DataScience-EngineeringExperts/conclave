@@ -227,13 +227,31 @@ async def test_call_model_stream_without_contract_leaves_body_free_prose(
     assert "response_format" not in captured["body"]
 
 
+async def test_call_model_stream_success_assigns_stable_answer_identity(
+    monkeypatch, mock_stream_client
+) -> None:
+    """The streaming provider path shares the successful-answer ID contract."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("CONCLAVE_CONFIG", "/nonexistent/conclave.yml")
+    captured = {}
+    mock_stream_client(_openai_stream_handler(captured))
+
+    first = await _drain_stream("openai", "openai/gpt-4.1")
+    second = await _drain_stream("openai", "openai/gpt-4.1")
+
+    assert first is not None and second is not None
+    assert first.ok and second.ok
+    assert first.answer_id == second.answer_id
+    assert (first.answer_id or "").startswith("ca_")
+
+
 # --------------------------------------------------------------------------- #
 # extract_verdict now requests native structured output (+ keeps the fallback)
 # --------------------------------------------------------------------------- #
 
 
 def _answer(name: str, text: str) -> ModelAnswer:
-    """A responding member answer with a stable evidence id."""
+    """A responding member answer with a stable within-run answer id."""
     return ModelAnswer(name=name, model_id=f"{name}/m", answer=text, answer_id=f"{name}-1")
 
 
@@ -250,7 +268,16 @@ async def test_extract_verdict_passes_native_output_contract(monkeypatch):
 
     captured = {}
 
-    async def fake_call_model(name, model_id, messages, *, config=None, output_contract=None):
+    async def fake_call_model(
+        name,
+        model_id,
+        messages,
+        *,
+        temperature=0.7,
+        timeout=120.0,
+        config=None,
+        output_contract=None,
+    ):
         captured["output_contract"] = output_contract
         return ModelAnswer(name=name, model_id=model_id, answer="not json")
 
@@ -272,6 +299,19 @@ async def test_extract_verdict_passes_native_output_contract(monkeypatch):
     assert result.verdict is None
 
 
+def test_verdict_prompt_describes_ids_as_answer_provenance_not_external_evidence() -> None:
+    """Compatibility field IDs trace council answers; they do not prove facts."""
+    import conclave.verdict_synthesis as vs
+
+    answers = [_answer("a", "yes"), _answer("b", "no")]
+    messages = vs._build_messages("decide?", answers)
+    rendered = "\n".join(message["content"] for message in messages)
+
+    assert "within-run answer provenance" in rendered
+    assert "answer id:" in rendered
+    assert "evidence id:" not in rendered
+
+
 async def test_extract_verdict_still_degrades_gracefully_on_bad_json(monkeypatch, conclave_caplog):
     """Native contract is additive: bad JSON still yields verdict=None gracefully.
 
@@ -281,7 +321,16 @@ async def test_extract_verdict_still_degrades_gracefully_on_bad_json(monkeypatch
     """
     import conclave.verdict_synthesis as vs
 
-    async def fake_call_model(name, model_id, messages, *, config=None, output_contract=None):
+    async def fake_call_model(
+        name,
+        model_id,
+        messages,
+        *,
+        temperature=0.7,
+        timeout=120.0,
+        config=None,
+        output_contract=None,
+    ):
         return ModelAnswer(name=name, model_id=model_id, answer="not json")
 
     monkeypatch.setattr(vs, "call_model", fake_call_model)

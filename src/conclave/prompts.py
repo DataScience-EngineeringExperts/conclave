@@ -8,6 +8,8 @@ here belong to the debate and adversarial modes.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from .models import ModelAnswer
 
 # Version identifier for the synthesis/judge prompt *set*. Bump this string
@@ -20,6 +22,11 @@ from .models import ModelAnswer
 # than silently absorbing a prompt change as a quality regression. The value is
 # opaque (a date-stamped tag); only equality/inequality is meaningful.
 SYNTHESIS_PROMPT_VERSION = "2026-06-29"
+
+# Elite's prompt version is independent from the orchestration version owned by
+# ``models.ELITE_PROTOCOL_VERSION``. Bump this whenever the critic or revision
+# wording below changes; both versions are part of result-cache identity.
+ELITE_PROMPT_VERSION = "1"
 
 # Stable position-based labels used to anonymize peers in debate rounds 2..N.
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -57,6 +64,28 @@ JUDGE_SYSTEM = (
     "ones that are wrong or overstated, and issue a verdict. Then produce the "
     "single strengthened final answer that survives the critiques. Rely only on "
     "the material provided; do not invent positions."
+)
+
+ELITE_CRITIC_SYSTEM = (
+    "You are a claim auditor in an elite decision council. Independently "
+    "stress-test the anonymized answers against the original prompt. Organize "
+    "your audit into three explicit categories: SUPPORTED claims, CONFLICTING "
+    "claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in "
+    "the answers from assumptions that would require outside verification. Do "
+    "not invent citations, sources, quotations, measurements, or facts. The "
+    "displayed answer IDs provide within-run answer provenance only; they do "
+    "not prove any claim against external sources. Cite those IDs when identifying "
+    "a claim. Preserve meaningful "
+    "minority positions and be precise about uncertainty."
+)
+
+ELITE_REVISION_SYSTEM = (
+    "You are revising your independent answer after a claim audit by an "
+    "elite decision council. Use the anonymized initial panel and critiques to "
+    "correct unsupported claims, resolve conflicts where the supplied material "
+    "permits, and clearly mark externally unverified claims. Do not invent "
+    "citations, sources, quotations, measurements, or facts. Produce a complete "
+    "standalone answer to the original prompt, not a description of your edits."
 )
 
 
@@ -143,4 +172,44 @@ def judge_user(prompt: str, proposer: str, proposal_text: str, critique_blocks: 
         f"PROPOSAL (from {proposer}):\n{proposal_text}\n\n"
         f"CRITIQUES:\n\n{critique_blocks}\n\n"
         "Now issue your verdict and the strengthened final answer."
+    )
+
+
+def _elite_artifact_block(answers: Sequence[ModelAnswer], phase: str) -> str:
+    """Render successful artifacts with stable position aliases and safe IDs."""
+    parts: list[str] = []
+    for index, answer in enumerate(answer for answer in answers if answer.ok):
+        alias = LETTERS[index]
+        answer_id = answer.answer_id or f"{phase}-{index + 1:03d}"
+        parts.append(f"### Model {alias} {phase} (Answer ID: {answer_id})\n{answer.answer}")
+    return "\n\n".join(parts)
+
+
+def elite_critic_user(prompt: str, answers: Sequence[ModelAnswer]) -> str:
+    """Build an anonymized claim-audit prompt with within-run answer IDs."""
+    panel = _elite_artifact_block(answers, "initial answer")
+    return (
+        f"Original prompt:\n{prompt}\n\n"
+        f"Anonymized initial panel:\n\n{panel}\n\n"
+        "Audit the panel using the required claim categories."
+    )
+
+
+def elite_revision_user(
+    prompt: str,
+    original_answer: ModelAnswer,
+    answers: Sequence[ModelAnswer],
+    critiques: Sequence[ModelAnswer],
+) -> str:
+    """Build an anonymized elite revision prompt with all prior artifacts."""
+    original_id = original_answer.answer_id or "initial-original"
+    initial_panel = _elite_artifact_block(answers, "initial answer")
+    critique_panel = _elite_artifact_block(critiques, "critique")
+    return (
+        f"Original prompt:\n{prompt}\n\n"
+        f"Your original answer (Answer ID: {original_id}):\n"
+        f"{original_answer.answer or ''}\n\n"
+        f"Anonymized initial panel:\n\n{initial_panel}\n\n"
+        f"Anonymized claim audits:\n\n{critique_panel}\n\n"
+        "Now provide your claim-audit-aware revised answer."
     )

@@ -6,6 +6,11 @@ downstream library consumer (e.g. mcp-warden). Keep field names stable.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Iterable
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from .verdict import (
@@ -14,6 +19,70 @@ from .verdict import (
     MinorityReport,
     ProviderVote,
 )
+
+ELITE_PROTOCOL_VERSION = "elite_v1"
+ELITE_MIN_RESPONDERS = 3
+
+DecisionReadiness = Literal["ready", "not_ready", "indeterminate"]
+
+_ANSWER_ID_VERSION = "answer_v1"
+
+
+def stable_answer_id(name: str, model_id: str, answer: str) -> str:
+    """Return an opaque, deterministic identity for one successful answer.
+
+    The digest is derived only from immutable, non-credential response facts.
+    Raw answer text and model metadata are never exposed in the identifier.
+    Latency and usage are intentionally excluded because they can change across
+    equivalent calls and cache reconstruction.
+    """
+    identity = json.dumps(
+        {
+            "version": _ANSWER_ID_VERSION,
+            "name": name,
+            "model_id": model_id,
+            "answer": answer,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return f"ca_{hashlib.sha256(identity).hexdigest()[:24]}"
+
+
+def derive_phase_answer_id(
+    answer: ModelAnswer,
+    phase: str,
+    *,
+    parent_answer_ids: Iterable[str] = (),
+) -> ModelAnswer:
+    """Assign an idempotent phase-specific identity to a successful artifact.
+
+    Elite critiques and revisions transform earlier answers. Their IDs therefore
+    include the phase and the sorted IDs of the within-run parent artifacts while
+    remaining opaque and secret-free. Failed answers remain unidentified.
+    """
+    if not answer.ok:
+        return answer
+    prefix = f"ca_{phase}_"
+    if answer.answer_id and answer.answer_id.startswith(prefix):
+        return answer
+    base_id = answer.answer_id or stable_answer_id(
+        answer.name, answer.model_id, answer.answer or ""
+    )
+    identity = json.dumps(
+        {
+            "version": _ANSWER_ID_VERSION,
+            "phase": phase,
+            "base_answer_id": base_id,
+            "parent_answer_ids": sorted(parent_answer_ids),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    answer.answer_id = f"{prefix}{hashlib.sha256(identity).hexdigest()[:24]}"
+    return answer
+
 
 # NOTE: ``ModelHarnessManifest`` is imported at the BOTTOM of this module (just
 # before the ``model_rebuild()`` calls), not here. ``manifest`` imports
@@ -56,9 +125,10 @@ class ModelAnswer(BaseModel):
         latency_s: Wall-clock seconds for the call.
         usage: Token usage if reported by the provider.
         error: Error message if the call failed, else ``None``.
-        answer_id: Stable id assigned by conclave (not emitted by the model), used
-            to back ``evidence_answer_ids`` on the verdict's positions/conflicts
-            (CAC-01 result contract v2). ``None`` until conclave assigns it.
+        answer_id: Stable opaque id assigned by Conclave (not emitted by the
+            model). It provides within-run answer provenance and backs the legacy
+            compatibility field ``evidence_answer_ids``; it is not external
+            evidence that a claim is true. Failed calls keep ``None``.
         warnings: Non-fatal notes about this answer (e.g. structured-output repair
             applied). Empty by default. Distinct from ``error``, which marks the
             whole call as failed.
@@ -82,6 +152,20 @@ class ModelAnswer(BaseModel):
     def latency_ms(self) -> float:
         """Call latency in milliseconds, derived from :attr:`latency_s`."""
         return self.latency_s * 1000.0
+
+
+class EliteResult(BaseModel):
+    """Protocol completion and independently adjudicated decision readiness."""
+
+    protocol_version: str = ELITE_PROTOCOL_VERSION
+    required_responders: int = Field(default=ELITE_MIN_RESPONDERS, ge=ELITE_MIN_RESPONDERS)
+    completed: bool = False
+    failure_reason: str | None = None
+    decision_readiness: DecisionReadiness = "indeterminate"
+    readiness_reasons: list[str] = Field(default_factory=lambda: ["adjudication.not_evaluated"])
+    initial_answers: list[ModelAnswer] = Field(default_factory=list)
+    critiques: list[ModelAnswer] = Field(default_factory=list)
+    revisions: list[ModelAnswer] = Field(default_factory=list)
 
 
 class StreamEvent(BaseModel):
@@ -284,6 +368,7 @@ class CouncilResult(BaseModel):
     rounds: list[DebateRound] = Field(default_factory=list)
     adversarial: AdversarialResult | None = None
     vote: VoteResult | None = None
+    elite: EliteResult | None = None
     cached: bool = False
     converged: bool = False
     convergence_score: float | None = None

@@ -26,7 +26,7 @@ import pytest
 import conclave.council as council_mod
 from conclave import Council
 from conclave import cache as cache_mod
-from conclave.config import ConclaveConfig
+from conclave.config import ConclaveConfig, CustomEndpoint
 from conclave.models import ModelAnswer
 from tests.conftest import make_response
 
@@ -68,7 +68,9 @@ def counting_call_model(monkeypatch):
     """
     counter = {"n": 0}
 
-    async def fake_call_model(name, model_id, messages, *, temperature=0.7, timeout=120.0):
+    async def fake_call_model(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None
+    ):
         counter["n"] += 1
         await asyncio.sleep(0)
         # Synthesizer call is the 2-message (system+user) one.
@@ -191,6 +193,82 @@ async def test_changing_mode_misses(monkeypatch, counting_call_model, cache_home
     assert r.cached is False
 
 
+async def test_elite_cache_hit_preserves_artifacts_and_isolated_mode(
+    monkeypatch, counting_call_model, cache_home
+):
+    _set_keys(monkeypatch)
+    council = Council(
+        models=["grok", "gemini", "perplexity"],
+        synthesizer="claude",
+        config=_config(),
+        cache=True,
+        extract_verdict=False,
+    )
+
+    live = await council.elite("same prompt")
+    calls_after_live = counting_call_model["n"]
+    cached = await council.elite("same prompt")
+
+    assert live.cached is False
+    assert live.elite is not None
+    assert live.elite.completed is True
+    assert live.elite.decision_readiness == "indeterminate"
+    assert live.elite.readiness_reasons == ["adjudication.disabled"]
+    assert cached.cached is True
+    assert cached.elite == live.elite
+    assert counting_call_model["n"] == calls_after_live
+
+    normal = await council.ask("same prompt")
+
+    assert normal.cached is False
+    assert normal.elite is None
+    assert counting_call_model["n"] > calls_after_live
+    assert len(list(cache_home.glob("*.json"))) == 2
+
+
+def test_current_cache_shape_without_readiness_defaults_indeterminate(cache_home):
+    """A legacy Elite payload in the current envelope can never replay as ready."""
+    from conclave.models import CouncilResult, EliteResult
+
+    key = "legacy-elite-readiness"
+    cache_home.mkdir(parents=True, exist_ok=True)
+    result = CouncilResult(
+        prompt="q",
+        mode="elite",
+        elite=EliteResult(completed=True),
+    ).model_dump(mode="json")
+    del result["elite"]["decision_readiness"]
+    del result["elite"]["readiness_reasons"]
+    envelope = {
+        "cache_format_version": cache_mod.CACHE_FORMAT_VERSION,
+        "result": result,
+    }
+    (cache_home / f"{key}.json").write_text(json.dumps(envelope), encoding="utf-8")
+
+    cached = cache_mod.load(key)
+
+    assert cached is not None
+    assert cached.elite is not None
+    assert cached.elite.completed is True
+    assert cached.elite.decision_readiness == "indeterminate"
+    assert cached.elite.readiness_reasons == ["adjudication.not_evaluated"]
+
+
+def test_previous_cache_format_payload_is_a_miss(cache_home):
+    """Version 2 identities cannot replay after exact-prompt keying ships."""
+    from conclave.models import CouncilResult
+
+    key = "version-two-entry"
+    cache_home.mkdir(parents=True, exist_ok=True)
+    envelope = {
+        "cache_format_version": "2",
+        "result": CouncilResult(prompt="q", mode="raw").model_dump(mode="json"),
+    }
+    (cache_home / f"{key}.json").write_text(json.dumps(envelope), encoding="utf-8")
+
+    assert cache_mod.load(key) is None
+
+
 async def test_changing_model_id_misses(monkeypatch, counting_call_model, cache_home):
     """Same friendly name but a different resolved model id -> different key."""
     _set_keys(monkeypatch)
@@ -306,7 +384,7 @@ def test_make_key_is_deterministic_and_order_sensitive():
     assert len(k1) == 64  # sha256 hex
 
 
-def test_make_key_normalizes_whitespace():
+def test_make_key_preserves_exact_prompt_whitespace():
     common = dict(
         mode="raw",
         members=[("a", "x/1")],
@@ -314,8 +392,8 @@ def test_make_key_normalizes_whitespace():
         synthesizer_model_id=None,
         temperature=0.7,
     )
-    assert cache_mod.make_key(prompt="a  b\n c", **common) == cache_mod.make_key(
-        prompt=" a b c ", **common
+    assert cache_mod.make_key(prompt="a\n  b", **common) != cache_mod.make_key(
+        prompt="a b", **common
     )
 
 
@@ -342,6 +420,214 @@ def test_make_key_debate_converge_threshold_differs(monkeypatch):
     assert k_on != k_on2  # different thresholds -> different keys
     # Determinism preserved.
     assert k_off == cache_mod.make_key(converge_threshold=None, **base)
+
+
+@pytest.mark.parametrize(
+    ("override", "value"),
+    [
+        ("cache_format_version", "next-cache-format"),
+        ("protocol_version", "next-elite-protocol"),
+        ("synthesis_prompt_version", "next-synthesis-prompt"),
+        ("elite_prompt_version", "next-elite-prompt"),
+        ("verdict_schema_version", "next-verdict-schema"),
+        ("verdict_prompt_version", "next-verdict-prompt"),
+        ("timeout", 45.0),
+        ("extract_verdict", False),
+        ("source_bundle_digest", "sha256:grounded-source-bundle"),
+    ],
+)
+def test_make_key_varies_for_every_protocol_identity_dimension(override, value):
+    """Every output-affecting protocol/version setting must invalidate reuse."""
+    base = dict(
+        prompt="Should we ship?",
+        mode="elite",
+        members=[("grok", "xai/grok-4.3"), ("gemini", "gemini/gemini-2.5-pro")],
+        synthesizer="claude",
+        synthesizer_model_id="anthropic/claude-sonnet-4-6",
+        temperature=0.7,
+        timeout=120.0,
+        extract_verdict=True,
+        source_bundle_digest=None,
+    )
+    changed = dict(base)
+    changed[override] = value
+
+    assert cache_mod.make_key(**base) != cache_mod.make_key(**changed)
+
+
+def test_cache_identity_covers_roster_mode_params_and_safe_custom_endpoint_config():
+    """Roster, mode parameters, and endpoint routing all affect identity."""
+    base = dict(
+        prompt="pick one",
+        mode="vote",
+        members=[("a", "custom/model-a")],
+        synthesizer="judge",
+        synthesizer_model_id="custom/judge-a",
+        temperature=0.2,
+        timeout=30.0,
+        extract_verdict=True,
+        choices=["A", "B"],
+        endpoint_urls={"custom": "https://gateway.example/v1/chat?api-version=2026-01"},
+    )
+
+    assert cache_mod.make_key(**base) != cache_mod.make_key(
+        **{**base, "members": [("a", "custom/model-b")]}
+    )
+    assert cache_mod.make_key(**base) != cache_mod.make_key(**{**base, "choices": ["A", "B", "C"]})
+    assert cache_mod.make_key(**base) != cache_mod.make_key(
+        **{
+            **base,
+            "endpoint_urls": {"custom": "https://other.example/v1/chat?api-version=2026-01"},
+        }
+    )
+    assert cache_mod.make_key(**base) != cache_mod.make_key(
+        **{
+            **base,
+            "endpoint_urls": {"custom": "https://gateway.example/v1/chat?api-version=2027-01"},
+        }
+    )
+
+
+def test_cache_identity_never_contains_or_depends_on_endpoint_credentials():
+    """Credential-bearing URL components and API-key values are non-identity."""
+    secret = "sk-CONCLAVE-ENDPOINT-SECRET-0123456789"
+    safe_url = "https://gateway.example/v1/chat?api-version=2026-01"
+    credentialed_url = (
+        f"https://user:{secret}@gateway.example/v1/chat?"
+        f"api-version=2026-01&api_key={secret}&key={secret}&sig={secret}&"
+        f"code={secret}&access_token={secret}&auth={secret}&password={secret}&"
+        f"label={secret}#private-fragment"
+    )
+    common = dict(
+        prompt="q",
+        mode="elite",
+        members=[("custom", "custom/model")],
+        synthesizer="custom",
+        synthesizer_model_id="custom/model",
+        temperature=0.7,
+    )
+
+    safe_identity = cache_mod.build_identity(**common, endpoint_urls={"custom": safe_url})
+    credentialed_identity = cache_mod.build_identity(
+        **common, endpoint_urls={"custom": credentialed_url}
+    )
+    blob = json.dumps(credentialed_identity, sort_keys=True)
+
+    assert credentialed_identity == safe_identity
+    assert secret not in blob
+    assert credentialed_url not in blob
+    assert "api_key" not in blob
+
+
+def test_cache_identity_fingerprints_prompt_and_source_inputs():
+    """Potentially sensitive prompt/source content never appears in identity."""
+    secret = "sk_FAKE_PROMPT_SECRET_0123456789"
+    identity = cache_mod.build_identity(
+        prompt=f"analyze {secret}",
+        mode="elite",
+        members=[("a", "x/1")],
+        synthesizer="a",
+        synthesizer_model_id="x/1",
+        temperature=0.7,
+        source_bundle_digest=f"malformed-digest-{secret}",
+    )
+
+    blob = json.dumps(identity, sort_keys=True)
+    assert secret not in blob
+    assert "analyze" not in blob
+    assert "malformed-digest" not in blob
+
+
+def test_council_threads_resolved_identity_settings_into_cache_key():
+    """Council cache identity includes resolved endpoint and runtime settings."""
+    cfg = _config()
+    cfg.models["custom"] = "private/model-a"
+    cfg.endpoints["private"] = CustomEndpoint(
+        completions_url="https://gateway.example/v1/chat?api-version=2026-01",
+        env_var="PRIVATE_API_KEY",
+    )
+    base = Council(
+        models=["custom"],
+        synthesizer="custom",
+        config=cfg,
+        timeout=30.0,
+        extract_verdict=True,
+        source_bundle_digest="bundle-a",
+    )
+    base_key = base._cache_key("q", "elite")
+
+    changed_timeout = Council(
+        models=["custom"],
+        synthesizer="custom",
+        config=cfg,
+        timeout=45.0,
+        extract_verdict=True,
+        source_bundle_digest="bundle-a",
+    )
+    changed_verdict = Council(
+        models=["custom"],
+        synthesizer="custom",
+        config=cfg,
+        timeout=30.0,
+        extract_verdict=False,
+        source_bundle_digest="bundle-a",
+    )
+    changed_source = Council(
+        models=["custom"],
+        synthesizer="custom",
+        config=cfg,
+        timeout=30.0,
+        extract_verdict=True,
+        source_bundle_digest="bundle-b",
+    )
+    changed_cfg = cfg.model_copy(deep=True)
+    changed_cfg.endpoints[
+        "private"
+    ].completions_url = "https://other.example/v1/chat?api-version=2026-01"
+    changed_endpoint = Council(
+        models=["custom"],
+        synthesizer="custom",
+        config=changed_cfg,
+        timeout=30.0,
+        extract_verdict=True,
+        source_bundle_digest="bundle-a",
+    )
+
+    assert base_key != changed_timeout._cache_key("q", "elite")
+    assert base_key != changed_verdict._cache_key("q", "elite")
+    assert base_key != changed_source._cache_key("q", "elite")
+    assert base_key != changed_endpoint._cache_key("q", "elite")
+
+
+def test_malformed_endpoint_port_degrades_to_safe_deterministic_fingerprint():
+    """A malformed configured port cannot crash cache identity construction."""
+    raw_url = "https://gateway.example:not-a-port/v1/chat?api-version=2026-01"
+    identity = cache_mod.build_identity(
+        prompt="q",
+        mode="elite",
+        members=[("custom", "custom/model")],
+        synthesizer="custom",
+        synthesizer_model_id="custom/model",
+        temperature=0.7,
+        endpoint_urls={"custom": raw_url},
+    )
+
+    blob = json.dumps(identity, sort_keys=True)
+    assert raw_url not in blob
+    assert len(identity["endpoint_fingerprints"]["custom"]) == 64
+
+
+def test_old_unversioned_cache_payload_is_a_miss(cache_home):
+    """Pre-envelope cache files are not replayed against a new protocol."""
+    key = "legacy"
+    cache_home.mkdir(parents=True, exist_ok=True)
+    legacy = ModelAnswer(name="a", model_id="x/1", answer="old")
+    from conclave.models import CouncilResult
+
+    old_result = CouncilResult(prompt="q", answers=[legacy])
+    (cache_home / f"{key}.json").write_text(old_result.model_dump_json(), encoding="utf-8")
+
+    assert cache_mod.load(key) is None
 
 
 async def test_cache_converge_vs_fixed_no_collision(cache_home, monkeypatch, patch_call_model):
