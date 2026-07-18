@@ -1,7 +1,7 @@
 # H1 Budget-Matched Evaluation Design
 
-**Linear:** DSE-708  
-**Status:** Approved direction; implementation begins offline  
+**Linear:** DSE-708
+**Status:** Approved direction; implementation begins offline
 **Base:** Elite H0 commit `23e8fce437172c040084d31dcea4ed5737ebae2a`
 
 ## Decision

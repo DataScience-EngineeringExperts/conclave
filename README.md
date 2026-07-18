@@ -12,11 +12,11 @@ It is **library-first** (the CLI is a thin shell over the same `Council` you imp
 returns **structured results** (per-model latency, token usage, and error capture), and is
 **partial-failure resilient** — one provider erroring never aborts the run. Keys are
 **bring-your-own**, referenced by environment-variable *name* only — never stored or
-logged. It ships six modes: **synthesize** (merge answers into one), **raw** (no merge),
+logged. Published v1.1 ships five modes: **synthesize** (merge answers into one), **raw** (no merge),
 **debate** (multi-round, members revise after seeing peers' anonymized answers), and
-**adversarial** (propose → refute → verdict), **vote** (fixed-choice tally), and
-**elite** (quality-first claim audit and revision). conclave is intentionally lightweight — a
-small council primitive, not an agent framework.
+**adversarial** (propose → refute → verdict), and **vote** (fixed-choice tally). This source
+branch also implements the unreleased **elite** quality-first claim-audit and revision mode.
+conclave is intentionally lightweight — a small council primitive, not an agent framework.
 
 **The v1.1 wedge — the execution-traceable council.** Decision/review synthesis runs can yield
 **a multi-model council verdict you can inspect — structured, scored for agreement, and
@@ -25,8 +25,7 @@ execution-traceable**: a
 a deterministic `consensus_score` (arithmetic over the model's clustering, *never* an
 LLM-emitted number); and a redacted `ModelHarnessManifest` recording how the run executed and
 which model produced the disagreement analysis. The verdict is **default-on**, and the manifest
-rides on **every** result — for all six modes (`synthesize`, `raw`, `debate`, `adversarial`,
-`vote`, `elite`), not just `ask`. A constrained-choice **`vote` mode** (`--mode vote --choices ...`) also
+rides on **every** released-mode result; source-only Elite results carry it too. A constrained-choice **`vote` mode** (`--mode vote --choices ...`) also
 shipped in v1.1 (CAC-09 / #3) — distinct from the verdict's `provider_votes`, which score
 free-form agreement rather than tally a fixed ballot.
 
@@ -135,14 +134,16 @@ conclave ask "Should we adopt a service mesh for 8 services?" \
 conclave ask "..." -c grok,perplexity --mode debate --json
 ```
 
-Mode flags at a glance: `--mode synthesize|raw|debate|adversarial|vote|elite`. `--rounds N`
+Published v1.1 mode flags are `--mode synthesize|raw|debate|adversarial|vote`; this source
+branch additionally exposes `--mode elite`. `--rounds N`
 (default 2) is the *maximum* round count for `debate`; `--converge-threshold FLOAT`
 (or `--converge`/`--no-converge`) optionally stops a debate early once answers
 stabilize round-over-round (off by default — `--rounds` runs in full). `--proposer
 NAME` (default: first member) applies to `adversarial`. `--choices "A,B,C"` (two or
 more) is required for `vote`. `--synthesizer/-s` overrides the synthesizer *and* the
-adversarial judge and Elite's final synthesizer. Every mode's result carries the auditable
-`ModelHarnessManifest`. Elite is currently **unreleased**; use it from this source branch until
+adversarial judge and, on this source branch, Elite's final synthesizer. Every released mode's
+result carries the auditable `ModelHarnessManifest`; source-only Elite results do too. Elite is
+currently **unreleased**; use it from this source branch until
 a future release explicitly includes it.
 
 `--council` accepts either a comma-separated list of friendly names or the name
@@ -306,8 +307,9 @@ print(result.manifest.verdict_extraction.model_id)   # which model produced the 
 print(result.manifest.secret_safety)                 # "verified_no_secrets"
 ```
 
-To opt out (e.g. for cost-sensitive runs — the verdict adds one extra synthesizer call per
-run), construct with `Council(extract_verdict=False)`; then `result.verdict` stays `None`.
+To opt out (e.g. for cost-sensitive runs — the verdict adds one initial synthesizer call and,
+when schema repair is needed, one retry), construct with `Council(extract_verdict=False)`;
+then `result.verdict` stays `None`.
 `conclave ask ... --json` already carries the full structured `verdict` and `manifest`.
 
 **How the consensus number stays honest.** The single LLM-assisted step is *clustering* the

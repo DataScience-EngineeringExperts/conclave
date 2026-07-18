@@ -254,6 +254,21 @@ def test_current_cache_shape_without_readiness_defaults_indeterminate(cache_home
     assert cached.elite.readiness_reasons == ["adjudication.not_evaluated"]
 
 
+def test_previous_cache_format_payload_is_a_miss(cache_home):
+    """Version 2 identities cannot replay after exact-prompt keying ships."""
+    from conclave.models import CouncilResult
+
+    key = "version-two-entry"
+    cache_home.mkdir(parents=True, exist_ok=True)
+    envelope = {
+        "cache_format_version": "2",
+        "result": CouncilResult(prompt="q", mode="raw").model_dump(mode="json"),
+    }
+    (cache_home / f"{key}.json").write_text(json.dumps(envelope), encoding="utf-8")
+
+    assert cache_mod.load(key) is None
+
+
 async def test_changing_model_id_misses(monkeypatch, counting_call_model, cache_home):
     """Same friendly name but a different resolved model id -> different key."""
     _set_keys(monkeypatch)
@@ -369,7 +384,7 @@ def test_make_key_is_deterministic_and_order_sensitive():
     assert len(k1) == 64  # sha256 hex
 
 
-def test_make_key_normalizes_whitespace():
+def test_make_key_preserves_exact_prompt_whitespace():
     common = dict(
         mode="raw",
         members=[("a", "x/1")],
@@ -377,8 +392,8 @@ def test_make_key_normalizes_whitespace():
         synthesizer_model_id=None,
         temperature=0.7,
     )
-    assert cache_mod.make_key(prompt="a  b\n c", **common) == cache_mod.make_key(
-        prompt=" a b c ", **common
+    assert cache_mod.make_key(prompt="a\n  b", **common) != cache_mod.make_key(
+        prompt="a b", **common
     )
 
 

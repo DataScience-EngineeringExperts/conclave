@@ -47,7 +47,7 @@ flowchart TB
         end
         subgraph verdictpipe["Verdict pipeline (v1.1 · default-on)"]
             applyverdict["_apply_verdict<br/>buffered + streaming (council.py)"]
-            extract["extract_verdict<br/>ONE call · cluster stances · repair-once · never raises (verdict_synthesis.py)"]
+            extract["extract_verdict<br/>1 initial call + up to 1 repair · cluster stances · never raises (verdict_synthesis.py)"]
             agree["agreement.position_cluster_ratio_v1<br/>DETERMINISTIC arithmetic · no difflib · never LLM-emitted (agreement.py)"]
             verdictobj["CouncilVerdict<br/>positions + evidence_answer_ids · conflicts · provider_votes · minority_reports (verdict.py)"]
             manifest["ModelHarnessManifest<br/>first-class · secret-free · phased receipts (manifest.py)"]
@@ -105,7 +105,7 @@ flowchart TB
     provider --> models
 
     council -->|"member answers or completed Elite revisions"| applyverdict
-    applyverdict -->|"synthesizer clusters stances<br/>(ONE extraction call, output_contract)"| extract
+    applyverdict -->|"synthesizer clusters stances<br/>(initial call + optional repair, output_contract)"| extract
     extract -->|"clustering"| agree
     agree -->|"consensus_score/label<br/>(arithmetic over the clustering)"| verdictobj
     extract -->|"positions · conflicts · provider_votes"| verdictobj
@@ -146,9 +146,10 @@ flowchart TB
   network boundary — `transport.post_json` (`transport.py`), one async httpx call site.
 - **The verdict pipeline is default-on and execution-traceable (PDD §4a).** Once the council has the
   member answers, `_apply_verdict` (`council.py`, run on both the buffered and streaming
-  paths, *after* the manifest exists) drives `extract_verdict` (`verdict_synthesis.py`): a
-  **single** extraction call asks the synthesizer model to *cluster* the members' stances —
-  not to re-answer, and crucially **not to emit a number**. That clustering feeds
+  paths, *after* the manifest exists) drives `extract_verdict` (`verdict_synthesis.py`): an
+  initial extraction call asks the synthesizer model to *cluster* the members' stances —
+  not to re-answer, and crucially **not to emit a number**. Invalid output permits one repair
+  call. The validated clustering feeds
   `agreement.position_cluster_ratio_v1` (`agreement.py`), which computes the `consensus_score`
   as pure **deterministic arithmetic** (largest cluster / positioned members; no `difflib`,
   never model-emitted). The assembled `CouncilVerdict` (`verdict.py`) carries positions with
@@ -160,8 +161,9 @@ flowchart TB
   (`manifest.py`) rides on **every** result — first-class, not a debug flag — recording which
   model + prompt version produced the clustering (provenance) and stamping `secret_safety`
   only after the serialized manifest is scanned clean. This is enforced as a true invariant at
-  the single chokepoint `Council._cached_run` → `_ensure_manifest`: **all six modes**
-  (`synthesize`, `raw`, `debate`, `adversarial`, `vote`, `elite`) funnel through it, so a result can
+  the single chokepoint `Council._cached_run` → `_ensure_manifest`: all five released modes
+  (`synthesize`, `raw`, `debate`, `adversarial`, `vote`) plus source-only `elite` funnel through
+  it, so a result can
   never escape without a manifest — including the zero-members early return and cache hits.
   A verdict is *optional*: open-ended
   prompts, fewer than two responding members, or extraction failure leave `verdict = None`
