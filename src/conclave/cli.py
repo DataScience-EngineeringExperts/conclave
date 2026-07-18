@@ -21,6 +21,7 @@ from rich.table import Table
 from . import __version__
 from .config import load_config
 from .council import Council
+from .eval_cli import app as eval_app
 from .models import CouncilResult, StreamEvent
 from .registry import DEFAULT_MODELS, key_present, key_source
 
@@ -28,6 +29,7 @@ app = typer.Typer(
     add_completion=False,
     help="Bring-your-own-keys multi-model council. Fan a prompt to N models.",
 )
+app.add_typer(eval_app, name="eval")
 console = Console()
 err_console = Console(stderr=True)
 

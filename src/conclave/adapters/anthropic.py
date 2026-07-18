@@ -120,6 +120,7 @@ class AnthropicAdapter:
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
+        max_output_tokens: int | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the Messages POST, hoisting system out of the message array.
 
@@ -157,7 +158,7 @@ class AnthropicAdapter:
 
         body: dict = {
             "model": self._bare_model(model_id),
-            "max_tokens": self.max_tokens,
+            "max_tokens": max_output_tokens if max_output_tokens is not None else self.max_tokens,
             "messages": turns,
         }
         if temperature is not None:
@@ -261,6 +262,7 @@ class AnthropicAdapter:
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
+        max_output_tokens: int | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the streaming POST: ``build_request`` + ``stream: true``.
 
@@ -271,7 +273,13 @@ class AnthropicAdapter:
         fragments. See :meth:`ProviderAdapter.stream_request`.
         """
         url, headers, body = self.build_request(
-            model_id, messages, temperature, timeout, api_key, output_contract
+            model_id,
+            messages,
+            temperature,
+            timeout,
+            api_key,
+            output_contract=output_contract,
+            max_output_tokens=max_output_tokens,
         )
         body["stream"] = True
         return url, headers, body

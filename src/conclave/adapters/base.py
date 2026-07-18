@@ -274,6 +274,7 @@ class ProviderAdapter(Protocol):
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
+        max_output_tokens: int | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build ``(url, headers, json_body)`` for this provider.
 
@@ -292,6 +293,8 @@ class ProviderAdapter(Protocol):
                 ``responseSchema`` / Anthropic tool ``input_schema``) is deferred
                 to the CAC-02-OAI/ANT/GEM tickets; today every adapter accepts and
                 ignores it.
+            max_output_tokens: Optional per-call output ceiling. ``None`` keeps
+                the adapter's existing provider default unchanged.
 
         Returns:
             A ``(url, headers, json_body)`` tuple ready for ``post_json``.
@@ -322,6 +325,7 @@ class ProviderAdapter(Protocol):
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
+        max_output_tokens: int | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build ``(url, headers, json_body)`` for a STREAMING request (issue #7).
 

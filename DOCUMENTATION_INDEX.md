@@ -30,6 +30,8 @@ the canonical authority spec on top of those.
 | Doc | Path | Purpose |
 |-----|------|---------|
 | **Decision Quality Roadmap** | [`docs/plans/2026-07-17-decision-quality-roadmap.md`](docs/plans/2026-07-17-decision-quality-roadmap.md) | H0-H4 prove-it roadmap: Elite correctness, randomized ablations, source-grounded Decision Briefs, buyer pull, outcome learning, old-backlog disposition, demand gates, and kill criteria. |
+| **H1 Evaluation Design** | [`docs/plans/2026-07-17-h1-budget-matched-evaluation-design.md`](docs/plans/2026-07-17-h1-budget-matched-evaluation-design.md) | DSE-708 experimental boundary, six frozen conditions, replay, blinding, and failure-inclusive analysis. |
+| **H1 Evaluation Plan** | [`docs/plans/2026-07-17-h1-budget-matched-evaluation.md`](docs/plans/2026-07-17-h1-budget-matched-evaluation.md) | TDD delivery plan for the offline, budget-matched evaluation substrate. |
 
 ---
 
@@ -60,6 +62,8 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 | Config | [`src/conclave/config.py`](src/conclave/config.py) | Loads/merges `~/.conclave/config.yml` over defaults; resolves model ids and named/CSV councils; parses the `endpoints:` section (custom OpenAI-compatible providers). |
 | Models | [`src/conclave/models.py`](src/conclave/models.py) | Stable Pydantic contract, including `EliteResult` phase artifacts and backward-compatible `CouncilResult.elite`. |
 | CLI | [`src/conclave/cli.py`](src/conclave/cli.py) | Five released `conclave ask` modes plus source-only Elite and `providers`; Elite exits 1 unless decision readiness is `ready`, emits full JSON before failure, and rejects streaming. |
+| Experimental evals | [`src/conclave/evals/`](src/conclave/evals/) | Versioned DSE-708 planning, strict replay, failure-inclusive running, blinding, scoring, and exploratory reports; no product-quality claim. |
+| Eval CLI | [`src/conclave/eval_cli.py`](src/conclave/eval_cli.py) | Offline-only `conclave eval plan/run/blind/report`; `run` validates replay artifacts and cannot call providers. |
 | Logging | [`src/conclave/logging.py`](src/conclave/logging.py) | Logger factory; stderr; verbosity via `CONCLAVE_LOG_LEVEL` (default `WARNING`). |
 
 ## Tests
@@ -74,6 +78,7 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 | Provider highway tests | [`tests/test_providers.py`](tests/test_providers.py) | `resolve_adapter` (built-in prefixes, per-provider URLs, custom endpoints, unknown-prefix raise), end-to-end `call_model`, and `redact()` (bearer/`sk-`/env-var-value/`x-api-key` scrubbing; pre-redacted provider errors). |
 | Registry/config tests | [`tests/test_registry_config.py`](tests/test_registry_config.py) | Name resolution, key-presence logic, config merge. |
 | CLI tests | [`tests/test_cli.py`](tests/test_cli.py) | Typer `CliRunner`: exit-code contract (0 usable result and ready Elite / 1 zero-usable or non-ready Elite / 2 usage error), `--json` payload + exit code, human renderers per mode, `providers` table never prints secrets, aclose lifecycle. |
+| Eval tests | [`tests/evals/`](tests/evals/) | Frozen matrix, replay fail-closed behavior, runner denominators, blinding, scoring, reporting, and offline CLI. |
 | Transport tests | [`tests/test_transport.py`](tests/test_transport.py) | `post_json` via httpx `MockTransport`: success/error-status/non-JSON fallback, timeout & connect/HTTP errors → `TransportError` (key never leaks), client reuse/pooling, aclose idempotency. |
 | Streaming tests | [`tests/test_streaming.py`](tests/test_streaming.py) | Per-adapter SSE via `MockTransport` (openai-compat/anthropic/gemini): incremental chunks + assembled answer == concatenation == buffered result; mid-stream malformed-frame/connection-drop/non-2xx → error set with partial text preserved (never raises); key redaction in stream errors; buffered `ask()` never opens a stream; `Council.ask_stream` interleaving + terminal `done` shape; CLI `--stream` smoke + exit-code contract + debate rejection; `--stream` + cache one-shot replay. |
 | Logging tests | [`tests/test_logging.py`](tests/test_logging.py) | `CONCLAVE_LOG_LEVEL` resolution (default `WARNING`, case-insensitive, unknown → `WARNING`), factory contract, one-shot configuration. |
@@ -107,6 +112,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 
 | Date | Change |
 |------|--------|
+| 2026-07-17 | Added the experimental DSE-708 offline evaluation substrate and `conclave eval` artifact workflow; no live study or quality claim. |
 | 2026-07-17 | Reframed the product roadmap around empirically proven decision quality: narrowed current claims to execution traceability, identified answer IDs as internal provenance rather than external evidence, gated Elite merge on H0 correctness, and added H1-H4 evidence, buyer, and outcome gates. |
 | 2026-07-17 | Documented the implemented-but-unreleased Elite Decision Protocol: fixed three-success gates, initial/claim-audit/revision artifacts, existing final verdict, phased receipts, failure semantics, cost/latency tradeoff, and no streaming. |
 | 2026-07-13 | **Manifest-on-every-result invariant fix + doc reconciliation.** `ModelHarnessManifest` now attaches on all five modes (was `None` for `debate`/`adversarial`/`vote`) via a single-site fix at `Council._cached_run` → new `_ensure_manifest`; regression tests in `tests/test_manifest_all_modes.py`. Docs corrected so the manifest-on-every-result claim is accurate and the `vote` mode is documented as **shipped** (CAC-09 / #3), not "absorbed" — across README, `SYSTEM_CONTEXT_DIAGRAM.md`, PDD (§1/§3/§4a/§8/§9/§12), and `CHANGELOG.md` (`[Unreleased]`). Verdict scope unchanged (still `synthesize`/`ask`-only; not layered on `adversarial`). |

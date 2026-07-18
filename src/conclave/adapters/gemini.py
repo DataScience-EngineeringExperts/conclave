@@ -290,6 +290,7 @@ class GeminiAdapter:
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
+        max_output_tokens: int | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the generateContent POST.
 
@@ -320,7 +321,11 @@ class GeminiAdapter:
             gemini_role = _ROLE_MAP.get(role, "user")
             contents.append({"role": gemini_role, "parts": [{"text": content}]})
 
-        generation_config: dict = {"maxOutputTokens": self.max_output_tokens}
+        generation_config: dict = {
+            "maxOutputTokens": (
+                max_output_tokens if max_output_tokens is not None else self.max_output_tokens
+            )
+        }
         if temperature is not None:
             generation_config["temperature"] = temperature
         # Conditional structured-output injection (no-op when contract is None,
@@ -367,6 +372,7 @@ class GeminiAdapter:
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
+        max_output_tokens: int | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the streaming POST against ``streamGenerateContent?alt=sse``.
 
@@ -380,7 +386,13 @@ class GeminiAdapter:
         # output_contract flows into build_request, which performs the
         # capability-gated responseMimeType/responseSchema injection.
         _url, headers, body = self.build_request(
-            model_id, messages, temperature, timeout, api_key, output_contract
+            model_id,
+            messages,
+            temperature,
+            timeout,
+            api_key,
+            output_contract=output_contract,
+            max_output_tokens=max_output_tokens,
         )
         model = self._bare_model(model_id)
         url = f"{GEMINI_BASE}/{model}:streamGenerateContent?alt=sse"

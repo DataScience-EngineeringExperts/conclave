@@ -132,6 +132,7 @@ async def call_model(
     timeout: float = 120.0,
     config: ConclaveConfig | None = None,
     output_contract: OutputContract | None = None,
+    max_output_tokens: int | None = None,
 ) -> ModelAnswer:
     """Call a single model and return a structured :class:`ModelAnswer`.
 
@@ -158,6 +159,8 @@ async def call_model(
             ``input_schema`` / Gemini ``responseSchema``) and degrades gracefully on
             providers that cannot enforce it. ``None`` (the default) leaves the
             request body byte-for-byte unchanged -- the current free-prose behavior.
+        max_output_tokens: Optional per-call output-token ceiling. ``None`` keeps
+            the adapter's existing request body and provider default unchanged.
 
     Returns:
         A ``ModelAnswer`` with either ``answer`` populated or ``error`` set.
@@ -185,7 +188,13 @@ async def call_model(
 
     try:
         url, headers, body = adapter.build_request(
-            model_id, messages, temperature, timeout, api_key, output_contract=output_contract
+            model_id,
+            messages,
+            temperature,
+            timeout,
+            api_key,
+            output_contract=output_contract,
+            max_output_tokens=max_output_tokens,
         )
         status, payload = await transport.post_json(url, headers, body, timeout)
         text, usage = adapter.parse_response(status, payload)
@@ -252,6 +261,7 @@ async def call_model_stream(
     timeout: float = 120.0,
     config: ConclaveConfig | None = None,
     output_contract: OutputContract | None = None,
+    max_output_tokens: int | None = None,
 ) -> AsyncIterator[str | ModelAnswer]:
     """Stream a single model's answer, yielding text deltas then a final answer.
 
@@ -313,6 +323,7 @@ async def call_model_stream(
             timeout=timeout,
             config=resolved_config,
             output_contract=output_contract,
+            max_output_tokens=max_output_tokens,
         )
         if answer.answer:
             yield answer.answer
@@ -332,7 +343,13 @@ async def call_model_stream(
     usage: TokenUsage | None = None
     try:
         url, headers, body = adapter.stream_request(
-            model_id, messages, temperature, timeout, api_key, output_contract=output_contract
+            model_id,
+            messages,
+            temperature,
+            timeout,
+            api_key,
+            output_contract=output_contract,
+            max_output_tokens=max_output_tokens,
         )
         async for event, data in transport.stream_sse(url, headers, body, timeout):
             delta = adapter.parse_sse_event(event, data)
