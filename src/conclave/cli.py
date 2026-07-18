@@ -512,9 +512,11 @@ def ask(
 
     Exit codes:
 
-    * 0 -- the run produced at least one usable member answer.
-    * 1 -- the run completed but produced zero usable member answers (e.g. no
-      council member had an API key, or every member failed). Under ``--json``
+    * 0 -- the run produced at least one usable member answer and, for Elite,
+      ``decision_readiness`` is ``ready``.
+    * 1 -- the run produced zero usable member answers (e.g. no council member
+      had an API key, or every member failed), or an Elite result is missing or
+      has ``decision_readiness`` ``not_ready``/``indeterminate``. Under ``--json``
       the full JSON result is still emitted to stdout first, so a script can both
       parse the payload and detect the failure via the non-zero exit code.
     * 2 -- a usage/config error (unknown mode, or no members resolved).

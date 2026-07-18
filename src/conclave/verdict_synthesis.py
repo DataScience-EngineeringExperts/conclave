@@ -5,8 +5,9 @@ Authoritative spec: ``03_DESIGN_DECISIONS_v1.1.md`` DD-1 (consensus method
 plus ``00_SCOPE_PLAN.md`` §4 (the three honesty corrections).
 
 This is a self-contained, council-agnostic engine. Given the prompt and the
-council members' raw answers, it asks ONE synthesizer model to produce a
-structured *judgment* (the clustering of stances, the conflicts, the votes), then
+council members' raw answers, it asks a synthesizer model to produce a structured
+*judgment* (the clustering of stances, the conflicts, the votes), with at most one
+repair call when the initial output is invalid, then
 computes the consensus number **itself, deterministically**, from that clustering
 — the model never emits the consensus score. CAC-06 wires :func:`extract_verdict`
 into ``council.ask``; this module does not wire itself.
@@ -454,7 +455,7 @@ async def extract_verdict(
        undefined for N<2, DD-1 edge case).
     2. **Extract.** Build the ``[system, user]`` messages from the prompt + every
        responding answer (labeled by within-run answer id) with the LCD extraction schema
-       embedded, and make ONE :func:`conclave.providers.call_model` call.
+       embedded, and make the initial :func:`conclave.providers.call_model` call.
     3. **Validate → repair-once → fallback.** Parse JSON + validate via Pydantic.
        On failure, re-call ONCE with the stringified errors appended; if it still
        fails (or the extractor errored / returned empty), return ``verdict=None``
@@ -515,7 +516,7 @@ async def extract_verdict(
             verdict_absent_reason=_REASON_TOO_FEW,
         )
 
-    # Step 2 — one extraction call. Request native structured output (capable
+    # Step 2 — initial extraction call. Request native structured output (capable
     # providers enforce the schema) AND keep the embedded schema in the messages as
     # the belt-and-suspenders fallback for providers without strict support. Built
     # once and reused for the initial call and the repair retry below; schema_name

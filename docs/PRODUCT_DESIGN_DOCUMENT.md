@@ -48,8 +48,9 @@ structured, scored for agreement, and execution-traceable.** Every run yields a 
 exposing agreement, disagreement (`conflicts`), minority views (`minority_reports`), and
 per-provider votes (`provider_votes`); a deterministic `consensus_score` (arithmetic over the
 model's clustering, *never* an LLM-emitted number); and a redacted `ModelHarnessManifest` (how
-the run executed + which model produced the analysis) riding on **every** result across all six
-modes (one chokepoint, §4a). A constrained-choice **`vote` mode** also **shipped** (CAC-09 / #3,
+the run executed + which model produced the analysis) riding on **every** released-mode result;
+source-only Elite results carry it too (one chokepoint, §4a). A constrained-choice **`vote`
+mode** also **shipped** (CAC-09 / #3,
 `--mode vote --choices "A,B,C"` → plurality winner/split) — distinct from `provider_votes`.
 
 The next product-quality step is **Elite** (implemented, unreleased): independent answers → council-wide answer/claim audits → member revisions → the existing synthesis and execution-traceable verdict. Elite requires three successful responders at every member phase and intentionally spends more calls and time to improve consequential decisions.
@@ -213,10 +214,11 @@ council outputs, not external sources; source grounding is Roadmap (§9).
 
 ### Verdict extraction + native structured output
 `extract_verdict(prompt, member_answers, *, synthesizer_name, synthesizer_model_id,
-config=None) -> VerdictSynthesisResult(verdict, extraction, verdict_absent_reason)`
-(`verdict_synthesis.py`) makes **one** extraction call asking the synthesizer model to
-*cluster* stances (not to re-answer, not to emit a number), validates, repairs once, falls
-back gracefully — never raises.
+config=None, temperature=0.7, timeout=120.0, protocol_version=None) ->
+VerdictSynthesisResult(verdict, extraction, verdict_absent_reason, attempt_receipts)`
+(`verdict_synthesis.py`) makes one initial extraction call asking the synthesizer model to
+*cluster* stances (not to re-answer, not to emit a number), validates, and makes at most one
+repair call before falling back gracefully — never raises.
 
 It builds an `OutputContract(schema=verdict_extraction_json_schema(),
 schema_name="VerdictExtraction", strict=True)` (CAC-06-PLUMB threaded `output_contract`
@@ -248,14 +250,14 @@ council's product. Opt out with `Council(extract_verdict=False)` (then `result.v
 (`self.extract_verdict_enabled`), no per-call override. Buffered (`ask`) and streaming
 (`stream_ask`) both run the same `_apply_verdict` helper *after* the manifest exists, so the
 verdict appears identically in the buffered result and the streaming `done` event and the
-`secret_safety` stamp is re-run over the final content. **Cost:** default-on adds exactly
-**one** extra synthesizer call per run; the opt-out exists for cost-sensitive callers.
+`secret_safety` stamp is re-run over the final content. **Cost:** default-on adds one initial
+synthesizer call and at most one schema-repair retry; the opt-out exists for cost-sensitive callers.
 
-**Verdict scope across modes (deliberate).** Posture: *manifest everywhere, clustering verdict only where unambiguously additive.* The manifest rides on all six modes. The clustering verdict runs on `synthesize`/`ask` and on **completed Elite runs after synthesis of the revised answers**; it is deferred on `debate`/`vote` and intentionally not layered onto `adversarial`, which already emits a judge verdict. An incomplete Elite run has no synthesis or verdict.
+**Verdict scope across modes (deliberate).** Posture: *manifest everywhere, clustering verdict only where unambiguously additive.* The manifest rides on all five released modes and on source-only Elite. The clustering verdict runs on `synthesize`/`ask` and on **completed Elite runs after synthesis of the revised answers**; it is deferred on `debate`/`vote` and intentionally not layered onto `adversarial`, which already emits a judge verdict. An incomplete Elite run has no synthesis or verdict.
 
 ### ModelHarnessManifest — first-class, secret-free
 The `ModelHarnessManifest` (`manifest.py`) rides on every `CouncilResult` — *not* behind a debug
-flag, and now a **true invariant** enforced at one chokepoint: all six modes funnel through
+flag, and now a **true invariant** enforced at one chokepoint: all five released modes plus source-only Elite funnel through
 `Council._cached_run` → `_ensure_manifest`, which attaches the manifest on every returned result
 — including `debate`/`adversarial`/`vote` (built in `modes.py`), the zero-members early return,
 and cache hits (synthesize/raw builds its own richer one earlier). Pinned by
@@ -324,10 +326,10 @@ consumers. The end-to-end flow — `CLI/Library → Council → call_model → a
 
 | Module | Responsibility |
 |--------|----------------|
-| `council.py` | `Council` — primary importable entry point. Resolves names, partitions members, and exposes two reusable primitives: `fan_out` (the single concurrent + partial-failure call loop) and `synthesize_blocks` (the single synthesizer/judge call path). Hosts the async/sync APIs for all six modes, including unreleased `elite`/`elite_sync`. Every mode funnels through `_cached_run`; completed Elite runs synthesize revisions and then use `_apply_verdict`. |
+| `council.py` | `Council` — primary importable entry point. Resolves names, partitions members, and exposes two reusable primitives: `fan_out` (the single concurrent + partial-failure call loop) and `synthesize_blocks` (the single synthesizer/judge call path). Hosts the async/sync APIs for five released modes plus unreleased `elite`/`elite_sync`. Every source mode funnels through `_cached_run`; completed Elite runs synthesize revisions and then use `_apply_verdict`. |
 | `verdict.py` | Public verdict/member Pydantic types (`CouncilVerdict`, `CouncilPosition`, `CouncilConflict`, `ProviderVote`, `MinorityReport`) + the LCD JSON Schemas (`verdict_json_schema`/`member_answer_json_schema`/`verdict_extraction_json_schema`) usable across all three native structured-output surfaces; `VERDICT_SCHEMA_VERSION`. |
 | `agreement.py` | Deterministic consensus: `consensus_score` (`position_cluster_ratio_v1` — largest cluster / positioned members; `None` for N<2) + `consensus_label` buckets. Pure arithmetic, no `difflib`, never LLM-emitted. |
-| `verdict_synthesis.py` | `extract_verdict` engine: one extraction call (clusters stances, never emits a number), native `output_contract` enforcement + prompt-level fallback, validate → repair-once → graceful `verdict=None`; the three verdict-absent reasons; provenance on every return path. |
+| `verdict_synthesis.py` | `extract_verdict` engine: one initial extraction call and at most one repair (clusters stances, never emits a number), native `output_contract` enforcement + prompt-level fallback, validate → repair-once → graceful `verdict=None`; the three verdict-absent reasons; provenance on every return path. |
 | `manifest.py` | `ModelHarnessManifest` (first-class on every result), phased `ProviderExecutionReceipt`/`ProviderSkip`/`VerdictExtraction`, and `scan_for_secret_material()` → `secret_safety` stamp. No key values; unknown `estimated_cost` remains `None`. |
 | `modes.py` | Deliberation orchestration: `run_debate`, `run_adversarial`, `run_vote`, and unreleased `run_elite` (three gated member phases). Built on `Council.fan_out` + `synthesize_blocks`. |
 | `prompts.py` | Role/template strings for debate, adversarial, vote, and Elite claim-audit/revision prompts. Elite panel text uses stable Model A/B/C aliases and answer ids, never provider identities. |
@@ -408,7 +410,7 @@ council shipped in v1.1** (§4a — the wedge).
 The revised thesis is a **source-grounded, execution-traceable decision record with
 empirically proven quality**. Current answer IDs identify model outputs, not external evidence;
 source-auditable language is therefore too broad until source grounding ships. Elite remains
-implemented but unreleased on draft PR #51.
+implemented but unreleased on open PR #51, pending final review and merge.
 
 The canonical roadmap is
 [`docs/plans/2026-07-17-decision-quality-roadmap.md`](plans/2026-07-17-decision-quality-roadmap.md):

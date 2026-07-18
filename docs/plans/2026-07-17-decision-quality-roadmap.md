@@ -1,8 +1,8 @@
 # Conclave Decision Quality Roadmap
 
-**Status:** Approved direction; Horizon 0 implemented on the draft branch, pending full gate review
+**Status:** Approved direction; Horizon 0 implemented on open PR #51, pending final gate review
 **Date:** 2026-07-17
-**Current product:** v1.1.0 stable; Elite implemented but unreleased on draft PR #51
+**Current product:** v1.1.0 stable; Elite implemented but unreleased on open PR #51
 
 ## Thesis
 
@@ -30,8 +30,8 @@ grounding and deterministic citation validation ship, the honest claim is
 
 ## Horizon 0 — verify Elite correctness before merge
 
-Elite remains implemented but unreleased. The draft branch now implements these contracts;
-draft PR #51 must remain draft until the complete merge gate verifies them:
+Elite remains implemented but unreleased. Open PR #51 implements these contracts and must
+remain unmerged until the complete merge gate verifies them:
 
 1. **Persistent identities.** Each initial answer has a stable identifier that survives claim
    audit, revision, synthesis, serialization, and cache replay. Do not present those IDs as
