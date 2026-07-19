@@ -62,11 +62,15 @@ def _validate_run_summary(study_run: StudyRun) -> None:
     expected_counts = dict(sorted(Counter(record.outcome for record in records).items()))
     expected_tokens = sum(record.completion_tokens or 0 for record in records)
     expected_latency = sum(record.latency_ms or 0.0 for record in records)
+    expected_cost = sum(record.cost_usd for record in records)
+    expected_deviations = sum(len(record.deviation_codes) for record in records)
     if (
         study_run.total_planned_runs != len(records)
         or study_run.outcome_counts != expected_counts
         or study_run.total_completion_tokens != expected_tokens
         or abs(study_run.total_latency_ms - expected_latency) > 1e-9
+        or abs(study_run.total_cost_usd - expected_cost) > 1e-9
+        or study_run.total_deviation_count != expected_deviations
     ):
         _abort("run artifact summary does not match its immutable records")
 

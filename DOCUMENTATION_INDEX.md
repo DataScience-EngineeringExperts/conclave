@@ -32,6 +32,8 @@ the canonical authority spec on top of those.
 | **Decision Quality Roadmap** | [`docs/plans/2026-07-17-decision-quality-roadmap.md`](docs/plans/2026-07-17-decision-quality-roadmap.md) | H0-H4 prove-it roadmap: Elite correctness, randomized ablations, source-grounded Decision Briefs, buyer pull, outcome learning, old-backlog disposition, demand gates, and kill criteria. |
 | **H1 Evaluation Design** | [`docs/plans/2026-07-17-h1-budget-matched-evaluation-design.md`](docs/plans/2026-07-17-h1-budget-matched-evaluation-design.md) | DSE-708 experimental boundary, six frozen conditions, replay, blinding, and failure-inclusive analysis. |
 | **H1 Evaluation Plan** | [`docs/plans/2026-07-17-h1-budget-matched-evaluation.md`](docs/plans/2026-07-17-h1-budget-matched-evaluation.md) | TDD delivery plan for the offline, budget-matched evaluation substrate. |
+| **H1 Method Hardening** | [`docs/plans/2026-07-17-h1-method-hardening-design.md`](docs/plans/2026-07-17-h1-method-hardening-design.md) | Paid-study provenance, task-clustered inference, grader controls, confirmatory refusal boundaries, and QA design. |
+| **H1 Synthetic QA Pack** | [`studies/elite_qa_v1/README.md`](studies/elite_qa_v1/README.md) | Balanced 24-task open-book harness fixture, QA protocol, and confirmatory preregistration template. |
 
 ---
 

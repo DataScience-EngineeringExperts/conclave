@@ -1,0 +1,149 @@
+{
+  "schema_version": "conclave_eval_v1",
+  "tasks": [
+    {
+      "task_id": "PRC-01",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Courier hard constraints: cost at most $14 per order, on-time rate at least 95%, and a current cold-chain certificate.", "[P2] Courier A: $12, 96%, current certificate. Courier B: $10, 92%, current certificate. Courier C: $15, 98%, current certificate.", "[P3] A recent Courier A sample delivered 48 of 50 orders on time (96%).", "[P4] A minority reviewer prefers Courier C for premium quality; the packet supplies no quality measure."],
+      "metadata": {"macro_family": "operational_execution", "subfamily": "procurement", "tier": "tier_1"}
+    },
+    {
+      "task_id": "PRC-02",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Software hard constraints: annual price at most $60,000, deletion within 30 days, and a customer audit right.", "[P2] A: $55,000, 30-day deletion, no audit right. B: $58,000, 90-day deletion, audit right. C: $64,000, 30-day deletion, audit right.", "[P3] C's salesperson verbally expects a discount, but no signed quote exists.", "[P4] A minority reviewer says the audit right can be added after signing; no amendment is supplied."],
+      "metadata": {"macro_family": "operational_execution", "subfamily": "procurement", "tier": "tier_2"}
+    },
+    {
+      "task_id": "PRC-03",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Generator hard constraints: no more than 65 dBA at the site boundary, at least 300 kW, and price at most $90,000.", "[P2] A: 320 kW, $84,000, catalog rating 61 dBA at 7 m. B: 305 kW, $79,000, catalog rating 64 dBA at 7 m.", "[P3] The boundary is 28 m away, but terrain and barriers are unmeasured and no propagation method is provided.", "[P4] A minority reviewer says the catalog values prove boundary compliance."],
+      "metadata": {"macro_family": "operational_execution", "subfamily": "procurement", "tier": "tier_2"}
+    },
+    {
+      "task_id": "PRC-04",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Managed-recovery hard constraints: p95 recovery at most 4 hours, price at most $180,000, and every critical subcontractor documented.", "[P2] A: $160,000, median recovery 2 hours, p95 absent, no subcontractor list.", "[P3] B: $175,000, p95 recovery 3 hours, but critical recovery-subcontractor coverage is undocumented.", "[P4] C: $150,000, p95 recovery 5 hours, complete subcontractor list.", "[P5] A minority reviewer argues B's p95 settles the choice."],
+      "metadata": {"macro_family": "operational_execution", "subfamily": "procurement", "tier": "tier_3"}
+    },
+    {
+      "task_id": "REL-01",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Release hard constraints: zero blockers, error-rate regression at most 0.2 percentage points, and a passed rollback rehearsal.", "[P2] RC1: zero blockers, +0.1 percentage-point error regression, rollback passed.", "[P3] RC2: zero blockers, +0.0 percentage-point error regression, rollback failed.", "[P4] A minority reviewer notes RC1 is 3% slower; no latency threshold is specified."],
+      "metadata": {"macro_family": "operational_execution", "subfamily": "release_operations", "tier": "tier_1"}
+    },
+    {
+      "task_id": "REL-02",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Deploy-now hard constraints: backup age at most 24 hours, rollback at most 15 minutes, and zero open severity-one incidents.", "[P2] Current backup age is 30 hours; rollback takes 12 minutes; no severity-one incident is open.", "[P3] An operator says data is probably unchanged, but supplies no evidence.", "[P4] A new backup takes 25 minutes."],
+      "metadata": {"macro_family": "operational_execution", "subfamily": "release_operations", "tier": "tier_2"}
+    },
+    {
+      "task_id": "REL-03",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Choose restart, rollback, or failover while avoiding data-loss risk and preserving evidence.", "[P2] Application telemetry points to a memory leak.", "[P3] Database telemetry points to saturation; the clocks differ by nine minutes and causal order is unresolved.", "[P4] The rollback artifact hash is unavailable and failover lag is unmeasured.", "[P5] A minority reviewer favors immediate rollback based on the last incident."],
+      "metadata": {"macro_family": "operational_execution", "subfamily": "release_operations", "tier": "tier_3"}
+    },
+    {
+      "task_id": "REL-04",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Go-live hard constraints: zero critical accessibility failures, security pass, and user-acceptance testing at least 95%.", "[P2] Security passed and user-acceptance testing is 98%.", "[P3] Two critical keyboard-navigation failures remain open.", "[P4] A minority reviewer says internal users can use a mouse workaround."],
+      "metadata": {"macro_family": "operational_execution", "subfamily": "release_operations", "tier": "tier_1"}
+    },
+    {
+      "task_id": "PRD-01",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Experiment hard constraints: preregistered metric, valid holdout, no prohibited personal field, and a passed sample-ratio-mismatch check.", "[P2] Plan A meets all four constraints.", "[P3] Plan B has no holdout. Plan C collects birth date, a prohibited field.", "[P4] A minority reviewer prefers B because it gives 20% more exposure."],
+      "metadata": {"macro_family": "operational_execution", "subfamily": "product_experiments", "tier": "tier_1"}
+    },
+    {
+      "task_id": "PRD-02",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Pricing rollout hard constraints: churn harm at most 1 percentage point and zero severe support signal.", "[P2] Test estimate: revenue +8%; churn difference +0.8 percentage points with 95% interval [-0.3, +2.4].", "[P3] Seven severe billing-confusion tickets occurred.", "[P4] A minority reviewer focuses on the mean revenue increase."],
+      "metadata": {"macro_family": "operational_execution", "subfamily": "product_experiments", "tier": "tier_3"}
+    },
+    {
+      "task_id": "PRD-03",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Product sunset hard constraints: usage below 3%, savings above $40,000, and zero active contractual dependencies.", "[P2] Usage is 2% and estimated savings are $55,000.", "[P3] The contract-inventory field is missing.", "[P4] A minority reviewer recalls no commitments but provides no record."],
+      "metadata": {"macro_family": "operational_execution", "subfamily": "product_experiments", "tier": "tier_2"}
+    },
+    {
+      "task_id": "PRD-04",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Expansion hard constraints: contribution margin at least 15%, support coverage ready, and written tax and regulatory clearance.", "[P2] Region A: forecast margin 19%, coverage ready, clearance absent.", "[P3] Region B: forecast margin 14%, coverage ready, clearance present.", "[P4] A minority reviewer says Region A has standard rules but provides no citation."],
+      "metadata": {"macro_family": "operational_execution", "subfamily": "product_experiments", "tier": "tier_3"}
+    },
+    {
+      "task_id": "CAP-01",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Project hard constraints: cost at most $120,000, delivery at most six weeks, and security score at least 80.", "[P2] A: $90,000, four weeks, score 72. B: $115,000, six weeks, score 84. C: $125,000, five weeks, score 91.", "[P3] A minority reviewer says A can be patched to 80, but supplies no estimate or test."],
+      "metadata": {"macro_family": "organizational_stewardship", "subfamily": "capital_allocation", "tier": "tier_1"}
+    },
+    {
+      "task_id": "CAP-02",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Investment hard constraints: capital cost at most $200,000, annual operating cost at most $40,000, and payback at most 18 months.", "[P2] A: $180,000, $45,000, 17 months. B: $205,000, $30,000, 16 months. C: $190,000, $35,000, 22 months.", "[P3] A discount for B was discussed but is unsigned.", "[P4] A minority reviewer proposes ignoring first-year operating cost."],
+      "metadata": {"macro_family": "organizational_stewardship", "subfamily": "capital_allocation", "tier": "tier_2"}
+    },
+    {
+      "task_id": "CAP-03",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Migration hard constraints: cost at most $90,000, downtime at most two hours, and independently demonstrated recovery-failure probability at most 5%.", "[P2] A: $80,000, one hour, vendor estimate 3%, no independent rehearsal.", "[P3] B: $65,000, two hours, no failure estimate.", "[P4] A minority reviewer says A's vendor-run lab demo is equivalent to an independent rehearsal."],
+      "metadata": {"macro_family": "organizational_stewardship", "subfamily": "capital_allocation", "tier": "tier_3"}
+    },
+    {
+      "task_id": "CAP-04",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Allocate exactly 10 indivisible engineer-weeks: patching at least 3, migration at least 4, and migration documentation at least 2.", "[P2] Plan A: patching 3, migration 4, onboarding 3, documentation 0.", "[P3] Plan B: patching 3, migration 4, documentation 2, reserve 1. Plan C: patching 2, migration 5, documentation 2, reserve 1.", "[P4] A minority reviewer wants the reserve shifted to feature work, but features are not approved scope."],
+      "metadata": {"macro_family": "organizational_stewardship", "subfamily": "capital_allocation", "tier": "tier_2"}
+    },
+    {
+      "task_id": "GOV-01",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Log-policy hard constraints: raw logs retained at most 30 days, aggregates at least 365 days, and deletion verification.", "[P2] A: 30 raw days, 400 aggregate days, verification. B: 90 raw days, 400 aggregate days, verification. C: 14 raw days, 180 aggregate days, verification.", "[P3] A minority reviewer prefers B for investigations; no exception is approved."],
+      "metadata": {"macro_family": "organizational_stewardship", "subfamily": "governance", "tier": "tier_1"}
+    },
+    {
+      "task_id": "GOV-02",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Automated-case-tool hard constraints before use: no automated adverse action, human appeal, and immutable audit log.", "[P2] The proposal automatically declines high-risk cases, has no appeal, and has immutable logs.", "[P3] A roadmap promises appeal next quarter.", "[P4] A minority reviewer cites 94% validation accuracy."],
+      "metadata": {"macro_family": "organizational_stewardship", "subfamily": "governance", "tier": "tier_2"}
+    },
+    {
+      "task_id": "GOV-03",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Data sharing is allowed only if consent covers research reuse.", "[P2] The consent clause says service improvement.", "[P3] An addendum says no secondary research; the precedence field is blank.", "[P4] The privacy lead says deny and the program lead says approve; neither supplies an authoritative interpretation."],
+      "metadata": {"macro_family": "organizational_stewardship", "subfamily": "governance", "tier": "tier_3"}
+    },
+    {
+      "task_id": "GOV-04",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Access-policy hard constraints: least privilege, requester and approver separation, and logged one-hour break-glass access.", "[P2] A: broad admin, separation, logged break-glass. B: scoped roles, separation, logged one-hour break-glass.", "[P3] C: scoped roles, same-person approval, unlogged emergency access.", "[P4] A minority reviewer prefers A for convenience."],
+      "metadata": {"macro_family": "organizational_stewardship", "subfamily": "governance", "tier": "tier_2"}
+    },
+    {
+      "task_id": "STF-01",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Overnight-plan hard constraints: one senior and two operators, no junior alone, and cost at most $4,500.", "[P2] A: one senior plus two operators, $4,400. B: one senior plus one operator plus one junior, $4,000.", "[P3] C: two seniors plus two operators, $5,200.", "[P4] A minority reviewer prefers B for cost."],
+      "metadata": {"macro_family": "organizational_stewardship", "subfamily": "staffing", "tier": "tier_1"}
+    },
+    {
+      "task_id": "STF-02",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Hire hard constraints: certification current on start, start within 30 days, and salary at most $125,000.", "[P2] A: expired certification, start in 14 days, $118,000. B: current certification, start in 45 days, $120,000. C: current certification, start in 21 days, $132,000.", "[P3] No exception authority is granted.", "[P4] A minority reviewer expects C to negotiate, but no offer exists."],
+      "metadata": {"macro_family": "organizational_stewardship", "subfamily": "staffing", "tier": "tier_3"}
+    },
+    {
+      "task_id": "STF-03",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Outsource only if forecast demand exceeds 800 units per month and partner defect rate is at most 2%.", "[P2] The partner pilot found zero defects in five units.", "[P3] Internal historical defect rate is 2.5%.", "[P4] The next-quarter demand forecast is missing.", "[P5] A minority reviewer extrapolates perfect partner quality from the pilot."],
+      "metadata": {"macro_family": "organizational_stewardship", "subfamily": "staffing", "tier": "tier_3"}
+    },
+    {
+      "task_id": "STF-04",
+      "prompt": "Using only the reference packet, choose the best course of action. Return: (1) Recommendation, (2) Readiness: ready|not_ready|indeterminate, (3) Hard-constraint check, (4) Conflicts/minority view, (5) Next actions and owners, (6) Unknowns. Cite packet IDs. Do not invent facts.",
+      "reference_packets": ["[P1] Mandatory training must finish by Friday while every shift retains at least two certified people.", "[P2] Plan A trains the day shift together, leaving one certified person.", "[P3] Plan B schedules the night shift after Friday. Plan C leaves one certified person on the night shift.", "[P4] A minority reviewer says coverage can dip for 30 minutes; no exception exists."],
+      "metadata": {"macro_family": "organizational_stewardship", "subfamily": "staffing", "tier": "tier_1"}
+    }
+  ]
+}

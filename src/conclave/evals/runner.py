@@ -106,6 +106,9 @@ async def _execute_cell(
                 completion_tokens=execution.completion_tokens,
                 latency_ms=execution.latency_ms,
                 error_category="output_budget_exceeded",
+                cost_usd=execution.cost_usd,
+                cost_receipt_complete=execution.cost_receipt_complete,
+                deviation_codes=execution.deviation_codes,
             )
         if execution.outcome == "success" and execution.output is None:
             return RunRecord(
@@ -114,6 +117,9 @@ async def _execute_cell(
                 completion_tokens=execution.completion_tokens,
                 latency_ms=execution.latency_ms,
                 error_category="missing_success_output",
+                cost_usd=execution.cost_usd,
+                cost_receipt_complete=execution.cost_receipt_complete,
+                deviation_codes=execution.deviation_codes,
             )
         return RunRecord(
             planned_run_id=planned_run.planned_run_id,
@@ -122,6 +128,9 @@ async def _execute_cell(
             completion_tokens=execution.completion_tokens,
             latency_ms=execution.latency_ms,
             error_category=execution.error_category,
+            cost_usd=execution.cost_usd,
+            cost_receipt_complete=execution.cost_receipt_complete,
+            deviation_codes=execution.deviation_codes,
         )
     except TimeoutError:
         return RunRecord(
@@ -171,4 +180,6 @@ async def run_study(
         outcome_counts=outcome_counts,
         total_completion_tokens=sum(record.completion_tokens or 0 for record in records),
         total_latency_ms=sum(record.latency_ms or 0.0 for record in records),
+        total_cost_usd=sum(record.cost_usd for record in records),
+        total_deviation_count=sum(len(record.deviation_codes) for record in records),
     )

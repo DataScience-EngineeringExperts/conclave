@@ -155,9 +155,13 @@ is all known providers.
 The source branch also exposes an H1 evidence harness. It makes no decision-quality claim and
 never calls providers: `run` only validates an existing replay artifact against its frozen
 manifest. Grader output and the restricted blind map must remain separate.
+The open-book 24-task synthetic QA pack and its no-promotion boundary are documented in
+[`studies/elite_qa_v1/README.md`](studies/elite_qa_v1/README.md). Its committed answer keys
+are test fixtures, not access-controlled grader material, so this pack cannot be used for a
+paid or confirmatory study.
 
 ```bash
-conclave eval plan tasks.json manifest.json --study-id pilot --replicates 2 --seed 19 --max-output-tokens 1200
+conclave eval plan tasks.json manifest.json --study-id qa --replicates 2 --seed 19 --max-output-tokens 1200
 conclave eval run manifest.json validated-run.json --replay-artifact recorded-run.json
 conclave eval blind validated-run.json grader.json restricted-map.json --seed 23
 conclave eval report manifest.json validated-run.json judgments.json report.json report.md --bootstrap-seed 29
