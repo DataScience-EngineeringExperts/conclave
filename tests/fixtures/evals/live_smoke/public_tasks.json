@@ -1,0 +1,17 @@
+{
+  "schema_version": "conclave_eval_v1",
+  "tasks": [
+    {
+      "schema_version": "conclave_eval_v1",
+      "task_id": "fictional-live-task",
+      "prompt": "Select the safest route for a fictional lunar archive migration.",
+      "reference_packets": [
+        "Fictional archive route A has a tested rollback procedure.",
+        "All systems, organizations, risks, and costs in this task are fictional."
+      ],
+      "metadata": {
+        "fixture": "fictional-only"
+      }
+    }
+  ]
+}

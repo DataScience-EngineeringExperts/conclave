@@ -130,7 +130,11 @@ def test_replay_rejects_schema_or_base_manifest_hash_drift():
 
 
 async def test_replay_fails_closed_on_missing_mismatch_and_extra_records():
+    network_calls = 0
+
     async def network(url, headers, body, timeout):
+        nonlocal network_calls
+        network_calls += 1
         return 200, {"ok": True}
 
     recorder = RecordingPostJson(network, base_manifest_hash=BASE_HASH)
@@ -149,6 +153,8 @@ async def test_replay_fails_closed_on_missing_mismatch_and_extra_records():
     await replay("https://example.test/v1", {}, {"model": "m", "prompt": "one"}, 10)
     with pytest.raises(ReplayMismatchError, match="unmatched request"):
         await replay("https://example.test/v1", {}, {"model": "m", "prompt": "one"}, 10)
+
+    assert network_calls == 1
 
 
 def test_replay_artifact_rejects_stored_request_hash_mismatch():
