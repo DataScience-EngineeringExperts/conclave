@@ -9,7 +9,7 @@ Three names matter and they are deliberately different:
 | PyPI distribution name (what `pip install` uses) | `conclave-cli` |
 | CLI command (what users type) | `conclave` |
 | Import package (what you `import`) | `conclave` |
-| GitHub repository | `ernestprovo23/conclave` |
+| GitHub repository | `DataScience-EngineeringExperts/conclave` |
 
 Install is therefore `pip install conclave-cli`, but the command stays `conclave`
 and the import stays `from conclave import Council`. The PyPI name `conclave` is an
@@ -18,87 +18,66 @@ distribution name is `conclave-cli`.
 
 The publish + signing automation lives in
 [`.github/workflows/release.yml`](.github/workflows/release.yml). That workflow is
-**inert until configured**: it only fires when a GitHub *Release* is published, and
-the publish job only succeeds once the one-time PyPI Trusted Publisher below exists.
+triggered only when a GitHub *Release* is published. The publish job succeeds only when
+PyPI trusts the exact organization repository and workflow identity below.
 
 ---
 
-## 0. One-time PyPI setup (do this ONCE, before the first release)
+## 0. PyPI Trusted Publisher prerequisite
 
-The workflow publishes via **OIDC Trusted Publishing** — there is no API token and
-no secret stored in GitHub. Instead, PyPI is told to trust releases that come from
-this exact repo + workflow. Configure the publisher *before* the first release so
-the very first upload is already OIDC-published.
+The workflow publishes through **OIDC Trusted Publishing**; there is no API token or
+stored GitHub secret. On PyPI, open **conclave-cli → Manage → Publishing** and confirm
+an active publisher with these exact values:
 
-### Recommended path — "pending publisher" (zero prior upload required)
+- **Owner:** `DataScience-EngineeringExperts`
+- **Repository:** `conclave`
+- **Workflow:** `release.yml`
+- **Environment:** blank (the workflow has no GitHub environment)
 
-1. Log in to <https://pypi.org> as the account that will own `conclave-cli`.
-2. Go to **Account → Publishing** (<https://pypi.org/manage/account/publishing/>).
-3. Under **Add a new pending publisher**, fill in **exactly**:
-   - **PyPI Project Name**: `conclave-cli`
-   - **Owner**: `ernestprovo23`
-   - **Repository name**: `conclave`
-   - **Workflow name**: `release.yml`
-   - **Environment name**: *(leave blank — the workflow does not use a GitHub
-     deployment environment; if you later add one, set it here and add an
-     `environment:` block to the `pypi-publish` job)*
-4. Save. PyPI now reserves the project name `conclave-cli` and will create it on the
-   first successful OIDC upload from `release.yml`.
-
-A "pending publisher" reserves the name and lets the FIRST release be OIDC-published
-— no manual upload, no token ever. This is the clean path for conclave: there is no
-prior token-publish history, so the supply chain is OIDC-only from release #1.
-
-### Alternative path — manual first upload, then configure
-
-If you would rather seed the project manually first:
-
-1. Build locally: `python -m build` (produces `dist/*.tar.gz` + `dist/*.whl`).
-2. `twine upload dist/*` with a temporary PyPI API token (creates `conclave-cli`).
-3. Then go to **Manage project → Publishing** on the new `conclave-cli` project and
-   add the Trusted Publisher with the same owner/repo/workflow values as above.
-4. Revoke the temporary token.
-
-> Prefer the pending-publisher path. It avoids ever minting a long-lived token and
-> keeps the entire supply chain OIDC-only from release #1.
+If the repository was transferred from `ernestprovo23/conclave`, replace the old publisher
+before releasing. Public provenance proves the identity used by past releases, not the current
+private publisher configuration. A mismatch fails closed in the publish job; never fall back to
+a token upload.
 
 ---
 
 ## 1. Cut a release
 
-Do this on a clean checkout of `main` with all v1 PRs merged.
+Do this on a clean checkout of `main` with all intended release changes merged.
 
 1. **Update the changelog.** In [`CHANGELOG.md`](CHANGELOG.md), move the
-   `## [Unreleased]` entries under a new `## [1.0.0] - <YYYY-MM-DD>` heading with
+   `## [Unreleased]` entries under a new `## [X.Y.Z] - <YYYY-MM-DD>` heading with
    today's date. Leave a fresh empty `## [Unreleased]` section above it.
 
 2. **Bump the version in BOTH places.**
-   - In [`pyproject.toml`](pyproject.toml), set `[project] version = "1.0.0"`.
+   - In [`pyproject.toml`](pyproject.toml), set `[project] version = "X.Y.Z"`.
    - In [`src/conclave/__init__.py`](src/conclave/__init__.py), set
-     `__version__ = "1.0.0"`.
+   `__version__ = "X.Y.Z"`.
    (The distribution name `conclave-cli` is already set — do **not** change it.)
 
 3. **Commit.**
    ```bash
    git add CHANGELOG.md pyproject.toml src/conclave/__init__.py
-   git commit -m "release: v1.0.0"
-   git push origin main
+   git commit -m "release: vX.Y.Z"
+   git push -u origin release/X.Y.Z
    ```
 
-4. **Tag and push the tag.** (A tag alone does NOT publish anything — it only marks
+4. **Open and merge the release PR.** Wait for every required CI check, merge through
+   branch protection, then fast-forward a clean local `main`. The tag must point to the
+   merged release commit, not the pre-merge branch commit.
+
+5. **Tag and push the tag.** (A tag alone does NOT publish anything — it only marks
    the commit. The Release in the next step is what triggers the workflow.)
    ```bash
-   git tag v1.0.0
-   git push origin v1.0.0
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
    ```
 
-5. **Create the GitHub Release.** This is the trigger.
+6. **Create the GitHub Release.** This is the trigger.
    ```bash
-   gh release create v1.0.0 \
-     --title "v1.0.0" \
-     --notes-file <(awk '/## \[1.0.0\]/{f=1} /## \[0\./{if(f)exit} f' CHANGELOG.md)
+   gh release create vX.Y.Z --title "vX.Y.Z" --generate-notes
    ```
-   or use the GitHub UI: **Releases → Draft a new release → choose tag `v1.0.0` →
+   or use the GitHub UI: **Releases → Draft a new release → choose tag `vX.Y.Z` →
    Publish release**.
 
    Publishing the Release fires `release.yml`, which:
@@ -122,9 +101,9 @@ Do this on a clean checkout of `main` with all v1 PRs merged.
    python -c "import conclave; print(conclave.__version__)"
    ```
    The install name is `conclave-cli`, the command is `conclave`, the import is
-   `conclave`. The `python -c` line must print `1.0.0` (there is no `--version`
+   `conclave`. The `python -c` line must print `X.Y.Z` (there is no `--version`
    flag; the running version is shown in the `conclave providers` footer).
-   Remember to bump `__version__` in `src/conclave/__init__.py` to `1.0.0` in the
+   Remember to bump `__version__` in `src/conclave/__init__.py` to `X.Y.Z` in the
    release commit (step 1.2) alongside `pyproject.toml`.
 
 2. **Verify the Sigstore bundle.** On the GitHub Release page, confirm there is a
@@ -133,17 +112,17 @@ Do this on a clean checkout of `main` with all v1 PRs merged.
    re-verify any artifact locally:
    ```bash
    pip install sigstore
-   sigstore verify identity dist/conclave_cli-1.0.0-py3-none-any.whl \
-     --bundle conclave_cli-1.0.0-py3-none-any.whl.sigstore \
+   sigstore verify identity dist/conclave_cli-X.Y.Z-py3-none-any.whl \
+     --bundle conclave_cli-X.Y.Z-py3-none-any.whl.sigstore \
      --cert-identity \
-       "https://github.com/ernestprovo23/conclave/.github/workflows/release.yml@refs/tags/v1.0.0" \
+       "https://github.com/DataScience-EngineeringExperts/conclave/.github/workflows/release.yml@refs/tags/vX.Y.Z" \
      --cert-oidc-issuer "https://token.actions.githubusercontent.com"
    ```
    (Download the `.whl` and its `.sigstore` bundle from the Release assets first.)
 
 3. **Confirm the PyPI page.** Visit <https://pypi.org/project/conclave-cli/> and check:
-   - version `1.0.0` is listed;
-   - the project URLs (homepage / repository) point at `ernestprovo23/conclave`;
+   - version `X.Y.Z` is listed;
+   - the project URLs point at `DataScience-EngineeringExperts/conclave`;
    - "Publisher" shows the Trusted Publisher (OIDC), not a token upload;
    - PEP 740 attestations are present (the verified-publish badge).
 
@@ -157,8 +136,8 @@ release is broken:
 - **Yank** the bad version (keeps existing pins working, hides it from new
   installs): on <https://pypi.org/project/conclave-cli/> → **Manage → Releases →
   Options → Yank**. Yanking is reversible.
-- **Ship a fix-forward release** (`1.0.1`) following section 1 again. This is the
-  preferred remedy — never try to re-upload `1.0.0`.
+- **Ship a fix-forward patch release** following section 1 again. This is the
+  preferred remedy — never try to re-upload the same version.
 - **GitHub Release**: you may delete or edit the GitHub Release and its assets
   freely; that does not affect what is already on PyPI. Re-running the workflow
   against the same version will fail the PyPI publish (duplicate filename), which is
