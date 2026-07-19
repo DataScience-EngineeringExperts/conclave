@@ -7,7 +7,7 @@ the canonical authority spec on top of those.
 
 - **Repo:** `/Users/ernestprovo/dev/conclave/`
 - **Version:** 1.2.0 · **License:** MIT
-- **Last updated:** 2026-07-18
+- **Last updated:** 2026-07-19
 
 ---
 
@@ -29,7 +29,7 @@ the canonical authority spec on top of those.
 
 | Doc | Path | Purpose |
 |-----|------|---------|
-| **Decision Quality Roadmap** | [`docs/plans/2026-07-17-decision-quality-roadmap.md`](docs/plans/2026-07-17-decision-quality-roadmap.md) | H0-H4 prove-it roadmap: Elite correctness, randomized ablations, source-grounded Decision Briefs, buyer pull, outcome learning, old-backlog disposition, demand gates, and kill criteria. |
+| **Decision Quality Roadmap** | [`docs/plans/2026-07-17-decision-quality-roadmap.md`](docs/plans/2026-07-17-decision-quality-roadmap.md) | H0-H4 prove-it roadmap: released Elite baseline, active H1 exploratory pilot, randomized ablations, source-grounded Decision Briefs, buyer pull, outcome learning, demand gates, and kill criteria. |
 | **H1 Evaluation Design** | [`docs/plans/2026-07-17-h1-budget-matched-evaluation-design.md`](docs/plans/2026-07-17-h1-budget-matched-evaluation-design.md) | DSE-708 experimental boundary, six frozen conditions, replay, blinding, and failure-inclusive analysis. |
 | **H1 Evaluation Plan** | [`docs/plans/2026-07-17-h1-budget-matched-evaluation.md`](docs/plans/2026-07-17-h1-budget-matched-evaluation.md) | TDD delivery plan for the offline, budget-matched evaluation substrate. |
 | **H1 Method Hardening** | [`docs/plans/2026-07-17-h1-method-hardening-design.md`](docs/plans/2026-07-17-h1-method-hardening-design.md) | Paid-study provenance, task-clustered inference, grader controls, confirmatory refusal boundaries, and QA design. |
@@ -116,6 +116,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 
 | Date | Change |
 |------|--------|
+| 2026-07-19 | Reconciled the decision-quality roadmap to released v1.2.0 and active H1 pilot preparation. Recorded the 12-cell paid correctness smoke, isolated three-provider connectivity check, synthetic-pack evidence boundary, and two-human-grader calibration plan. Decision quality and efficiency remain unvalidated. |
 | 2026-07-18 | Released v1.2.0: Elite, constrained-choice vote, every-mode manifest hardening, the capped paid-exploratory evaluation runner, strict OpenAI-compatible verdict extraction, and org-repository release identities. The live lane remains correctness-only; no quality or efficiency claim. |
 | 2026-07-18 | Implemented the sequential paid exploratory runner: default dry-run, exact USD 10.00 execute approval, reservation-before-call, one in-flight call, and no-repeat resume. The 24-task fixture remains offline/open-book and is not the paid smoke corpus; the smoke is correctness-only and not decision eligible. |
 | 2026-07-17 | Added the experimental DSE-708 offline evaluation substrate and `conclave eval` artifact workflow; no live study or quality claim. |
