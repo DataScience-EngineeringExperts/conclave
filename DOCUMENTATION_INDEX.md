@@ -7,7 +7,7 @@ the canonical authority spec on top of those.
 
 - **Repo:** `/Users/ernestprovo/dev/conclave/`
 - **Version:** 1.1.0 · **License:** MIT
-- **Last updated:** 2026-07-17
+- **Last updated:** 2026-07-18
 
 ---
 
@@ -34,6 +34,8 @@ the canonical authority spec on top of those.
 | **H1 Evaluation Plan** | [`docs/plans/2026-07-17-h1-budget-matched-evaluation.md`](docs/plans/2026-07-17-h1-budget-matched-evaluation.md) | TDD delivery plan for the offline, budget-matched evaluation substrate. |
 | **H1 Method Hardening** | [`docs/plans/2026-07-17-h1-method-hardening-design.md`](docs/plans/2026-07-17-h1-method-hardening-design.md) | Paid-study provenance, task-clustered inference, grader controls, confirmatory refusal boundaries, and QA design. |
 | **H1 Synthetic QA Pack** | [`studies/elite_qa_v1/README.md`](studies/elite_qa_v1/README.md) | Balanced 24-task open-book harness fixture, QA protocol, and confirmatory preregistration template. |
+| **H1 Live Runner Design** | [`docs/plans/2026-07-18-h1-live-evaluation-runner-design.md`](docs/plans/2026-07-18-h1-live-evaluation-runner-design.md) | Sequential paid-exploratory execution, frozen pricing, pessimistic reservations, USD 10 cap, atomic checkpoints, and no-repeat resume. |
+| **H1 Live Runner Plan** | [`docs/plans/2026-07-18-h1-live-evaluation-runner.md`](docs/plans/2026-07-18-h1-live-evaluation-runner.md) | Exact TDD tasks for the six live conditions, dry-run estimator, replay fixtures, CLI gate, and correctness-only paid smoke. |
 
 ---
 
@@ -114,6 +116,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 
 | Date | Change |
 |------|--------|
+| 2026-07-18 | Added the validated design and TDD plan for a sequential, checkpointed H1 paid-exploratory runner with frozen pricing and a USD 10 hard cap; implementation and provider calls remain pending. |
 | 2026-07-17 | Added the experimental DSE-708 offline evaluation substrate and `conclave eval` artifact workflow; no live study or quality claim. |
 | 2026-07-17 | Reframed the product roadmap around empirically proven decision quality: narrowed current claims to execution traceability, identified answer IDs as internal provenance rather than external evidence, gated Elite merge on H0 correctness, and added H1-H4 evidence, buyer, and outcome gates. |
 | 2026-07-17 | Documented the implemented-but-unreleased Elite Decision Protocol: fixed three-success gates, initial/claim-audit/revision artifacts, existing final verdict, phased receipts, failure semantics, cost/latency tradeoff, and no streaming. |
