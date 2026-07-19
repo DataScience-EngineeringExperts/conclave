@@ -4,6 +4,15 @@ This package is intentionally not part of the public council API.  Its schemas
 are versioned so recorded studies can be rejected when their contract changes.
 """
 
+from .live import (
+    BudgetExceededError,
+    GatewayStoppedError,
+    LiveProviderClient,
+    PendingCall,
+    ProviderCallCostBasis,
+    ProviderCallReceipt,
+    ReservationBreachError,
+)
 from .models import (
     EVAL_SCHEMA_VERSION,
     ConditionSpec,
@@ -29,6 +38,13 @@ __all__ = [
     "ScoreRecord",
     "StudyManifest",
     "StudyRun",
+    "BudgetExceededError",
+    "GatewayStoppedError",
+    "LiveProviderClient",
+    "PendingCall",
+    "ProviderCallCostBasis",
+    "ProviderCallReceipt",
+    "ReservationBreachError",
     "AdjudicationRecord",
     "GraderJudgment",
     "StudyScoreReport",

@@ -6,6 +6,7 @@ import hashlib
 import json
 import random
 from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING
 
 from .dataset import hash_public_tasks
 from .models import (
@@ -34,6 +35,17 @@ CONDITIONS: tuple[ConditionSpec, ...] = (
     ConditionSpec(condition_id="elite_full", description="The complete Elite decision protocol."),
 )
 CONDITION_IDS: tuple[ConditionId, ...] = EVAL_CONDITION_IDS
+
+if TYPE_CHECKING:
+    from .live_protocols import LiveProtocolSpec
+
+
+def live_protocol_registry() -> Mapping[ConditionId, LiveProtocolSpec]:
+    """Return the versioned live executors' metadata without an import cycle."""
+
+    from .live_protocols import LIVE_PROTOCOL_REGISTRY
+
+    return LIVE_PROTOCOL_REGISTRY
 
 
 def condition_order(seed: int) -> tuple[ConditionId, ...]:

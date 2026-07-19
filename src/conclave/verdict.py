@@ -57,7 +57,7 @@ CONFIDENCE_LEVELS = ("low", "medium", "high")
 # audit can tell WHICH extractor wording produced a given clustering. Opaque
 # string; only equality/inequality is meaningful. Bump on any change to the
 # extraction system prompt in :mod:`conclave.verdict_synthesis`.
-VERDICT_EXTRACTION_PROMPT_VERSION = "2"
+VERDICT_EXTRACTION_PROMPT_VERSION = "3"
 
 
 class CouncilPosition(BaseModel):

@@ -27,12 +27,15 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from conclave import agreement
 from conclave.manifest import VerdictExtraction
 from conclave.models import ModelAnswer
 from conclave.verdict import CouncilVerdict
 from conclave.verdict_synthesis import (
     VERDICT_EXTRACTION_PROMPT_VERSION,
+    VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES,
     VerdictSynthesisResult,
     extract_verdict,
     verdict_extraction_json_schema,
@@ -495,6 +498,29 @@ def test_repair_message_includes_validation_errors(monkeypatch):
     assert "valid json" in repair_text or "error" in repair_text
 
 
+def test_repair_message_caps_schema_errors_by_utf8_bytes(monkeypatch):
+    malformed = json.dumps({"positions": ["\U0001f600" * 2048]})
+    fake = _ScriptedExtractor(malformed, json.dumps(_payload()))
+    _install(monkeypatch, fake)
+
+    result = __import__("asyncio").run(
+        extract_verdict(
+            "Choose.",
+            [member("alpha", "A", answer_id="alpha-1"), member("beta", "B", answer_id="beta-1")],
+            synthesizer_name=SYNTH_NAME,
+            synthesizer_model_id=SYNTH_MODEL_ID,
+        )
+    )
+
+    assert result.verdict is not None
+    repair_error = (
+        fake.calls[1]["messages"][-1]["content"]
+        .split("The problem was:\n", 1)[1]
+        .split("\n\nReturn only", 1)[0]
+    )
+    assert len(repair_error.encode("utf-8")) <= VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES
+
+
 def test_repair_once_then_success(monkeypatch):
     """First payload invalid, second valid → verdict assembled after one repair."""
     members = [
@@ -511,6 +537,22 @@ def test_repair_once_then_success(monkeypatch):
     # Original + one repair = exactly two calls.
     assert len(fake.calls) == 2
     assert result.verdict.consensus_label == "unanimous"
+
+
+@pytest.mark.asyncio
+async def test_extract_verdict_accepts_an_injected_guarded_call_seam() -> None:
+    fake = _ScriptedExtractor(json.dumps(_payload()))
+
+    result = await extract_verdict(
+        "Choose A or B.",
+        [member("alpha", "A", answer_id="alpha-1"), member("beta", "A", answer_id="beta-1")],
+        synthesizer_name=SYNTH_NAME,
+        synthesizer_model_id=SYNTH_MODEL_ID,
+        call_model_func=fake,
+    )
+
+    assert result.verdict is not None
+    assert len(fake.calls) == 1
 
 
 def test_absent_when_extractor_returns_error(monkeypatch, conclave_caplog):

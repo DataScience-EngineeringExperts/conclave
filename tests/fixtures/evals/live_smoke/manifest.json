@@ -1,0 +1,272 @@
+{
+  "schema_version": "conclave_eval_v1",
+  "study_id": "fictional-live-smoke",
+  "evidence_classification": "paid_exploratory_pilot",
+  "promotable": false,
+  "seed": 20260718,
+  "replicates": 1,
+  "task_ids": [
+    "fictional-live-task"
+  ],
+  "public_tasks_hash": "sha256:d57261e507a99d710e65f0717c6ba18258c2de25d6ab0c0badbab143f7688e05",
+  "frozen_design": {
+    "schema_version": "conclave_eval_v1",
+    "evidence_classification": "paid_exploratory_pilot",
+    "base_commit": "2222222222222222222222222222222222222222",
+    "task_family_map": {
+      "fictional-live-task": "fictional-safety-choice"
+    },
+    "rosters": [
+      {
+        "schema_version": "conclave_eval_v1",
+        "roster_id": "fictional-roster-forward",
+        "members": [
+          {
+            "schema_version": "conclave_eval_v1",
+            "provider_id": "fictional-provider-a",
+            "model_id": "fictional-model-a",
+            "model_revision": "fixture-r1"
+          },
+          {
+            "schema_version": "conclave_eval_v1",
+            "provider_id": "fictional-provider-b",
+            "model_id": "fictional-model-b",
+            "model_revision": "fixture-r2"
+          },
+          {
+            "schema_version": "conclave_eval_v1",
+            "provider_id": "fictional-provider-c",
+            "model_id": "fictional-model-c",
+            "model_revision": "fixture-r3"
+          }
+        ]
+      },
+      {
+        "schema_version": "conclave_eval_v1",
+        "roster_id": "fictional-roster-reverse",
+        "members": [
+          {
+            "schema_version": "conclave_eval_v1",
+            "provider_id": "fictional-provider-c",
+            "model_id": "fictional-model-c",
+            "model_revision": "fixture-r3"
+          },
+          {
+            "schema_version": "conclave_eval_v1",
+            "provider_id": "fictional-provider-b",
+            "model_id": "fictional-model-b",
+            "model_revision": "fixture-r2"
+          },
+          {
+            "schema_version": "conclave_eval_v1",
+            "provider_id": "fictional-provider-a",
+            "model_id": "fictional-model-a",
+            "model_revision": "fixture-r1"
+          }
+        ]
+      }
+    ],
+    "condition_prompt_versions": {
+      "single_frontier": "live_single_frontier_prompt_v1",
+      "self_refine": "live_self_refine_prompt_v1",
+      "independent_synthesis": "live_synthesis_2026-06-29",
+      "critique_only": "live_critique_1_synthesis_2026-06-29",
+      "revision_only": "live_revision_v1_synthesis_2026-06-29",
+      "elite_full": "elite_1_synthesis_2026-06-29_verdict_3"
+    },
+    "condition_protocol_versions": {
+      "single_frontier": "single_frontier_live_v2",
+      "self_refine": "self_refine_live_v2",
+      "independent_synthesis": "independent_synthesis_live_v2",
+      "critique_only": "critique_only_live_v2",
+      "revision_only": "revision_only_live_v2",
+      "elite_full": "elite_full_live_v2"
+    },
+    "generation_settings_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "evaluator_version": "fictional-live-evaluator-v1",
+    "analysis_code_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "rubric_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+    "grader_instructions_hash": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+    "grader_keys_hash": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+    "exclusion_deviation_policy": {
+      "schema_version": "conclave_eval_v1",
+      "predefined_task_exclusions": [],
+      "excluded_task_ids": [],
+      "output_level_exclusions_allowed": false,
+      "deviations_remain_in_denominator": true
+    },
+    "timeout_retry_policy": {
+      "schema_version": "conclave_eval_v1",
+      "timeout_seconds": 1.0,
+      "retry_attempts": 0,
+      "exhausted_runs_remain_in_denominator": true
+    },
+    "randomization": {
+      "schema_version": "conclave_eval_v1",
+      "master_seed": 20260718,
+      "method": "sha256_task_roster_block_v1"
+    },
+    "bootstrap": {
+      "schema_version": "conclave_eval_v1",
+      "seed": 20260718,
+      "samples": 10,
+      "confidence_level": 0.95,
+      "unit": "task"
+    },
+    "analysis_gates": {
+      "schema_version": "conclave_eval_v1",
+      "primary_baseline": "single_frontier",
+      "alpha": 0.05,
+      "power": 0.8,
+      "minimum_effect": 0.1,
+      "severe_error_noninferiority_margin": 0.02,
+      "readiness_noninferiority_margin": 0.05,
+      "reviewer_effort_max_ratio": 1.2,
+      "reviewer_effort_statistic": "ratio_of_task_medians",
+      "latency_baseline": "single_frontier",
+      "p95_latency_max_ratio": 3.0,
+      "absolute_p95_latency_seconds": 60.0,
+      "minimum_confirmatory_tasks": 2,
+      "minimum_double_grading_rate": 0.95,
+      "minimum_raw_agreement": 0.8,
+      "minimum_overall_kappa": 0.6,
+      "minimum_family_kappa": 0.5,
+      "maximum_adjudication_rate": 0.2,
+      "multiplicity_rule": "bonferroni_simultaneous_upper_bounds",
+      "unit": "task"
+    },
+    "price_snapshot": {
+      "schema_version": "conclave_eval_v1",
+      "snapshot_id": "fictional-live-smoke-prices-2026-07-18",
+      "captured_at": "2026-07-18T12:00:00Z",
+      "currency": "USD",
+      "prices_hash": "sha256:46a29d0180e897fd8ba315781b9180121a4509226b8dfb8084164515e0efa53f"
+    },
+    "approved_spend_ceiling_usd": 10.0,
+    "preregistration_id": null,
+    "preregistration_hash": null
+  },
+  "frozen_design_hash": "sha256:a811130bd4a986fdacf090e66192818fa235819bc2e4f9401714e42bcb41bdac",
+  "planned_runs": [
+    {
+      "schema_version": "conclave_eval_v1",
+      "planned_run_id": "run_c1a93e940605e8292b67094e",
+      "study_id": "fictional-live-smoke",
+      "task_id": "fictional-live-task",
+      "roster_id": "fictional-roster-forward",
+      "condition_id": "revision_only",
+      "replicate": 1,
+      "max_output_tokens": 6144
+    },
+    {
+      "schema_version": "conclave_eval_v1",
+      "planned_run_id": "run_ed6a702b1b84a176d5f72a93",
+      "study_id": "fictional-live-smoke",
+      "task_id": "fictional-live-task",
+      "roster_id": "fictional-roster-forward",
+      "condition_id": "elite_full",
+      "replicate": 1,
+      "max_output_tokens": 6144
+    },
+    {
+      "schema_version": "conclave_eval_v1",
+      "planned_run_id": "run_f5fe0ed0dd5f1dae988451dd",
+      "study_id": "fictional-live-smoke",
+      "task_id": "fictional-live-task",
+      "roster_id": "fictional-roster-forward",
+      "condition_id": "independent_synthesis",
+      "replicate": 1,
+      "max_output_tokens": 6144
+    },
+    {
+      "schema_version": "conclave_eval_v1",
+      "planned_run_id": "run_bc95d6a828b012df89b302b5",
+      "study_id": "fictional-live-smoke",
+      "task_id": "fictional-live-task",
+      "roster_id": "fictional-roster-forward",
+      "condition_id": "self_refine",
+      "replicate": 1,
+      "max_output_tokens": 6144
+    },
+    {
+      "schema_version": "conclave_eval_v1",
+      "planned_run_id": "run_b9d0b8fe2b475b93dbf25a2c",
+      "study_id": "fictional-live-smoke",
+      "task_id": "fictional-live-task",
+      "roster_id": "fictional-roster-forward",
+      "condition_id": "critique_only",
+      "replicate": 1,
+      "max_output_tokens": 6144
+    },
+    {
+      "schema_version": "conclave_eval_v1",
+      "planned_run_id": "run_03a8814ed89c23591f147c7a",
+      "study_id": "fictional-live-smoke",
+      "task_id": "fictional-live-task",
+      "roster_id": "fictional-roster-forward",
+      "condition_id": "single_frontier",
+      "replicate": 1,
+      "max_output_tokens": 6144
+    },
+    {
+      "schema_version": "conclave_eval_v1",
+      "planned_run_id": "run_5658e9381ae1544529e0e864",
+      "study_id": "fictional-live-smoke",
+      "task_id": "fictional-live-task",
+      "roster_id": "fictional-roster-reverse",
+      "condition_id": "elite_full",
+      "replicate": 1,
+      "max_output_tokens": 6144
+    },
+    {
+      "schema_version": "conclave_eval_v1",
+      "planned_run_id": "run_0bdce4dc58acd7a2e6f6a18b",
+      "study_id": "fictional-live-smoke",
+      "task_id": "fictional-live-task",
+      "roster_id": "fictional-roster-reverse",
+      "condition_id": "self_refine",
+      "replicate": 1,
+      "max_output_tokens": 6144
+    },
+    {
+      "schema_version": "conclave_eval_v1",
+      "planned_run_id": "run_86382226fc3cc0317ff6cbe3",
+      "study_id": "fictional-live-smoke",
+      "task_id": "fictional-live-task",
+      "roster_id": "fictional-roster-reverse",
+      "condition_id": "revision_only",
+      "replicate": 1,
+      "max_output_tokens": 6144
+    },
+    {
+      "schema_version": "conclave_eval_v1",
+      "planned_run_id": "run_747e55eb644e03a5f1d8c156",
+      "study_id": "fictional-live-smoke",
+      "task_id": "fictional-live-task",
+      "roster_id": "fictional-roster-reverse",
+      "condition_id": "critique_only",
+      "replicate": 1,
+      "max_output_tokens": 6144
+    },
+    {
+      "schema_version": "conclave_eval_v1",
+      "planned_run_id": "run_51bcfb311c31532f81ac0e5a",
+      "study_id": "fictional-live-smoke",
+      "task_id": "fictional-live-task",
+      "roster_id": "fictional-roster-reverse",
+      "condition_id": "independent_synthesis",
+      "replicate": 1,
+      "max_output_tokens": 6144
+    },
+    {
+      "schema_version": "conclave_eval_v1",
+      "planned_run_id": "run_433504af776bc9a6d70694d3",
+      "study_id": "fictional-live-smoke",
+      "task_id": "fictional-live-task",
+      "roster_id": "fictional-roster-reverse",
+      "condition_id": "single_frontier",
+      "replicate": 1,
+      "max_output_tokens": 6144
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": "conclave_eval_v1",
+  "snapshot_id": "fictional-live-smoke-prices-2026-07-18",
+  "captured_at": "2026-07-18T12:00:00Z",
+  "currency": "USD",
+  "entries": [
+    {
+      "schema_version": "conclave_eval_v1",
+      "provider_id": "fictional-provider-a",
+      "model_id": "fictional-model-a",
+      "model_revision": "fixture-r1",
+      "input_ceiling_usd_per_million_tokens": "1.234567",
+      "output_ceiling_usd_per_million_tokens": "4.567891",
+      "max_output_bytes_per_token": 4
+    },
+    {
+      "schema_version": "conclave_eval_v1",
+      "provider_id": "fictional-provider-b",
+      "model_id": "fictional-model-b",
+      "model_revision": "fixture-r2",
+      "input_ceiling_usd_per_million_tokens": "2.000001",
+      "output_ceiling_usd_per_million_tokens": "6.000001",
+      "max_output_bytes_per_token": 4
+    },
+    {
+      "schema_version": "conclave_eval_v1",
+      "provider_id": "fictional-provider-c",
+      "model_id": "fictional-model-c",
+      "model_revision": "fixture-r3",
+      "input_ceiling_usd_per_million_tokens": "3.000001",
+      "output_ceiling_usd_per_million_tokens": "9.000001",
+      "max_output_bytes_per_token": 4
+    }
+  ]
+}

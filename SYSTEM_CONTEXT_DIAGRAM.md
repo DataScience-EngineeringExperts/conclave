@@ -8,6 +8,7 @@ LLM-SDK dependency), how the v1.1 **verdict pipeline** turns the member answers 
 structured, agreement-scored, **execution-traceable** verdict plus a redacted execution manifest, and
 how the implemented-but-unreleased **Elite Decision Protocol** adds gated claim audit and
 revision before that verdict. It also shows where **mcp-warden** sits as a dev-time consumer.
+The DSE-708 edge includes offline replay plus an opt-in, capped paid exploratory path.
 
 > Authority note: behavioral details here are descriptive. The canonical spec is
 > [`docs/PRODUCT_DESIGN_DOCUMENT.md`](docs/PRODUCT_DESIGN_DOCUMENT.md).
@@ -32,8 +33,9 @@ flowchart TB
         council["Council orchestrator<br/>fan_out · synthesize_blocks · skip-no-key (council.py)"]
         modes["Deliberation modes<br/>debate · adversarial · vote (modes.py + prompts.py)"]
         elite["Elite (UNRELEASED)<br/>initial → claim audit → revision<br/>fixed 3-success gate each phase"]
-        evalcli["Experimental eval CLI (DSE-708)<br/>plan · replay validation · blind · report<br/>OFFLINE ONLY"]
+        evalcli["Experimental eval CLI (DSE-708)<br/>offline replay · live dry-run<br/>gated paid exploratory execute"]
         evalartifacts["Versioned eval artifacts<br/>manifest · run · grader set + separate map<br/>exploratory report"]
+        liveguard["Live guard<br/>exact USD 10.00 approval · owner-only seal key<br/>HMAC checkpoint · one in flight · no-repeat resume"]
         registry["Registry · name to model-id<br/>key PRESENCE only, never values (registry.py)"]
         config["Config loader · custom endpoints (config.py)"]
         models["Result contract · CouncilResult v2<br/>answers · verdict · consensus · manifest (models.py)"]
@@ -67,8 +69,9 @@ flowchart TB
     end
 
     user -->|"prompt + council + mode"| cli
-    user -->|"public tasks + offline artifacts"| evalcli
+    user -->|"public tasks + frozen artifacts"| evalcli
     evalcli --> evalartifacts
+    evalcli -.->|"--execute + exact approval"| liveguard
     user -->|"import"| lib
     warden -.->|"imports at DEV time only · NOT a runtime dep"| lib
 
@@ -85,6 +88,7 @@ flowchart TB
     council --> elite
     elite -->|"3+ revisions: existing synthesis + verdict<br/>under 3: stop incomplete"| council
     council --> provider
+    liveguard --> provider
     provider --> adreg
     adreg --> oai
     adreg --> anth
@@ -127,10 +131,13 @@ flowchart TB
 - **Two entry points, one core.** The CLI (`cli.py`) and the library API
   (`from conclave import Council`) are both thin drivers over the same `Council`
   orchestrator. There is no behavior in the CLI that the library can't reach.
-- **The DSE-708 eval lane is experimental and offline.** `conclave eval` freezes manifests,
-  validates pre-recorded run artifacts, blinds outputs into a grader set plus separate identity
-  map, and writes exploratory reports. It has no edge to the provider highway: live execution is
-  fail-closed, and these artifacts support measurement rather than a decision-quality claim.
+- **The DSE-708 eval lane is paid exploratory only.** Offline `eval run` still validates
+  pre-recorded artifacts without provider calls. `eval live` defaults to dry-run; execution
+  requires `--execute`, exact USD 10.00 approval, and an owner-only checkpoint-seal key file.
+  HMAC-SHA256 authenticates checkpoint state, and the price hash includes each model's
+  `max_output_bytes_per_token` estimate bound. One call is in flight, its reservation persists
+  first, and resume skips an interrupted cell. The smoke checks correctness only—not efficiency
+  or decision quality—and remains not decision eligible.
 - **mcp-warden is dashed and dev-time.** The dotted edge from `mcp-warden` to the library
   is deliberate: warden imports conclave **only at design/eval time**. conclave is
   stochastic and must never sit in warden's deterministic runtime decision path. See PDD

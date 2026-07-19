@@ -410,7 +410,13 @@ council shipped in v1.1** (§4a — the wedge).
 The revised thesis is a **source-grounded, execution-traceable decision record with
 empirically proven quality**. Current answer IDs identify model outputs, not external evidence;
 source-auditable language is therefore too broad until source grounding ships. Elite remains
-implemented but unreleased on open PR #51, pending final review and merge.
+implemented but unreleased in source.
+
+H1 also includes an opt-in live runner that is **paid exploratory only**. Dry-run is the default;
+paid execution requires `--execute`, exact `--approve-spend-usd 10.00`, and an owner-only
+`--checkpoint-seal-key-file` with at least 32 random bytes. Versioned HMAC-SHA256 checkpoints
+never serialize that key; frozen `max_output_bytes_per_token` attestations bound inserted UTF-8
+bytes. One call is in flight, reservations persist first, and resume never repeats interrupted cells. The smoke proves correctness only—not efficiency or decision quality—and remains not decision eligible.
 
 The canonical roadmap is
 [`docs/plans/2026-07-17-decision-quality-roadmap.md`](plans/2026-07-17-decision-quality-roadmap.md):

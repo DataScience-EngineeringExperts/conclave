@@ -1,18 +1,40 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
+from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
+import conclave.eval_cli as eval_cli_module
 from conclave.cli import app
+from conclave.evals.live import (
+    build_checkpoint_bindings,
+    create_live_checkpoint,
+    load_live_checkpoint,
+    write_live_checkpoint,
+)
+from conclave.evals.live_protocols import stage_call_sequence
 from conclave.evals.models import PublicTask, RunRecord, StudyRun
 from conclave.evals.protocols import CONDITION_IDS, build_study_manifest
+from conclave.evals.runner import run_live_study as execute_live_study
+from conclave.models import ModelAnswer, TokenUsage
+from tests.evals.test_live_runner import _live_inputs
 
 runner = CliRunner()
+ROOT = Path(__file__).resolve().parents[2]
+CHECKPOINT_SEAL_KEY = bytes(range(32))
 
 
 def _write_json(path, payload) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_seal_key(path: Path) -> Path:
+    path.write_bytes(CHECKPOINT_SEAL_KEY)
+    path.chmod(0o600)
+    return path
 
 
 def _study_artifacts(tmp_path):
@@ -49,6 +71,442 @@ def _study_artifacts(tmp_path):
     run_path = tmp_path / "run.json"
     _write_json(run_path, study_run.model_dump(mode="json"))
     return tasks_path, manifest_path, run_path, manifest
+
+
+def _live_artifacts(tmp_path, **input_overrides):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    tasks, manifest, price_book = _live_inputs(**input_overrides)
+    tasks_path = tmp_path / "live-tasks.json"
+    manifest_path = tmp_path / "live-manifest.json"
+    price_book_path = tmp_path / "live-price-book.json"
+    _write_json(
+        tasks_path,
+        {
+            "schema_version": "conclave_eval_v1",
+            "tasks": [task.model_dump(mode="json") for task in tasks],
+        },
+    )
+    _write_json(manifest_path, manifest.model_dump(mode="json"))
+    _write_json(price_book_path, price_book.model_dump(mode="json"))
+    return tasks, manifest, price_book, tasks_path, manifest_path, price_book_path
+
+
+def _live_command(
+    manifest_path,
+    tasks_path,
+    price_book_path,
+    output_path,
+    checkpoint_path,
+    receipts_path,
+    *options,
+) -> list[str]:
+    return [
+        "eval",
+        "live",
+        str(manifest_path),
+        str(tasks_path),
+        str(price_book_path),
+        str(output_path),
+        str(checkpoint_path),
+        str(receipts_path),
+        *options,
+    ]
+
+
+async def _successful_live_provider(name, model_id, messages, **kwargs):
+    del messages, kwargs
+    return ModelAnswer(
+        name=name,
+        model_id=model_id,
+        answer=f"fictional decision from {name}",
+        usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+
+def test_eval_live_defaults_to_dry_run_and_never_calls_provider(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, manifest, _, tasks_path, manifest_path, price_book_path = _live_artifacts(tmp_path)
+    output_path = tmp_path / "run.json"
+    checkpoint_path = tmp_path / "checkpoint.json"
+    receipts_path = tmp_path / "receipts.json"
+    provider_calls = 0
+
+    async def forbidden_live_runner(**kwargs):
+        nonlocal provider_calls
+        del kwargs
+        provider_calls += 1
+        raise AssertionError("dry-run must never enter the provider-backed runner")
+
+    monkeypatch.setattr(eval_cli_module, "run_live_study", forbidden_live_runner, raising=False)
+
+    result = runner.invoke(
+        app,
+        _live_command(
+            manifest_path,
+            tasks_path,
+            price_book_path,
+            output_path,
+            checkpoint_path,
+            receipts_path,
+            "--approve-spend-usd",
+            "10.00",
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    estimate = json.loads(result.stdout)
+    assert estimate["planned_cells"] == len(manifest.planned_runs)
+    assert Decimal(estimate["ceiling_usd"]) == Decimal("10.00")
+    assert estimate["fits_ceiling"] is True
+    assert provider_calls == 0
+    assert not output_path.exists()
+    assert not checkpoint_path.exists()
+    assert not receipts_path.exists()
+
+
+def test_eval_live_requires_execute_and_exact_frozen_spend_approval(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, _, _, tasks_path, manifest_path, price_book_path = _live_artifacts(tmp_path)
+    provider_calls = 0
+
+    async def forbidden_live_runner(**kwargs):
+        nonlocal provider_calls
+        del kwargs
+        provider_calls += 1
+        raise AssertionError("invalid approval must fail before provider execution")
+
+    monkeypatch.setattr(eval_cli_module, "run_live_study", forbidden_live_runner, raising=False)
+
+    for index, options in enumerate(
+        (
+            ("--execute",),
+            ("--execute", "--approve-spend-usd", "9.99"),
+            ("--execute", "--approve-spend-usd", "10.01"),
+        )
+    ):
+        result = runner.invoke(
+            app,
+            _live_command(
+                manifest_path,
+                tasks_path,
+                price_book_path,
+                tmp_path / f"run-{index}.json",
+                tmp_path / f"checkpoint-{index}.json",
+                tmp_path / f"receipts-{index}.json",
+                *options,
+            ),
+        )
+
+        assert result.exit_code == 2
+        assert "approval" in result.output.lower()
+
+    dry_run = runner.invoke(
+        app,
+        _live_command(
+            manifest_path,
+            tasks_path,
+            price_book_path,
+            tmp_path / "dry-run.json",
+            tmp_path / "dry-checkpoint.json",
+            tmp_path / "dry-receipts.json",
+            "--approve-spend-usd",
+            "10.00",
+        ),
+    )
+    assert dry_run.exit_code == 0, dry_run.output
+    assert provider_calls == 0
+
+
+def test_eval_live_execute_requires_owner_only_checkpoint_seal_key_file(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, _, _, tasks_path, manifest_path, price_book_path = _live_artifacts(tmp_path)
+    runner_calls = 0
+
+    async def forbidden_live_runner(**kwargs):
+        nonlocal runner_calls
+        del kwargs
+        runner_calls += 1
+        raise AssertionError("seal-key validation must happen before live execution")
+
+    monkeypatch.setattr(eval_cli_module, "run_live_study", forbidden_live_runner, raising=False)
+    base_paths = (
+        tmp_path / "run.json",
+        tmp_path / "checkpoint.json",
+        tmp_path / "receipts.json",
+    )
+    missing = runner.invoke(
+        app,
+        _live_command(
+            manifest_path,
+            tasks_path,
+            price_book_path,
+            *base_paths,
+            "--execute",
+            "--approve-spend-usd",
+            "10.00",
+        ),
+    )
+    assert missing.exit_code == 2
+    assert "--checkpoint-seal-key-file" in missing.output
+
+    key_path = tmp_path / "checkpoint-seal.key"
+    key_path.write_bytes(bytes(range(32)))
+    key_path.chmod(0o640)
+    insecure = runner.invoke(
+        app,
+        _live_command(
+            manifest_path,
+            tasks_path,
+            price_book_path,
+            *base_paths,
+            "--execute",
+            "--approve-spend-usd",
+            "10.00",
+            "--checkpoint-seal-key-file",
+            str(key_path),
+        ),
+    )
+    assert insecure.exit_code == 2
+    assert "owner-only" in insecure.output.lower()
+    assert runner_calls == 0
+
+
+def test_eval_live_dry_run_does_not_read_checkpoint_seal_key_file(tmp_path) -> None:
+    _, _, _, tasks_path, manifest_path, price_book_path = _live_artifacts(tmp_path)
+    result = runner.invoke(
+        app,
+        _live_command(
+            manifest_path,
+            tasks_path,
+            price_book_path,
+            tmp_path / "run.json",
+            tmp_path / "checkpoint.json",
+            tmp_path / "receipts.json",
+            "--checkpoint-seal-key-file",
+            str(tmp_path / "does-not-exist.key"),
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+
+
+def test_live_evaluation_docs_preserve_operator_and_claim_boundaries() -> None:
+    docs = {
+        path: " ".join((ROOT / path).read_text(encoding="utf-8").lower().split())
+        for path in (
+            "README.md",
+            "SYSTEM_CONTEXT_DIAGRAM.md",
+            "DOCUMENTATION_INDEX.md",
+            "docs/PRODUCT_DESIGN_DOCUMENT.md",
+            "CHANGELOG.md",
+        )
+    }
+    corpus = " ".join(docs.values())
+
+    assert all("paid exploratory" in text for text in docs.values())
+    assert "paid exploratory only" in corpus
+    assert "dry-run is the default" in corpus
+    assert "--execute" in corpus
+    assert "--approve-spend-usd 10.00" in corpus
+    assert "--checkpoint-seal-key-file" in corpus
+    assert "owner-only" in corpus
+    assert "hmac-sha256" in corpus
+    assert "max_output_bytes_per_token" in corpus
+    assert "one provider call is in flight" in corpus
+    assert "reservation is persisted before each call" in corpus
+    assert "resume never repeats an interrupted cell" in corpus
+    assert "correctness only" in corpus
+    assert "not efficiency or decision quality" in corpus
+    assert "not decision eligible" in corpus
+
+
+def test_eval_live_rejects_confirmatory_legacy_or_snapshot_drift(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, _, _, live_tasks_path, live_manifest_path, live_price_book_path = _live_artifacts(
+        tmp_path / "valid"
+    )
+    _, _, _, confirmatory_tasks, confirmatory_manifest, confirmatory_price_book = _live_artifacts(
+        tmp_path / "confirmatory", evidence_classification="confirmatory"
+    )
+    legacy_dir = tmp_path / "legacy"
+    legacy_dir.mkdir()
+    legacy_tasks, legacy_manifest, _, _ = _study_artifacts(legacy_dir)
+    drifted_payload = json.loads(live_price_book_path.read_text(encoding="utf-8"))
+    drifted_payload["snapshot_id"] = "drifted-snapshot"
+    drifted_price_book = tmp_path / "drifted-price-book.json"
+    _write_json(drifted_price_book, drifted_payload)
+    boundary_calls = 0
+
+    async def forbidden_boundary(**kwargs):
+        nonlocal boundary_calls
+        del kwargs
+        boundary_calls += 1
+        raise AssertionError("invalid live artifacts must fail before keys or network")
+
+    monkeypatch.setattr(eval_cli_module, "estimate_live_study", forbidden_boundary, raising=False)
+    monkeypatch.setattr(eval_cli_module, "run_live_study", forbidden_boundary, raising=False)
+
+    cases = (
+        (
+            confirmatory_manifest,
+            confirmatory_tasks,
+            confirmatory_price_book,
+            "paid exploratory",
+        ),
+        (legacy_manifest, legacy_tasks, live_price_book_path, "paid exploratory"),
+        (live_manifest_path, live_tasks_path, drifted_price_book, "snapshot"),
+    )
+    for index, (manifest_path, tasks_path, price_book_path, expected) in enumerate(cases):
+        result = runner.invoke(
+            app,
+            _live_command(
+                manifest_path,
+                tasks_path,
+                price_book_path,
+                tmp_path / f"invalid-run-{index}.json",
+                tmp_path / f"invalid-checkpoint-{index}.json",
+                tmp_path / f"invalid-receipts-{index}.json",
+                "--execute",
+                "--approve-spend-usd",
+                "10.00",
+            ),
+        )
+
+        assert result.exit_code == 2
+        assert expected in result.output.lower()
+
+    assert boundary_calls == 0
+
+
+def test_eval_live_writes_checkpoint_receipts_and_study_run_atomically(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, manifest, _, tasks_path, manifest_path, price_book_path = _live_artifacts(tmp_path)
+    output_path = tmp_path / "artifacts" / "run.json"
+    checkpoint_path = tmp_path / "state" / "checkpoint.json"
+    receipts_path = tmp_path / "artifacts" / "receipts.json"
+    seal_key_path = _write_seal_key(tmp_path / "checkpoint-seal.key")
+    atomic_paths = []
+    real_atomic_json = eval_cli_module._atomic_json
+
+    async def injected_runner(**kwargs):
+        return await execute_live_study(
+            **kwargs,
+            call_model_func=_successful_live_provider,
+        )
+
+    def recording_atomic_json(path, value):
+        atomic_paths.append(path)
+        real_atomic_json(path, value)
+
+    monkeypatch.setattr(eval_cli_module, "run_live_study", injected_runner, raising=False)
+    monkeypatch.setattr(eval_cli_module, "_atomic_json", recording_atomic_json)
+
+    result = runner.invoke(
+        app,
+        _live_command(
+            manifest_path,
+            tasks_path,
+            price_book_path,
+            output_path,
+            checkpoint_path,
+            receipts_path,
+            "--execute",
+            "--approve-spend-usd",
+            "10.00",
+            "--checkpoint-seal-key-file",
+            str(seal_key_path),
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    run_payload = json.loads(output_path.read_text(encoding="utf-8"))
+    receipt_payload = json.loads(receipts_path.read_text(encoding="utf-8"))
+    assert run_payload["total_planned_runs"] == len(manifest.planned_runs)
+    assert receipt_payload["study_id"] == manifest.study_id
+    assert receipt_payload["receipts"]
+    assert checkpoint_path.exists()
+    assert atomic_paths == [output_path, receipts_path]
+    assert not tuple(tmp_path.rglob("*.tmp"))
+
+
+def test_eval_live_resume_uses_existing_checkpoint(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, manifest, price_book, tasks_path, manifest_path, price_book_path = _live_artifacts(tmp_path)
+    output_path = tmp_path / "run.json"
+    checkpoint_path = tmp_path / "checkpoint.json"
+    receipts_path = tmp_path / "receipts.json"
+    seal_key_path = _write_seal_key(tmp_path / "checkpoint-seal.key")
+    first_run = manifest.planned_runs[0]
+    preserved = RunRecord(
+        planned_run_id=first_run.planned_run_id,
+        outcome="success",
+        output="preserved checkpoint result",
+        cost_receipt_complete=True,
+    )
+    bindings = build_checkpoint_bindings(
+        manifest,
+        price_book,
+        hard_cap_usd=Decimal("10.00"),
+    )
+    write_live_checkpoint(
+        checkpoint_path,
+        create_live_checkpoint(
+            bindings=bindings,
+            records=(preserved,),
+            seal_key=CHECKPOINT_SEAL_KEY,
+        ),
+        seal_key=CHECKPOINT_SEAL_KEY,
+    )
+    provider_calls = 0
+
+    async def counting_provider(name, model_id, messages, **kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        return await _successful_live_provider(name, model_id, messages, **kwargs)
+
+    async def injected_runner(**kwargs):
+        assert kwargs["checkpoint_path"] == checkpoint_path
+        return await execute_live_study(**kwargs, call_model_func=counting_provider)
+
+    monkeypatch.setattr(eval_cli_module, "run_live_study", injected_runner, raising=False)
+
+    result = runner.invoke(
+        app,
+        _live_command(
+            manifest_path,
+            tasks_path,
+            price_book_path,
+            output_path,
+            checkpoint_path,
+            receipts_path,
+            "--execute",
+            "--approve-spend-usd",
+            "10.00",
+            "--checkpoint-seal-key-file",
+            str(seal_key_path),
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+    run_payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert run_payload["records"][0]["output"] == "preserved checkpoint result"
+    expected_calls = sum(
+        len(stage_call_sequence(item.condition_id, roster_size=3))
+        for item in manifest.planned_runs[1:]
+    )
+    assert provider_calls == expected_calls
+    resumed_checkpoint = load_live_checkpoint(
+        checkpoint_path,
+        expected_bindings=bindings,
+        seal_key=CHECKPOINT_SEAL_KEY,
+    )
+    assert resumed_checkpoint.records[0] == preserved
 
 
 def test_eval_plan_writes_complete_manifest_atomically(tmp_path) -> None:

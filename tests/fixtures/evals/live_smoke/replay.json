@@ -1,0 +1,2230 @@
+{
+  "schema_version": "conclave_replay_v1",
+  "base_manifest_hash": "sha256:50a3e7cb08e8df6da6cdd95fba6404dcb7cefcfcf0cfd5188ec45285df7b1672",
+  "records": [
+    {
+      "request_hash": "sha256:cc57d8d8ed8963f3537727956243f353427936b20d5365ebb8438e91a93340e1",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 786,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 001."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:2e653c544f6ead81a481fad8280b49024ade5526a96780e6af5a76f9cf41c3d3",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 786,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 002."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:7fe02d317cbc5fd6bc862df80f6418ba7d1cdbd0aac145add051fcd20c6ad575",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 786,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 003."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:7a55e1ca1bc4fd291414e0cf89e360235bb902b1b16d8d38913ad7915c2b39f9",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 914,
+          "messages": [
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer:\nFictional decision artifact 001.\n\nAnonymized peer panel:\n\n### Model A peer answer\nFictional decision artifact 001.\n\n### Model B peer answer\nFictional decision artifact 002.\n\n### Model C peer answer\nFictional decision artifact 003.\n\nProduce one complete revised answer to the original prompt.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 004."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:588214dba5cab890058699ad3aaa3154651feb222b108c1515144f443ad3002a",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 914,
+          "messages": [
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer:\nFictional decision artifact 002.\n\nAnonymized peer panel:\n\n### Model A peer answer\nFictional decision artifact 001.\n\n### Model B peer answer\nFictional decision artifact 002.\n\n### Model C peer answer\nFictional decision artifact 003.\n\nProduce one complete revised answer to the original prompt.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 005."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:f06b82738ea98cca45d7f979b4091aa8bc5133875063d7bf3b18d8aa0aad35b3",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 914,
+          "messages": [
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer:\nFictional decision artifact 003.\n\nAnonymized peer panel:\n\n### Model A peer answer\nFictional decision artifact 001.\n\n### Model B peer answer\nFictional decision artifact 002.\n\n### Model C peer answer\nFictional decision artifact 003.\n\nProduce one complete revised answer to the original prompt.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 006."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:d508a5497c969942dcf7bffa205bd1a77000cdb442d535b76516e185b5db6436",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 1044,
+          "messages": [
+            {
+              "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized decision artifacts:\n\n### Model A decision artifact\nFictional decision artifact 004.\n\n### Model B decision artifact\nFictional decision artifact 005.\n\n### Model C decision artifact\nFictional decision artifact 006.\n\nProduce the consolidated decision artifact.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 007."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:e1ba0136778f7688e5aa74728c7e05aeca18860110e12717b4b5d62892c9ee8a",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 373,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 008."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:7a4b57d6c3ba105284afee582de680337d30a318593f683859f5ca75fb4af59b",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 373,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 009."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:f505a9749b9369d62d22e46166b8f5fe6ddbeb6ca51e7bb33768136ef4a4fbab",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 373,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 010."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:e50f2b0ea8373f8beac8118bd2c820dafbc569f622fa9367bd219cd20d04529c",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 373,
+          "messages": [
+            {
+              "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_f29fa12f48917da3ddf9db46)\nFictional decision artifact 008.\n\n### Model B initial answer (Answer ID: ca_initial_c9faf8db2a5723c726845328)\nFictional decision artifact 009.\n\n### Model C initial answer (Answer ID: ca_initial_4932305110971a8ba03c3fd7)\nFictional decision artifact 010.\n\nAudit the panel using the required claim categories.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 011."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:77cb17fe1404da194cb09e6db9ae44629f1c1dd1d318ddafa619ffc15ab4c0aa",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 373,
+          "messages": [
+            {
+              "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_f29fa12f48917da3ddf9db46)\nFictional decision artifact 008.\n\n### Model B initial answer (Answer ID: ca_initial_c9faf8db2a5723c726845328)\nFictional decision artifact 009.\n\n### Model C initial answer (Answer ID: ca_initial_4932305110971a8ba03c3fd7)\nFictional decision artifact 010.\n\nAudit the panel using the required claim categories.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 012."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:abdced28c27045858bac32c56adac3ff7e5373a44beb2f3a5c38e358a2f36c3e",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 373,
+          "messages": [
+            {
+              "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_f29fa12f48917da3ddf9db46)\nFictional decision artifact 008.\n\n### Model B initial answer (Answer ID: ca_initial_c9faf8db2a5723c726845328)\nFictional decision artifact 009.\n\n### Model C initial answer (Answer ID: ca_initial_4932305110971a8ba03c3fd7)\nFictional decision artifact 010.\n\nAudit the panel using the required claim categories.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 013."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:2754e419e2382fd7535aa1f4d50d3bd73adc659a1b208b565849e2000d3823e8",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 501,
+          "messages": [
+            {
+              "content": "You are revising your independent answer after a claim audit by an elite decision council. Use the anonymized initial panel and critiques to correct unsupported claims, resolve conflicts where the supplied material permits, and clearly mark externally unverified claims. Do not invent citations, sources, quotations, measurements, or facts. Produce a complete standalone answer to the original prompt, not a description of your edits.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer (Answer ID: ca_initial_f29fa12f48917da3ddf9db46):\nFictional decision artifact 008.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_f29fa12f48917da3ddf9db46)\nFictional decision artifact 008.\n\n### Model B initial answer (Answer ID: ca_initial_c9faf8db2a5723c726845328)\nFictional decision artifact 009.\n\n### Model C initial answer (Answer ID: ca_initial_4932305110971a8ba03c3fd7)\nFictional decision artifact 010.\n\nAnonymized claim audits:\n\n### Model A critique (Answer ID: ca_critique_9b84e50fc06aa0e0b0264032)\nFictional decision artifact 011.\n\n### Model B critique (Answer ID: ca_critique_f6dae839699a7d8094440acf)\nFictional decision artifact 012.\n\n### Model C critique (Answer ID: ca_critique_c6a9ad6602a885891dcfaa49)\nFictional decision artifact 013.\n\nNow provide your claim-audit-aware revised answer.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 014."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:0db5d3ad3682b36e7e52f3a4d3cf7ec05d46aa9647881d19f11a8b82b11a30cc",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 501,
+          "messages": [
+            {
+              "content": "You are revising your independent answer after a claim audit by an elite decision council. Use the anonymized initial panel and critiques to correct unsupported claims, resolve conflicts where the supplied material permits, and clearly mark externally unverified claims. Do not invent citations, sources, quotations, measurements, or facts. Produce a complete standalone answer to the original prompt, not a description of your edits.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer (Answer ID: ca_initial_c9faf8db2a5723c726845328):\nFictional decision artifact 009.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_f29fa12f48917da3ddf9db46)\nFictional decision artifact 008.\n\n### Model B initial answer (Answer ID: ca_initial_c9faf8db2a5723c726845328)\nFictional decision artifact 009.\n\n### Model C initial answer (Answer ID: ca_initial_4932305110971a8ba03c3fd7)\nFictional decision artifact 010.\n\nAnonymized claim audits:\n\n### Model A critique (Answer ID: ca_critique_9b84e50fc06aa0e0b0264032)\nFictional decision artifact 011.\n\n### Model B critique (Answer ID: ca_critique_f6dae839699a7d8094440acf)\nFictional decision artifact 012.\n\n### Model C critique (Answer ID: ca_critique_c6a9ad6602a885891dcfaa49)\nFictional decision artifact 013.\n\nNow provide your claim-audit-aware revised answer.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 015."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:d956686457a298cba78ed4fa28827f50e73a5f69f4ebbdb346406f5edffbab19",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 501,
+          "messages": [
+            {
+              "content": "You are revising your independent answer after a claim audit by an elite decision council. Use the anonymized initial panel and critiques to correct unsupported claims, resolve conflicts where the supplied material permits, and clearly mark externally unverified claims. Do not invent citations, sources, quotations, measurements, or facts. Produce a complete standalone answer to the original prompt, not a description of your edits.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer (Answer ID: ca_initial_4932305110971a8ba03c3fd7):\nFictional decision artifact 010.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_f29fa12f48917da3ddf9db46)\nFictional decision artifact 008.\n\n### Model B initial answer (Answer ID: ca_initial_c9faf8db2a5723c726845328)\nFictional decision artifact 009.\n\n### Model C initial answer (Answer ID: ca_initial_4932305110971a8ba03c3fd7)\nFictional decision artifact 010.\n\nAnonymized claim audits:\n\n### Model A critique (Answer ID: ca_critique_9b84e50fc06aa0e0b0264032)\nFictional decision artifact 011.\n\n### Model B critique (Answer ID: ca_critique_f6dae839699a7d8094440acf)\nFictional decision artifact 012.\n\n### Model C critique (Answer ID: ca_critique_c6a9ad6602a885891dcfaa49)\nFictional decision artifact 013.\n\nNow provide your claim-audit-aware revised answer.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 016."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:322e700e4cc5f29ca0bf46953fed2294effc18c8f918d649e0a81d30a5089e6c",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 629,
+          "messages": [
+            {
+              "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized decision artifacts:\n\n### Model A decision artifact\nFictional decision artifact 014.\n\n### Model B decision artifact\nFictional decision artifact 015.\n\n### Model C decision artifact\nFictional decision artifact 016.\n\nProduce the consolidated decision artifact.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 017."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:6f76bf698fc495f0e86e9bf221ac30de80c42dfcdece486f3e2ad2f506a0a5e8",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 889,
+          "messages": [
+            {
+              "content": "You are the verdict extractor for an auditable multi-model council. You are given the original prompt and each council member's answer, labeled with a stable answer id. These IDs provide within-run answer provenance only; they do not prove claims against external sources. Produce ONE JSON object that conforms exactly to the provided JSON Schema and nothing else.\n\nYour job is to ADJUDICATE, not to re-answer:\n- Set verdict_applies=false when the prompt is open-ended generation (a poem, a brainstorm, free writing) with no decision or review to settle; otherwise true.\n- Set verdict_type to 'decision' (a question with an answer), 'review' (an accept/revise/reject judgment), or 'synthesis' (open-ended consolidation).\n- Cluster the members into positions[]; each position lists the providers in it and the evidence_answer_ids (the compatibility field containing the answer IDs shown) tracing it, so a human can verify every assignment against the raw answer.\n- Record one provider_vote per member that took a stance (position_label must match a positions[].label); omit a member that took no clean stance.\n- Add conflicts[] only when there are two or more positions in tension.\n\nCRITICAL: Do NOT emit any consensus score, percentage, ratio, or agreement number — the council computes consensus deterministically from your clustering. Emit only the fields in the schema.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nCouncil member answers:\n\n### Member answer (answer id: ca_revision_30f27d6d1f3068239a264a92) — from Model A\nFictional decision artifact 014.\n\n### Member answer (answer id: ca_revision_54bce3f164f68c9ddb3effdf) — from Model B\nFictional decision artifact 015.\n\n### Member answer (answer id: ca_revision_648c3c5d70c342eaa5812f6e) — from Model C\nFictional decision artifact 016.\n\nExtract the verdict as a single JSON object conforming exactly to this JSON Schema (emit no prose, no consensus number, only the JSON):\n\n{\n  \"title\": \"VerdictExtraction\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"verdict_type\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"decision\",\n        \"review\",\n        \"synthesis\"\n      ]\n    },\n    \"headline\": {\n      \"type\": \"string\"\n    },\n    \"recommendation\": {\n      \"type\": \"string\"\n    },\n    \"positions\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"label\": {\n            \"type\": \"string\"\n          },\n          \"summary\": {\n            \"type\": \"string\"\n          },\n          \"providers\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"evidence_answer_ids\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          }\n        },\n        \"required\": [\n          \"label\",\n          \"summary\",\n          \"providers\",\n          \"evidence_answer_ids\"\n        ]\n      }\n    },\n    \"conflicts\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"topic\": {\n            \"type\": \"string\"\n          },\n          \"position_labels\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"summary\": {\n            \"type\": \"string\"\n          },\n          \"consensus_score\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          }\n        },\n        \"required\": [\n          \"topic\",\n          \"position_labels\",\n          \"summary\"\n        ]\n      }\n    },\n    \"provider_votes\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"provider\": {\n            \"type\": \"string\"\n          },\n          \"position_label\": {\n            \"type\": \"string\"\n          },\n          \"confidence\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"low\",\n              \"medium\",\n              \"high\"\n            ]\n          }\n        },\n        \"required\": [\n          \"provider\",\n          \"position_label\"\n        ]\n      }\n    },\n    \"minority_reports\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"providers\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"claim\": {\n            \"type\": \"string\"\n          },\n          \"evidence_answer_ids\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"why_it_matters\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"providers\",\n          \"claim\",\n          \"evidence_answer_ids\"\n        ]\n      }\n    },\n    \"caveats\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    },\n    \"dissent_summary\": {\n      \"type\": \"string\"\n    },\n    \"verdict_applies\": {\n      \"type\": \"boolean\"\n    }\n  },\n  \"required\": [\n    \"verdict_type\",\n    \"headline\",\n    \"recommendation\",\n    \"positions\",\n    \"verdict_applies\"\n  ]\n}",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "{\"caveats\":[],\"conflicts\":[],\"headline\":\"Choose the fictional safe route.\",\"minority_reports\":[],\"positions\":[{\"evidence_answer_ids\":[\"fixture-a\",\"fixture-b\",\"fixture-c\"],\"label\":\"route-a\",\"providers\":[\"Model A\",\"Model B\",\"Model C\"],\"summary\":\"Route A is preferred.\"}],\"provider_votes\":[{\"position_label\":\"route-a\",\"provider\":\"Model A\"},{\"position_label\":\"route-a\",\"provider\":\"Model B\"},{\"position_label\":\"route-a\",\"provider\":\"Model C\"}],\"recommendation\":\"Use Route A with the stated safeguards.\",\"verdict_applies\":true,\"verdict_type\":\"decision\"}"
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:2f49af35b10a45083cec38a6929c4f24840fd9ddb9a0e8337e3e1840ad0e120c",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 1472,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 019."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:3e871bdcc4a67bae1bba8dc450a253797ad6d689350c9cc0ae1bfec5b8e79f58",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 1472,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 020."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:1272f0bc2baa43e27e852787219b6b445ff23481fe9d7785e88c63a72dea8a2a",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 1472,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 021."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:d2145371bbde2a6c3a79ce2b89ec7b4aa8e69a738a9566bd0d51766a89799671",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 1728,
+          "messages": [
+            {
+              "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized decision artifacts:\n\n### Model A decision artifact\nFictional decision artifact 019.\n\n### Model B decision artifact\nFictional decision artifact 020.\n\n### Model C decision artifact\nFictional decision artifact 021.\n\nProduce the consolidated decision artifact.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 022."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:b9e89bcfe9000abe09e1a09cc023d3168adf7e6c5dfa45e34eb224ca3862cc7a",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 3008,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 023."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:a60349a2d5cfdf86fc62e921951f4eca9182a8c026469e618d05b63ffc11b947",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 3136,
+          "messages": [
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour draft:\nFictional decision artifact 023.\n\nProduce one complete, improved final answer.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 024."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:d948e25d735ca60fa12fa1f58a1a13a3b83756c89a14cb6aec3f0636dd8c1d79",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 841,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 025."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:85c1e9279d0f7807e5b2e11ee8e5b7598b6c0cd3e6902a62af28977b29770f8f",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 841,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 026."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:94eb52642fa244a450a865a90d5f84760985a99296505bb7c65d927faeb43f27",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 841,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 027."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:0e527c0459e3bd7f839e6308337fce1e7b8b1d869901ca1f8b53861c5a282c3f",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 841,
+          "messages": [
+            {
+              "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_5127d3c1427487a9d5a2105e)\nFictional decision artifact 025.\n\n### Model B initial answer (Answer ID: ca_initial_8d80d7037e094de16cf8580e)\nFictional decision artifact 026.\n\n### Model C initial answer (Answer ID: ca_initial_3c118037d4b7a6632c6b0a09)\nFictional decision artifact 027.\n\nAudit the panel using the required claim categories.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 028."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:5ecd7802617269a8b949485af7d35935b8c528a4961623c7ebabc273e8154060",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 841,
+          "messages": [
+            {
+              "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_5127d3c1427487a9d5a2105e)\nFictional decision artifact 025.\n\n### Model B initial answer (Answer ID: ca_initial_8d80d7037e094de16cf8580e)\nFictional decision artifact 026.\n\n### Model C initial answer (Answer ID: ca_initial_3c118037d4b7a6632c6b0a09)\nFictional decision artifact 027.\n\nAudit the panel using the required claim categories.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 029."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:929b7a97cc9664a70b2e04343b559da4243e62c08b9993455f6bd4e425dfb1bd",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 841,
+          "messages": [
+            {
+              "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_5127d3c1427487a9d5a2105e)\nFictional decision artifact 025.\n\n### Model B initial answer (Answer ID: ca_initial_8d80d7037e094de16cf8580e)\nFictional decision artifact 026.\n\n### Model C initial answer (Answer ID: ca_initial_3c118037d4b7a6632c6b0a09)\nFictional decision artifact 027.\n\nAudit the panel using the required claim categories.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 030."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:46a847386e76edb863614a44b87ceb3e684fdd2c87b617cd1aeecb2bdc324e68",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 1098,
+          "messages": [
+            {
+              "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized decision artifacts:\n\n### Model A decision artifact\nFictional decision artifact 025.\n\n### Model B decision artifact\nFictional decision artifact 026.\n\n### Model C decision artifact\nFictional decision artifact 027.\n\nAnonymized claim audits:\n\n### Model A anonymized audit\nFictional decision artifact 028.\n\n### Model B anonymized audit\nFictional decision artifact 029.\n\n### Model C anonymized audit\nFictional decision artifact 030.\n\nProduce the consolidated decision artifact.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 031."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:430c93c9a1dffaddae7ee9001fc1e2246c3b8cba21818d2e0076d1f5f8ca4f12",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 6144,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 032."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:f505a9749b9369d62d22e46166b8f5fe6ddbeb6ca51e7bb33768136ef4a4fbab",
+      "occurrence_index": 1,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 373,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 033."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:7a4b57d6c3ba105284afee582de680337d30a318593f683859f5ca75fb4af59b",
+      "occurrence_index": 1,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 373,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 034."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:e1ba0136778f7688e5aa74728c7e05aeca18860110e12717b4b5d62892c9ee8a",
+      "occurrence_index": 1,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 373,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 035."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:8068ebf0f001d22e6d380dea58d25cc6dc3915e38da091d270e7796bbc743163",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 373,
+          "messages": [
+            {
+              "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_1625c335ddfd9096184d4f8c)\nFictional decision artifact 033.\n\n### Model B initial answer (Answer ID: ca_initial_7aa7c02530241beed834c517)\nFictional decision artifact 034.\n\n### Model C initial answer (Answer ID: ca_initial_e079f32b25f027c8193b28f2)\nFictional decision artifact 035.\n\nAudit the panel using the required claim categories.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 036."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:c779f8767450873543244a7a5c9f54dda6e2d6c8fb2768c73c07fb75db95e188",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 373,
+          "messages": [
+            {
+              "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_1625c335ddfd9096184d4f8c)\nFictional decision artifact 033.\n\n### Model B initial answer (Answer ID: ca_initial_7aa7c02530241beed834c517)\nFictional decision artifact 034.\n\n### Model C initial answer (Answer ID: ca_initial_e079f32b25f027c8193b28f2)\nFictional decision artifact 035.\n\nAudit the panel using the required claim categories.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 037."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:a9d86a7c438ee7bb6cc42fc76482c67d418fc28dec2d1c380166b81a237040a8",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 373,
+          "messages": [
+            {
+              "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_1625c335ddfd9096184d4f8c)\nFictional decision artifact 033.\n\n### Model B initial answer (Answer ID: ca_initial_7aa7c02530241beed834c517)\nFictional decision artifact 034.\n\n### Model C initial answer (Answer ID: ca_initial_e079f32b25f027c8193b28f2)\nFictional decision artifact 035.\n\nAudit the panel using the required claim categories.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 038."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:9eb9cf379805f0a56de74c478065cb163150a2e615a1e8bcc9473ddeee00445d",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 501,
+          "messages": [
+            {
+              "content": "You are revising your independent answer after a claim audit by an elite decision council. Use the anonymized initial panel and critiques to correct unsupported claims, resolve conflicts where the supplied material permits, and clearly mark externally unverified claims. Do not invent citations, sources, quotations, measurements, or facts. Produce a complete standalone answer to the original prompt, not a description of your edits.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer (Answer ID: ca_initial_1625c335ddfd9096184d4f8c):\nFictional decision artifact 033.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_1625c335ddfd9096184d4f8c)\nFictional decision artifact 033.\n\n### Model B initial answer (Answer ID: ca_initial_7aa7c02530241beed834c517)\nFictional decision artifact 034.\n\n### Model C initial answer (Answer ID: ca_initial_e079f32b25f027c8193b28f2)\nFictional decision artifact 035.\n\nAnonymized claim audits:\n\n### Model A critique (Answer ID: ca_critique_3da5202b85c8c8b44dd8ea71)\nFictional decision artifact 036.\n\n### Model B critique (Answer ID: ca_critique_b57d07d859682794474738c9)\nFictional decision artifact 037.\n\n### Model C critique (Answer ID: ca_critique_929e36e04829be9822ceddd9)\nFictional decision artifact 038.\n\nNow provide your claim-audit-aware revised answer.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 039."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:75e3638df32734081c0d982188db9f850bd498440810d2926b346c61d58203b9",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 501,
+          "messages": [
+            {
+              "content": "You are revising your independent answer after a claim audit by an elite decision council. Use the anonymized initial panel and critiques to correct unsupported claims, resolve conflicts where the supplied material permits, and clearly mark externally unverified claims. Do not invent citations, sources, quotations, measurements, or facts. Produce a complete standalone answer to the original prompt, not a description of your edits.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer (Answer ID: ca_initial_7aa7c02530241beed834c517):\nFictional decision artifact 034.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_1625c335ddfd9096184d4f8c)\nFictional decision artifact 033.\n\n### Model B initial answer (Answer ID: ca_initial_7aa7c02530241beed834c517)\nFictional decision artifact 034.\n\n### Model C initial answer (Answer ID: ca_initial_e079f32b25f027c8193b28f2)\nFictional decision artifact 035.\n\nAnonymized claim audits:\n\n### Model A critique (Answer ID: ca_critique_3da5202b85c8c8b44dd8ea71)\nFictional decision artifact 036.\n\n### Model B critique (Answer ID: ca_critique_b57d07d859682794474738c9)\nFictional decision artifact 037.\n\n### Model C critique (Answer ID: ca_critique_929e36e04829be9822ceddd9)\nFictional decision artifact 038.\n\nNow provide your claim-audit-aware revised answer.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 040."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:ec6a389e0cec2bbb6da227d889821d67c901a96075f2ac33f7b6bdb24ca8fb9d",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 501,
+          "messages": [
+            {
+              "content": "You are revising your independent answer after a claim audit by an elite decision council. Use the anonymized initial panel and critiques to correct unsupported claims, resolve conflicts where the supplied material permits, and clearly mark externally unverified claims. Do not invent citations, sources, quotations, measurements, or facts. Produce a complete standalone answer to the original prompt, not a description of your edits.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer (Answer ID: ca_initial_e079f32b25f027c8193b28f2):\nFictional decision artifact 035.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_1625c335ddfd9096184d4f8c)\nFictional decision artifact 033.\n\n### Model B initial answer (Answer ID: ca_initial_7aa7c02530241beed834c517)\nFictional decision artifact 034.\n\n### Model C initial answer (Answer ID: ca_initial_e079f32b25f027c8193b28f2)\nFictional decision artifact 035.\n\nAnonymized claim audits:\n\n### Model A critique (Answer ID: ca_critique_3da5202b85c8c8b44dd8ea71)\nFictional decision artifact 036.\n\n### Model B critique (Answer ID: ca_critique_b57d07d859682794474738c9)\nFictional decision artifact 037.\n\n### Model C critique (Answer ID: ca_critique_929e36e04829be9822ceddd9)\nFictional decision artifact 038.\n\nNow provide your claim-audit-aware revised answer.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 041."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:eca9f8611504368ff8d080c980410564d9c606f61bcf538983c80e7153308324",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 629,
+          "messages": [
+            {
+              "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized decision artifacts:\n\n### Model A decision artifact\nFictional decision artifact 039.\n\n### Model B decision artifact\nFictional decision artifact 040.\n\n### Model C decision artifact\nFictional decision artifact 041.\n\nProduce the consolidated decision artifact.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 042."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:986a343856a9e004b40161d47a0a8adf416114e9aa84cb6f8acada2ea9371286",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 889,
+          "messages": [
+            {
+              "content": "You are the verdict extractor for an auditable multi-model council. You are given the original prompt and each council member's answer, labeled with a stable answer id. These IDs provide within-run answer provenance only; they do not prove claims against external sources. Produce ONE JSON object that conforms exactly to the provided JSON Schema and nothing else.\n\nYour job is to ADJUDICATE, not to re-answer:\n- Set verdict_applies=false when the prompt is open-ended generation (a poem, a brainstorm, free writing) with no decision or review to settle; otherwise true.\n- Set verdict_type to 'decision' (a question with an answer), 'review' (an accept/revise/reject judgment), or 'synthesis' (open-ended consolidation).\n- Cluster the members into positions[]; each position lists the providers in it and the evidence_answer_ids (the compatibility field containing the answer IDs shown) tracing it, so a human can verify every assignment against the raw answer.\n- Record one provider_vote per member that took a stance (position_label must match a positions[].label); omit a member that took no clean stance.\n- Add conflicts[] only when there are two or more positions in tension.\n\nCRITICAL: Do NOT emit any consensus score, percentage, ratio, or agreement number — the council computes consensus deterministically from your clustering. Emit only the fields in the schema.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nCouncil member answers:\n\n### Member answer (answer id: ca_revision_52b860f7867fc83421bd3ee9) — from Model A\nFictional decision artifact 039.\n\n### Member answer (answer id: ca_revision_7b938c9dc355e2347e03ced7) — from Model B\nFictional decision artifact 040.\n\n### Member answer (answer id: ca_revision_9b8324a46592779e0bad8aa1) — from Model C\nFictional decision artifact 041.\n\nExtract the verdict as a single JSON object conforming exactly to this JSON Schema (emit no prose, no consensus number, only the JSON):\n\n{\n  \"title\": \"VerdictExtraction\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"verdict_type\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"decision\",\n        \"review\",\n        \"synthesis\"\n      ]\n    },\n    \"headline\": {\n      \"type\": \"string\"\n    },\n    \"recommendation\": {\n      \"type\": \"string\"\n    },\n    \"positions\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"label\": {\n            \"type\": \"string\"\n          },\n          \"summary\": {\n            \"type\": \"string\"\n          },\n          \"providers\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"evidence_answer_ids\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          }\n        },\n        \"required\": [\n          \"label\",\n          \"summary\",\n          \"providers\",\n          \"evidence_answer_ids\"\n        ]\n      }\n    },\n    \"conflicts\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"topic\": {\n            \"type\": \"string\"\n          },\n          \"position_labels\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"summary\": {\n            \"type\": \"string\"\n          },\n          \"consensus_score\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          }\n        },\n        \"required\": [\n          \"topic\",\n          \"position_labels\",\n          \"summary\"\n        ]\n      }\n    },\n    \"provider_votes\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"provider\": {\n            \"type\": \"string\"\n          },\n          \"position_label\": {\n            \"type\": \"string\"\n          },\n          \"confidence\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"low\",\n              \"medium\",\n              \"high\"\n            ]\n          }\n        },\n        \"required\": [\n          \"provider\",\n          \"position_label\"\n        ]\n      }\n    },\n    \"minority_reports\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"providers\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"claim\": {\n            \"type\": \"string\"\n          },\n          \"evidence_answer_ids\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"why_it_matters\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"providers\",\n          \"claim\",\n          \"evidence_answer_ids\"\n        ]\n      }\n    },\n    \"caveats\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    },\n    \"dissent_summary\": {\n      \"type\": \"string\"\n    },\n    \"verdict_applies\": {\n      \"type\": \"boolean\"\n    }\n  },\n  \"required\": [\n    \"verdict_type\",\n    \"headline\",\n    \"recommendation\",\n    \"positions\",\n    \"verdict_applies\"\n  ]\n}",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "{\"caveats\":[],\"conflicts\":[],\"headline\":\"Choose the fictional safe route.\",\"minority_reports\":[],\"positions\":[{\"evidence_answer_ids\":[\"fixture-a\",\"fixture-b\",\"fixture-c\"],\"label\":\"route-a\",\"providers\":[\"Model A\",\"Model B\",\"Model C\"],\"summary\":\"Route A is preferred.\"}],\"provider_votes\":[{\"position_label\":\"route-a\",\"provider\":\"Model A\"},{\"position_label\":\"route-a\",\"provider\":\"Model B\"},{\"position_label\":\"route-a\",\"provider\":\"Model C\"}],\"recommendation\":\"Use Route A with the stated safeguards.\",\"verdict_applies\":true,\"verdict_type\":\"decision\"}"
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:8a1487cb180ea93400d8353a325c98ea61865d319cace2bd9849e4eaf9347683",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 3008,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 044."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:55ed4f3ae8cb471849dc7464c677a2eb795e2d94305b625d2b5c8f60f869fe3e",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 3136,
+          "messages": [
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour draft:\nFictional decision artifact 044.\n\nProduce one complete, improved final answer.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 045."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:7fe02d317cbc5fd6bc862df80f6418ba7d1cdbd0aac145add051fcd20c6ad575",
+      "occurrence_index": 1,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 786,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 046."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:2e653c544f6ead81a481fad8280b49024ade5526a96780e6af5a76f9cf41c3d3",
+      "occurrence_index": 1,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 786,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 047."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:cc57d8d8ed8963f3537727956243f353427936b20d5365ebb8438e91a93340e1",
+      "occurrence_index": 1,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 786,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 048."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:06f25e59c1322ff7fe6c9c2b228ec2a3301c067441269b7ac01af40b802a0b99",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 914,
+          "messages": [
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer:\nFictional decision artifact 046.\n\nAnonymized peer panel:\n\n### Model A peer answer\nFictional decision artifact 046.\n\n### Model B peer answer\nFictional decision artifact 047.\n\n### Model C peer answer\nFictional decision artifact 048.\n\nProduce one complete revised answer to the original prompt.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 049."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:040bd4574ded659e69dac9a53f11a59e72a9b79327e3ccc42a494732f0e3ccb8",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 914,
+          "messages": [
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer:\nFictional decision artifact 047.\n\nAnonymized peer panel:\n\n### Model A peer answer\nFictional decision artifact 046.\n\n### Model B peer answer\nFictional decision artifact 047.\n\n### Model C peer answer\nFictional decision artifact 048.\n\nProduce one complete revised answer to the original prompt.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 050."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:3fab1afdadb0de5be2874990c6add5e0551b7cbbd12043f3ae2de3d613233996",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 914,
+          "messages": [
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer:\nFictional decision artifact 048.\n\nAnonymized peer panel:\n\n### Model A peer answer\nFictional decision artifact 046.\n\n### Model B peer answer\nFictional decision artifact 047.\n\n### Model C peer answer\nFictional decision artifact 048.\n\nProduce one complete revised answer to the original prompt.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 051."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:4c8bb8faba7e3e7bd16446aba2ada2034585c3923da91570f5e599f8c79e4a2b",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 1044,
+          "messages": [
+            {
+              "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized decision artifacts:\n\n### Model A decision artifact\nFictional decision artifact 049.\n\n### Model B decision artifact\nFictional decision artifact 050.\n\n### Model C decision artifact\nFictional decision artifact 051.\n\nProduce the consolidated decision artifact.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 052."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:94eb52642fa244a450a865a90d5f84760985a99296505bb7c65d927faeb43f27",
+      "occurrence_index": 1,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 841,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 053."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:85c1e9279d0f7807e5b2e11ee8e5b7598b6c0cd3e6902a62af28977b29770f8f",
+      "occurrence_index": 1,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 841,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 054."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:d948e25d735ca60fa12fa1f58a1a13a3b83756c89a14cb6aec3f0636dd8c1d79",
+      "occurrence_index": 1,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 841,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 055."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:4c6ebb9f273a36d41ad3ef449a2651cf6ddf019bec6b78aa216f1e0aa39172cf",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 841,
+          "messages": [
+            {
+              "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_d31b8fc59637ebad6332cb36)\nFictional decision artifact 053.\n\n### Model B initial answer (Answer ID: ca_initial_1d70996d48de96e92feb4cc2)\nFictional decision artifact 054.\n\n### Model C initial answer (Answer ID: ca_initial_87cb4c02a3e0b70592187ed4)\nFictional decision artifact 055.\n\nAudit the panel using the required claim categories.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 056."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:0b2b098a01da3535b62416171121f02fd789679b734ed30a75871e89811d9196",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 841,
+          "messages": [
+            {
+              "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_d31b8fc59637ebad6332cb36)\nFictional decision artifact 053.\n\n### Model B initial answer (Answer ID: ca_initial_1d70996d48de96e92feb4cc2)\nFictional decision artifact 054.\n\n### Model C initial answer (Answer ID: ca_initial_87cb4c02a3e0b70592187ed4)\nFictional decision artifact 055.\n\nAudit the panel using the required claim categories.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 057."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:f4f04f7567a2f45c8b82f6075e7783cc587f7c421a3c585f1f72e4d4feedd622",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 841,
+          "messages": [
+            {
+              "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized initial panel:\n\n### Model A initial answer (Answer ID: ca_initial_d31b8fc59637ebad6332cb36)\nFictional decision artifact 053.\n\n### Model B initial answer (Answer ID: ca_initial_1d70996d48de96e92feb4cc2)\nFictional decision artifact 054.\n\n### Model C initial answer (Answer ID: ca_initial_87cb4c02a3e0b70592187ed4)\nFictional decision artifact 055.\n\nAudit the panel using the required claim categories.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 058."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:eb274049333444ff45eeb78704ac8ade85da973fc8d5f854e024d053a6ecb4bc",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 1098,
+          "messages": [
+            {
+              "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized decision artifacts:\n\n### Model A decision artifact\nFictional decision artifact 053.\n\n### Model B decision artifact\nFictional decision artifact 054.\n\n### Model C decision artifact\nFictional decision artifact 055.\n\nAnonymized claim audits:\n\n### Model A anonymized audit\nFictional decision artifact 056.\n\n### Model B anonymized audit\nFictional decision artifact 057.\n\n### Model C anonymized audit\nFictional decision artifact 058.\n\nProduce the consolidated decision artifact.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 059."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:1272f0bc2baa43e27e852787219b6b445ff23481fe9d7785e88c63a72dea8a2a",
+      "occurrence_index": 1,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 1472,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 060."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:3e871bdcc4a67bae1bba8dc450a253797ad6d689350c9cc0ae1bfec5b8e79f58",
+      "occurrence_index": 1,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 1472,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-b",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 061."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:2f49af35b10a45083cec38a6929c4f24840fd9ddb9a0e8337e3e1840ad0e120c",
+      "occurrence_index": 1,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 1472,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-a",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 062."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:3fab8223b5f796252713e1e765b6b8413b6a612e4655625e09e68a4c29d00cc1",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 1728,
+          "messages": [
+            {
+              "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
+              "role": "system"
+            },
+            {
+              "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nAnonymized decision artifacts:\n\n### Model A decision artifact\nFictional decision artifact 060.\n\n### Model B decision artifact\nFictional decision artifact 061.\n\n### Model C decision artifact\nFictional decision artifact 062.\n\nProduce the consolidated decision artifact.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 063."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    },
+    {
+      "request_hash": "sha256:9097f135936dad4b6b6b32a146dce9a8bf225304e952fe95d11c0fa5de2a7ce8",
+      "occurrence_index": 0,
+      "request": {
+        "url": "https://fictional.invalid/v1/chat/completions",
+        "body": {
+          "max_tokens": 6144,
+          "messages": [
+            {
+              "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
+              "role": "user"
+            }
+          ],
+          "model": "fictional-model-c",
+          "temperature": 0.0
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "message": {
+              "content": "Fictional decision artifact 064."
+            }
+          }
+        ],
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "total_tokens": 2
+        }
+      }
+    }
+  ]
+}
