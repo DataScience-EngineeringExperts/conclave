@@ -1,8 +1,9 @@
 # Conclave Decision Quality Roadmap
 
-**Status:** Approved direction; Horizon 0 implemented on open PR #51, pending final gate review
+**Status:** Active; Horizon 0 released in v1.2.0, Horizon 1 exploratory pilot preparation underway
 **Date:** 2026-07-17
-**Current product:** v1.1.0 stable; Elite implemented but unreleased on open PR #51
+**Current product:** v1.2.0 stable on PyPI and GitHub; Elite is released, while
+decision-quality and efficiency claims remain unvalidated
 
 ## Thesis
 
@@ -28,10 +29,9 @@ grounding and deterministic citation validation ship, the honest claim is
 - Build the narrowest workflow that improves consequential decisions; integrate commodity
   infrastructure instead of recreating it.
 
-## Horizon 0 — verify Elite correctness before merge
+## Horizon 0 — Elite correctness and release gate (complete)
 
-Elite remains implemented but unreleased. Open PR #51 implements these contracts and must
-remain unmerged until the complete merge gate verifies them:
+Elite shipped in v1.2.0 after the release gate verified these baseline contracts:
 
 1. **Persistent identities.** Each initial answer has a stable identifier that survives claim
    audit, revision, synthesis, serialization, and cache replay. Do not present those IDs as
@@ -51,9 +51,11 @@ remain unmerged until the complete merge gate verifies them:
    must say execution-traceable. Answer IDs prove
    provenance within a run; they do not prove truth.
 
-**Merge gate:** all six items have tests, the complete suite and static checks pass, a
-secret scan passes, documentation matches behavior, and PR review finds no false quality or
-auditability claim. Otherwise keep Elite unreleased.
+**Gate outcome:** all six items have regression coverage; the complete suite, static checks,
+secret scan, package build/install, release review, and documentation checks passed. A capped
+12-cell paid smoke completed every planned cell, and a separate three-provider connectivity
+smoke passed from an isolated runner using the published package. These results validate
+execution correctness only, not comparative quality or efficiency.
 
 ## Horizon 1 — prove that the protocol improves decisions
 
@@ -61,6 +63,15 @@ Run a budget-matched randomized ablation before claiming Elite is better. Compar
 single-frontier-model, ordinary synthesis, adversarial, and Elite conditions using the same
 task set and matched token or dollar budgets. Randomize condition order and blind human
 graders to mode and provider identity.
+
+### Current H1 position (2026-07-19)
+
+The offline harness, blinding/scoring workflow, USD 10 execution ceiling, authenticated
+checkpoints, and paid correctness smoke are complete. The 24-task open-book QA pack remains
+synthetic and offline-only evidence. The next valid step is a separately frozen 20-30 task
+private exploratory pilot with protected grader keys, six matched conditions, two independent
+human graders, and adjudication. Grader calibration is staged before the full pilot. DSE-690
+and DSE-708 remain open until pilot evidence supports a go, redesign, or kill decision.
 
 ### Program stages
 
