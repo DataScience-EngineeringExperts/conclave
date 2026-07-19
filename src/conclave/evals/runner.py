@@ -320,6 +320,7 @@ def _load_or_create_live_checkpoint(
     *,
     manifest: StudyManifest,
     price_book: PriceBook,
+    seal_key: bytes,
 ) -> LiveCheckpoint:
     bindings = build_checkpoint_bindings(
         manifest,
@@ -327,10 +328,14 @@ def _load_or_create_live_checkpoint(
         hard_cap_usd=LIVE_HARD_CAP_USD,
     )
     if checkpoint_path.exists():
-        checkpoint = load_live_checkpoint(checkpoint_path, expected_bindings=bindings)
+        checkpoint = load_live_checkpoint(
+            checkpoint_path,
+            expected_bindings=bindings,
+            seal_key=seal_key,
+        )
     else:
-        checkpoint = create_live_checkpoint(bindings=bindings)
-        write_live_checkpoint(checkpoint_path, checkpoint)
+        checkpoint = create_live_checkpoint(bindings=bindings, seal_key=seal_key)
+        write_live_checkpoint(checkpoint_path, checkpoint, seal_key=seal_key)
 
     planned_ids = {planned_run.planned_run_id for planned_run in manifest.planned_runs}
     record_ids = {record.planned_run_id for record in checkpoint.records}
@@ -340,8 +345,8 @@ def _load_or_create_live_checkpoint(
     ):
         raise CheckpointValidationError("checkpoint contains an unplanned live cell")
     if checkpoint.active_cell is not None:
-        checkpoint = recover_interrupted_checkpoint(checkpoint)
-        write_live_checkpoint(checkpoint_path, checkpoint)
+        checkpoint = recover_interrupted_checkpoint(checkpoint, seal_key=seal_key)
+        write_live_checkpoint(checkpoint_path, checkpoint, seal_key=seal_key)
     return checkpoint
 
 
@@ -410,6 +415,7 @@ def _materialize_remaining(
     planned_runs: Sequence[PlannedRun],
     *,
     error_category: str,
+    seal_key: bytes,
 ) -> LiveCheckpoint:
     recorded = {record.planned_run_id for record in checkpoint.records}
     additions = tuple(
@@ -424,6 +430,7 @@ def _materialize_remaining(
         if planned_run.planned_run_id not in recorded
     )
     return create_live_checkpoint(
+        seal_key=seal_key,
         bindings=checkpoint.bindings,
         records=(*checkpoint.records, *additions),
         receipts=checkpoint.receipts,
@@ -453,6 +460,7 @@ async def run_live_study(
     tasks: Sequence[PublicTask],
     price_book: PriceBook,
     checkpoint_path: str | Path,
+    checkpoint_seal_key: bytes,
     call_model_func: CallModel = call_model,
 ) -> StudyRun:
     """Execute a frozen paid-exploratory matrix under the exact USD 10.00 cap."""
@@ -466,6 +474,7 @@ async def run_live_study(
             path=path,
             task_by_id=task_by_id,
             roster_by_id=roster_by_id,
+            checkpoint_seal_key=checkpoint_seal_key,
             call_model_func=call_model_func,
         )
 
@@ -477,6 +486,7 @@ async def _run_live_study_with_lease(
     path: Path,
     task_by_id: Mapping[str, PublicTask],
     roster_by_id: Mapping[str, tuple],
+    checkpoint_seal_key: bytes,
     call_model_func: CallModel,
 ) -> StudyRun:
     """Run one validated live study while its process lease is held."""
@@ -485,6 +495,7 @@ async def _run_live_study_with_lease(
         path,
         manifest=manifest,
         price_book=price_book,
+        seal_key=checkpoint_seal_key,
     )
 
     def persist(
@@ -494,10 +505,11 @@ async def _run_live_study_with_lease(
         nonlocal checkpoint
         checkpoint = update_live_checkpoint(
             checkpoint,
+            seal_key=checkpoint_seal_key,
             pending_call=pending_call,
             receipts=receipts,
         )
-        write_live_checkpoint(path, checkpoint)
+        write_live_checkpoint(path, checkpoint, seal_key=checkpoint_seal_key)
 
     client = LiveProviderClient(
         price_book=price_book,
@@ -515,8 +527,9 @@ async def _run_live_study_with_lease(
         checkpoint = start_active_cell(
             checkpoint,
             planned_run_id=planned_run.planned_run_id,
+            seal_key=checkpoint_seal_key,
         )
-        write_live_checkpoint(path, checkpoint)
+        write_live_checkpoint(path, checkpoint, seal_key=checkpoint_seal_key)
         receipt_start_index = checkpoint.active_cell.receipt_start_index
         started = time.perf_counter()
         try:
@@ -543,13 +556,15 @@ async def _run_live_study_with_lease(
             checkpoint = finish_active_cell(
                 checkpoint,
                 record=_record_from_execution(planned_run.planned_run_id, execution),
+                seal_key=checkpoint_seal_key,
             )
             checkpoint = _materialize_remaining(
                 checkpoint,
                 planned_runs[index + 1 :],
                 error_category="budget_exhausted",
+                seal_key=checkpoint_seal_key,
             )
-            write_live_checkpoint(path, checkpoint)
+            write_live_checkpoint(path, checkpoint, seal_key=checkpoint_seal_key)
             break
         except (ReservationBreachError, GatewayStoppedError) as exc:
             receipts = _cell_receipts(checkpoint, receipt_start_index=receipt_start_index)
@@ -568,13 +583,15 @@ async def _run_live_study_with_lease(
             checkpoint = finish_active_cell(
                 checkpoint,
                 record=_record_from_execution(planned_run.planned_run_id, execution),
+                seal_key=checkpoint_seal_key,
             )
             checkpoint = _materialize_remaining(
                 checkpoint,
                 planned_runs[index + 1 :],
                 error_category="gateway_stopped",
+                seal_key=checkpoint_seal_key,
             )
-            write_live_checkpoint(path, checkpoint)
+            write_live_checkpoint(path, checkpoint, seal_key=checkpoint_seal_key)
             break
         except Exception:  # noqa: BLE001 -- bounded receipts determine the public failure
             receipts = _cell_receipts(checkpoint, receipt_start_index=receipt_start_index)
@@ -591,7 +608,8 @@ async def _run_live_study_with_lease(
         checkpoint = finish_active_cell(
             checkpoint,
             record=_record_from_execution(planned_run.planned_run_id, execution),
+            seal_key=checkpoint_seal_key,
         )
-        write_live_checkpoint(path, checkpoint)
+        write_live_checkpoint(path, checkpoint, seal_key=checkpoint_seal_key)
 
     return _build_live_study_run(manifest, checkpoint)

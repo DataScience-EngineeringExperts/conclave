@@ -33,6 +33,7 @@ from conclave.providers import call_model
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures/evals/live_smoke"
 FAKE_KEY_ENV = "CONCLAVE_FAKE_TEST_KEY"
 FAKE_KEY = "fixture-only-opaque-credential"
+CHECKPOINT_SEAL_KEY = bytes(range(32))
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -143,6 +144,7 @@ async def _execute(
         tasks=tasks,
         price_book=price_book,
         checkpoint_path=checkpoint_path,
+        checkpoint_seal_key=CHECKPOINT_SEAL_KEY,
         call_model_func=configured_call_model,
     )
     checkpoint = load_live_checkpoint(
@@ -152,6 +154,7 @@ async def _execute(
             price_book,
             hard_cap_usd=LIVE_HARD_CAP_USD,
         ),
+        seal_key=CHECKPOINT_SEAL_KEY,
     )
     return study_run, checkpoint
 

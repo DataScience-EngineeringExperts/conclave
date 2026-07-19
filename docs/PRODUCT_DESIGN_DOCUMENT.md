@@ -413,10 +413,10 @@ source-auditable language is therefore too broad until source grounding ships. E
 implemented but unreleased in source.
 
 H1 also includes an opt-in live runner that is **paid exploratory only**. Dry-run is the default;
-paid execution requires `--execute` and exact `--approve-spend-usd 10.00`. One provider call is
-in flight, its reservation is persisted before each call, and resume never repeats an interrupted
-cell. The 24-task fixture remains offline/open-book and is not the paid smoke corpus.
-The smoke establishes correctness only, not efficiency or decision quality; its artifacts remain not decision eligible and cannot change a confirmatory gate.
+paid execution requires `--execute`, exact `--approve-spend-usd 10.00`, and an owner-only
+`--checkpoint-seal-key-file` with at least 32 random bytes. Versioned HMAC-SHA256 checkpoints
+never serialize that key; frozen `max_output_bytes_per_token` attestations bound inserted UTF-8
+bytes. One call is in flight, reservations persist first, and resume never repeats interrupted cells. The smoke proves correctness only—not efficiency or decision quality—and remains not decision eligible.
 
 The canonical roadmap is
 [`docs/plans/2026-07-17-decision-quality-roadmap.md`](plans/2026-07-17-decision-quality-roadmap.md):

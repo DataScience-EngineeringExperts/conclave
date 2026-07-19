@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reservation before allowing one in-flight provider call, and never repeats an interrupted
   cell on resume. Its outputs are not decision eligible: the smoke verifies correctness only,
   not efficiency or decision quality; the offline/open-book 24-task fixture remains separate.
+- **Authenticated live checkpoints and bounded UTF-8 estimates.** Paid execution additionally
+  requires an owner-only `--checkpoint-seal-key-file`; HMAC-SHA256 v2 checkpoints reject old,
+  forged, or wrong-key state without storing the key. Frozen price entries now bind
+  `max_output_bytes_per_token`, preventing one-byte dry-run placeholders from understating
+  multibyte upstream output expansion.
 
 ### Fixed
 

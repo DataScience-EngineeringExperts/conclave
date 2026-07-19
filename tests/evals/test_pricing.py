@@ -30,7 +30,7 @@ from conclave.evals.protocols import CONDITION_IDS
 
 DIGEST = "sha256:" + "a" * 64
 PRICE_FIXTURE = Path(__file__).parents[1] / "fixtures/evals/live_smoke/price_book.json"
-EXPECTED_PRICE_HASH = "sha256:df85e17c12985ada8a350c6f2adc1778a0218bf3dc70cf3204ac8d1057939aac"
+EXPECTED_PRICE_HASH = "sha256:46a29d0180e897fd8ba315781b9180121a4509226b8dfb8084164515e0efa53f"
 
 
 def _payload() -> dict[str, object]:
@@ -182,6 +182,36 @@ def test_price_book_requires_usd_positive_pessimistic_rates() -> None:
                 _book(payload)
 
 
+def test_price_book_requires_positive_external_output_byte_bound() -> None:
+    missing = _payload()
+    entries = missing["entries"]
+    assert isinstance(entries, list)
+    entries[0].pop("max_output_bytes_per_token", None)
+    with pytest.raises(ValidationError, match="max_output_bytes_per_token"):
+        _book(missing)
+
+    for invalid in (0, -1, True):
+        payload = _payload()
+        entries = payload["entries"]
+        assert isinstance(entries, list)
+        entries[0]["max_output_bytes_per_token"] = invalid
+        with pytest.raises(ValidationError, match="max_output_bytes_per_token"):
+            _book(payload)
+
+
+def test_output_byte_bound_is_snapshot_hashed_and_drift_rejected() -> None:
+    book = _book()
+    price_hash = hash_price_entries(book.entries)
+    changed = book.entries[0].model_copy(
+        update={"max_output_bytes_per_token": book.entries[0].max_output_bytes_per_token + 1}
+    )
+    drifted = book.model_copy(update={"entries": (changed, *book.entries[1:])})
+
+    assert hash_price_entries(drifted.entries) != price_hash
+    with pytest.raises(ValueError, match="prices_hash"):
+        validate_price_book(drifted, frozen_design=_design(prices_hash=price_hash))
+
+
 def test_call_reservation_rounds_up_and_covers_input_output_and_framing() -> None:
     price = _book().entries[0]
 
@@ -191,15 +221,16 @@ def test_call_reservation_rounds_up_and_covers_input_output_and_framing() -> Non
         prompt_template_token_allowance=17,
         provider_framing_token_allowance=11,
         upstream_output_token_ceilings=(50, 60),
+        upstream_output_bytes_per_token=price.max_output_bytes_per_token,
         max_output_tokens=75,
     )
 
     assert isinstance(reservation, CallReservation)
-    assert reservation.input_token_upper_bound == 239
+    assert reservation.input_token_upper_bound == 569
     assert reservation.output_token_upper_bound == 75
-    assert reservation.input_cost_upper_bound_usd == Decimal("0.000295061513")
+    assert reservation.input_cost_upper_bound_usd == Decimal("0.000702468623")
     assert reservation.output_cost_upper_bound_usd == Decimal("0.000342591825")
-    assert reservation.reserved_cost_usd == Decimal("0.000638")
+    assert reservation.reserved_cost_usd == Decimal("0.001046")
     assert all(
         type(value) is Decimal
         for value in (

@@ -9,8 +9,20 @@ import conclave.config as config_module
 import conclave.evals.live as live_module
 import conclave.registry as registry_module
 import conclave.transport as transport_module
-from conclave.evals.live import BudgetExceededError, estimate_live_study
-from conclave.evals.live_protocols import allocate_stage_caps, stage_call_sequence
+from conclave.evals.live import (
+    BudgetExceededError,
+    LiveProviderClient,
+    _LiveEstimateClient,
+    estimate_live_study,
+)
+from conclave.evals.live_protocols import (
+    ChatMessage,
+    StageCall,
+    allocate_stage_caps,
+    stage_call_sequence,
+)
+from conclave.evals.pricing import ModelPrice, PriceBook
+from conclave.models import ModelAnswer, TokenUsage
 from tests.evals.test_live_runner import _live_inputs
 
 
@@ -152,3 +164,92 @@ async def test_dry_run_rejects_plan_whose_worst_case_exceeds_frozen_ceiling() ->
             tasks=tasks,
             price_book=price_book,
         )
+
+
+@pytest.mark.asyncio
+async def test_estimate_bounds_multibyte_max_expansion_execution_reservation() -> None:
+    price_book = PriceBook(
+        snapshot_id="fictional-byte-bound",
+        captured_at="2026-07-18T12:00:00Z",
+        currency="USD",
+        entries=(
+            ModelPrice(
+                provider_id="fictional-provider",
+                model_id="fictional/model",
+                model_revision="fixture-r1",
+                input_ceiling_usd_per_million_tokens=Decimal("1"),
+                output_ceiling_usd_per_million_tokens=Decimal("1"),
+                max_output_bytes_per_token=4,
+            ),
+        ),
+    )
+    first_call = StageCall(
+        stage="draft",
+        provider_id="fictional-provider",
+        model_id="fictional/model",
+        model_revision="fixture-r1",
+        messages=(ChatMessage(role="user", content="static prompt"),),
+        max_output_tokens=2,
+    )
+    estimate_client = _LiveEstimateClient(price_book)
+    estimated_answer = await estimate_client.call(first_call)
+    estimated_second_call = StageCall(
+        stage="self_revision",
+        provider_id="fictional-provider",
+        model_id="fictional/model",
+        model_revision="fixture-r1",
+        messages=(
+            ChatMessage(
+                role="user",
+                content=f"static wrapper:{estimated_answer.answer}:end",
+            ),
+        ),
+        max_output_tokens=1,
+        upstream_output_token_ceilings=(2,),
+    )
+    await estimate_client.call(estimated_second_call)
+    estimated_reservation = estimate_client.reservations[-1]
+
+    pending_reservations = []
+    provider_answers = iter(("😀😀", "done"))
+
+    async def provider(name, model_id, messages, **kwargs):
+        del messages, kwargs
+        answer = next(provider_answers)
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            answer=answer,
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+
+    def checkpoint(pending, receipts) -> None:
+        del receipts
+        if pending is not None:
+            pending_reservations.append(pending.reservation)
+
+    execution_client = LiveProviderClient(
+        price_book=price_book,
+        hard_cap_usd=Decimal("1"),
+        checkpoint=checkpoint,
+        call_model_func=provider,
+    )
+    actual_answer = await execution_client.call(first_call)
+    actual_second_call = estimated_second_call.model_copy(
+        update={
+            "messages": (
+                ChatMessage(
+                    role="user",
+                    content=f"static wrapper:{actual_answer.answer}:end",
+                ),
+            )
+        }
+    )
+    await execution_client.call(actual_second_call)
+    execution_reservation = pending_reservations[-1]
+
+    assert len("😀😀".encode()) == 2 * price_book.entries[0].max_output_bytes_per_token
+    assert execution_reservation.input_token_upper_bound <= (
+        estimated_reservation.input_token_upper_bound
+    )
+    assert execution_reservation.reserved_cost_usd <= estimated_reservation.reserved_cost_usd

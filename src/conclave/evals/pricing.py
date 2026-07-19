@@ -27,6 +27,7 @@ class ModelPrice(EvalModel):
     model_revision: str = Field(min_length=1)
     input_ceiling_usd_per_million_tokens: Decimal = Field(gt=0)
     output_ceiling_usd_per_million_tokens: Decimal = Field(gt=0)
+    max_output_bytes_per_token: int = Field(gt=0, strict=True)
 
     @field_validator(
         "input_ceiling_usd_per_million_tokens",
@@ -70,6 +71,7 @@ class CallReservation(EvalModel):
     prompt_template_token_allowance: int = Field(ge=0)
     provider_framing_token_allowance: int = Field(ge=0)
     upstream_output_token_ceilings: tuple[int, ...]
+    upstream_output_bytes_per_token: int = Field(gt=0)
     input_token_upper_bound: int = Field(ge=0)
     output_token_upper_bound: int = Field(gt=0)
     input_ceiling_usd_per_million_tokens: Decimal = Field(gt=0)
@@ -110,6 +112,7 @@ def _canonical_entry(entry: ModelPrice) -> dict[str, str]:
         "output_ceiling_usd_per_million_tokens": _canonical_decimal(
             entry.output_ceiling_usd_per_million_tokens
         ),
+        "max_output_bytes_per_token": str(entry.max_output_bytes_per_token),
     }
 
 
@@ -190,6 +193,7 @@ def reserve_call_cost(
     prompt_template_token_allowance: int,
     provider_framing_token_allowance: int,
     upstream_output_token_ceilings: Sequence[int],
+    upstream_output_bytes_per_token: int,
     max_output_tokens: int,
 ) -> CallReservation:
     """Reserve the pessimistic USD cost of all possible input and output tokens."""
@@ -197,6 +201,11 @@ def reserve_call_cost(
     _validate_token_bound("prompt_token_upper_bound", prompt_token_upper_bound)
     _validate_token_bound("prompt_template_token_allowance", prompt_template_token_allowance)
     _validate_token_bound("provider_framing_token_allowance", provider_framing_token_allowance)
+    _validate_token_bound(
+        "upstream_output_bytes_per_token",
+        upstream_output_bytes_per_token,
+        positive=True,
+    )
     _validate_token_bound("max_output_tokens", max_output_tokens, positive=True)
     upstream_ceilings = tuple(upstream_output_token_ceilings)
     for index, ceiling in enumerate(upstream_ceilings):
@@ -206,7 +215,7 @@ def reserve_call_cost(
         prompt_token_upper_bound
         + prompt_template_token_allowance
         + provider_framing_token_allowance
-        + sum(upstream_ceilings)
+        + (sum(upstream_ceilings) * upstream_output_bytes_per_token)
     )
     precision = max(
         64,
@@ -239,6 +248,7 @@ def reserve_call_cost(
         prompt_template_token_allowance=prompt_template_token_allowance,
         provider_framing_token_allowance=provider_framing_token_allowance,
         upstream_output_token_ceilings=upstream_ceilings,
+        upstream_output_bytes_per_token=upstream_output_bytes_per_token,
         input_token_upper_bound=input_token_upper_bound,
         output_token_upper_bound=max_output_tokens,
         input_ceiling_usd_per_million_tokens=price.input_ceiling_usd_per_million_tokens,

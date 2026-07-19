@@ -9,13 +9,11 @@ from decimal import Decimal
 import pytest
 
 import conclave.evals.dataset as dataset_module
+import conclave.evals.live as live_module
 import conclave.evals.runner as runner_module
 from conclave.evals.live import (
     CheckpointValidationError,
     build_checkpoint_bindings,
-    create_live_checkpoint,
-    load_live_checkpoint,
-    write_live_checkpoint,
 )
 from conclave.evals.live_protocols import LIVE_PROTOCOL_REGISTRY, stage_call_sequence
 from conclave.evals.models import (
@@ -32,12 +30,33 @@ from conclave.evals.models import (
 )
 from conclave.evals.pricing import ModelPrice, PriceBook, hash_price_entries
 from conclave.evals.protocols import CONDITION_IDS, build_study_manifest
-from conclave.evals.runner import RunValidationError, run_live_study, validate_run_records
+from conclave.evals.runner import RunValidationError, validate_run_records
 from conclave.models import ModelAnswer, TokenUsage
 
 DIGEST = "sha256:" + "a" * 64
 HARD_CAP = Decimal("10.00")
 LIVE_FIXTURE_CELL_CEILING = 6144
+SEAL_KEY = bytes(range(32))
+
+
+def create_live_checkpoint(*args, **kwargs):
+    kwargs.setdefault("seal_key", SEAL_KEY)
+    return live_module.create_live_checkpoint(*args, **kwargs)
+
+
+def write_live_checkpoint(*args, **kwargs):
+    kwargs.setdefault("seal_key", SEAL_KEY)
+    return live_module.write_live_checkpoint(*args, **kwargs)
+
+
+def load_live_checkpoint(*args, **kwargs):
+    kwargs.setdefault("seal_key", SEAL_KEY)
+    return live_module.load_live_checkpoint(*args, **kwargs)
+
+
+async def run_live_study(*args, **kwargs):
+    kwargs.setdefault("checkpoint_seal_key", SEAL_KEY)
+    return await runner_module.run_live_study(*args, **kwargs)
 
 
 def _valid_verdict_extraction_text() -> str:
@@ -109,6 +128,7 @@ def _live_inputs(
             model_revision=member.model_revision,
             input_ceiling_usd_per_million_tokens=Decimal(rate),
             output_ceiling_usd_per_million_tokens=Decimal(rate),
+            max_output_bytes_per_token=4,
         )
         for roster in rosters
         for member in roster.members

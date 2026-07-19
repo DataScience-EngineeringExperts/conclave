@@ -19,13 +19,6 @@ from conclave.evals.live import (
     ProviderCallCostBasis,
     ProviderCallReceipt,
     ReservationBreachError,
-    create_live_checkpoint,
-    finish_active_cell,
-    load_live_checkpoint,
-    recover_interrupted_checkpoint,
-    start_active_cell,
-    update_live_checkpoint,
-    write_live_checkpoint,
 )
 from conclave.evals.live_protocols import ChatMessage, StageCall
 from conclave.evals.models import RunRecord
@@ -37,6 +30,43 @@ DIGEST_B = "sha256:" + "b" * 64
 DIGEST_C = "sha256:" + "c" * 64
 RUN_A = "run_" + "a" * 24
 RUN_B = "run_" + "b" * 24
+SEAL_KEY = bytes(range(32))
+WRONG_SEAL_KEY = bytes(range(1, 33))
+
+
+def create_live_checkpoint(*args, **kwargs):
+    kwargs.setdefault("seal_key", SEAL_KEY)
+    return live_module.create_live_checkpoint(*args, **kwargs)
+
+
+def write_live_checkpoint(*args, **kwargs):
+    kwargs.setdefault("seal_key", SEAL_KEY)
+    return live_module.write_live_checkpoint(*args, **kwargs)
+
+
+def load_live_checkpoint(*args, **kwargs):
+    kwargs.setdefault("seal_key", SEAL_KEY)
+    return live_module.load_live_checkpoint(*args, **kwargs)
+
+
+def start_active_cell(*args, **kwargs):
+    kwargs.setdefault("seal_key", SEAL_KEY)
+    return live_module.start_active_cell(*args, **kwargs)
+
+
+def update_live_checkpoint(*args, **kwargs):
+    kwargs.setdefault("seal_key", SEAL_KEY)
+    return live_module.update_live_checkpoint(*args, **kwargs)
+
+
+def recover_interrupted_checkpoint(*args, **kwargs):
+    kwargs.setdefault("seal_key", SEAL_KEY)
+    return live_module.recover_interrupted_checkpoint(*args, **kwargs)
+
+
+def finish_active_cell(*args, **kwargs):
+    kwargs.setdefault("seal_key", SEAL_KEY)
+    return live_module.finish_active_cell(*args, **kwargs)
 
 
 def _bindings(**updates: object) -> CheckpointBindings:
@@ -62,6 +92,7 @@ def _price_book() -> PriceBook:
                 model_revision="fixture-r1",
                 input_ceiling_usd_per_million_tokens=Decimal("1"),
                 output_ceiling_usd_per_million_tokens=Decimal("1"),
+                max_output_bytes_per_token=4,
             ),
         ),
     )
@@ -86,6 +117,7 @@ def _pending_call() -> PendingCall:
         prompt_template_token_allowance=0,
         provider_framing_token_allowance=2,
         upstream_output_token_ceilings=(),
+        upstream_output_bytes_per_token=4,
         max_output_tokens=5,
     )
     return PendingCall(
@@ -403,3 +435,63 @@ def test_corrupt_or_tampered_checkpoint_fails_closed(tmp_path) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(CheckpointValidationError, match="invalid"):
         load_live_checkpoint(path, expected_bindings=_bindings())
+
+
+def test_checkpoint_rejects_publicly_resealed_cost_forgery_and_wrong_key(tmp_path) -> None:
+    path = tmp_path / "authenticated-checkpoint.json"
+    receipt = _receipt()
+    checkpoint = create_live_checkpoint(
+        bindings=_bindings(),
+        receipts=(receipt,),
+        seal_key=SEAL_KEY,
+    )
+    write_live_checkpoint(path, checkpoint, seal_key=SEAL_KEY)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["committed_cost_usd"] = "0.000003"
+    payload["receipts"][0]["charged_cost_usd"] = "0.000003"
+    public_payload = dict(payload)
+    public_payload.pop("checkpoint_hash")
+    payload["checkpoint_hash"] = live_module._canonical_hash(public_payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(CheckpointValidationError, match="integrity"):
+        load_live_checkpoint(
+            path,
+            expected_bindings=_bindings(),
+            seal_key=SEAL_KEY,
+        )
+
+    write_live_checkpoint(path, checkpoint, seal_key=SEAL_KEY)
+    with pytest.raises(CheckpointValidationError, match="integrity"):
+        load_live_checkpoint(
+            path,
+            expected_bindings=_bindings(),
+            seal_key=WRONG_SEAL_KEY,
+        )
+
+
+def test_checkpoint_rejects_legacy_unkeyed_format_and_never_serializes_seal_key(
+    tmp_path,
+) -> None:
+    path = tmp_path / "checkpoint.json"
+    checkpoint = create_live_checkpoint(bindings=_bindings(), seal_key=SEAL_KEY)
+    write_live_checkpoint(path, checkpoint, seal_key=SEAL_KEY)
+    checkpoint_bytes = path.read_bytes()
+
+    assert SEAL_KEY not in checkpoint_bytes
+    assert "hmac-sha256:" in checkpoint_bytes.decode("utf-8")
+
+    payload = json.loads(checkpoint_bytes)
+    payload.pop("checkpoint_format_version")
+    public_payload = dict(payload)
+    public_payload.pop("checkpoint_hash")
+    payload["checkpoint_hash"] = live_module._canonical_hash(public_payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(CheckpointValidationError, match="invalid"):
+        load_live_checkpoint(
+            path,
+            expected_bindings=_bindings(),
+            seal_key=SEAL_KEY,
+        )

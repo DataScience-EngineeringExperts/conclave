@@ -24,10 +24,17 @@ from tests.evals.test_live_runner import _live_inputs
 
 runner = CliRunner()
 ROOT = Path(__file__).resolve().parents[2]
+CHECKPOINT_SEAL_KEY = bytes(range(32))
 
 
 def _write_json(path, payload) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_seal_key(path: Path) -> Path:
+    path.write_bytes(CHECKPOINT_SEAL_KEY)
+    path.chmod(0o600)
+    return path
 
 
 def _study_artifacts(tmp_path):
@@ -212,6 +219,80 @@ def test_eval_live_requires_execute_and_exact_frozen_spend_approval(
     assert provider_calls == 0
 
 
+def test_eval_live_execute_requires_owner_only_checkpoint_seal_key_file(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, _, _, tasks_path, manifest_path, price_book_path = _live_artifacts(tmp_path)
+    runner_calls = 0
+
+    async def forbidden_live_runner(**kwargs):
+        nonlocal runner_calls
+        del kwargs
+        runner_calls += 1
+        raise AssertionError("seal-key validation must happen before live execution")
+
+    monkeypatch.setattr(eval_cli_module, "run_live_study", forbidden_live_runner, raising=False)
+    base_paths = (
+        tmp_path / "run.json",
+        tmp_path / "checkpoint.json",
+        tmp_path / "receipts.json",
+    )
+    missing = runner.invoke(
+        app,
+        _live_command(
+            manifest_path,
+            tasks_path,
+            price_book_path,
+            *base_paths,
+            "--execute",
+            "--approve-spend-usd",
+            "10.00",
+        ),
+    )
+    assert missing.exit_code == 2
+    assert "--checkpoint-seal-key-file" in missing.output
+
+    key_path = tmp_path / "checkpoint-seal.key"
+    key_path.write_bytes(bytes(range(32)))
+    key_path.chmod(0o640)
+    insecure = runner.invoke(
+        app,
+        _live_command(
+            manifest_path,
+            tasks_path,
+            price_book_path,
+            *base_paths,
+            "--execute",
+            "--approve-spend-usd",
+            "10.00",
+            "--checkpoint-seal-key-file",
+            str(key_path),
+        ),
+    )
+    assert insecure.exit_code == 2
+    assert "owner-only" in insecure.output.lower()
+    assert runner_calls == 0
+
+
+def test_eval_live_dry_run_does_not_read_checkpoint_seal_key_file(tmp_path) -> None:
+    _, _, _, tasks_path, manifest_path, price_book_path = _live_artifacts(tmp_path)
+    result = runner.invoke(
+        app,
+        _live_command(
+            manifest_path,
+            tasks_path,
+            price_book_path,
+            tmp_path / "run.json",
+            tmp_path / "checkpoint.json",
+            tmp_path / "receipts.json",
+            "--checkpoint-seal-key-file",
+            str(tmp_path / "does-not-exist.key"),
+        ),
+    )
+
+    assert result.exit_code == 0, result.output
+
+
 def test_live_evaluation_docs_preserve_operator_and_claim_boundaries() -> None:
     docs = {
         path: " ".join((ROOT / path).read_text(encoding="utf-8").lower().split())
@@ -230,6 +311,10 @@ def test_live_evaluation_docs_preserve_operator_and_claim_boundaries() -> None:
     assert "dry-run is the default" in corpus
     assert "--execute" in corpus
     assert "--approve-spend-usd 10.00" in corpus
+    assert "--checkpoint-seal-key-file" in corpus
+    assert "owner-only" in corpus
+    assert "hmac-sha256" in corpus
+    assert "max_output_bytes_per_token" in corpus
     assert "one provider call is in flight" in corpus
     assert "reservation is persisted before each call" in corpus
     assert "resume never repeats an interrupted cell" in corpus
@@ -304,6 +389,7 @@ def test_eval_live_writes_checkpoint_receipts_and_study_run_atomically(
     output_path = tmp_path / "artifacts" / "run.json"
     checkpoint_path = tmp_path / "state" / "checkpoint.json"
     receipts_path = tmp_path / "artifacts" / "receipts.json"
+    seal_key_path = _write_seal_key(tmp_path / "checkpoint-seal.key")
     atomic_paths = []
     real_atomic_json = eval_cli_module._atomic_json
 
@@ -332,6 +418,8 @@ def test_eval_live_writes_checkpoint_receipts_and_study_run_atomically(
             "--execute",
             "--approve-spend-usd",
             "10.00",
+            "--checkpoint-seal-key-file",
+            str(seal_key_path),
         ),
     )
 
@@ -353,6 +441,7 @@ def test_eval_live_resume_uses_existing_checkpoint(
     output_path = tmp_path / "run.json"
     checkpoint_path = tmp_path / "checkpoint.json"
     receipts_path = tmp_path / "receipts.json"
+    seal_key_path = _write_seal_key(tmp_path / "checkpoint-seal.key")
     first_run = manifest.planned_runs[0]
     preserved = RunRecord(
         planned_run_id=first_run.planned_run_id,
@@ -367,7 +456,12 @@ def test_eval_live_resume_uses_existing_checkpoint(
     )
     write_live_checkpoint(
         checkpoint_path,
-        create_live_checkpoint(bindings=bindings, records=(preserved,)),
+        create_live_checkpoint(
+            bindings=bindings,
+            records=(preserved,),
+            seal_key=CHECKPOINT_SEAL_KEY,
+        ),
+        seal_key=CHECKPOINT_SEAL_KEY,
     )
     provider_calls = 0
 
@@ -394,6 +488,8 @@ def test_eval_live_resume_uses_existing_checkpoint(
             "--execute",
             "--approve-spend-usd",
             "10.00",
+            "--checkpoint-seal-key-file",
+            str(seal_key_path),
         ),
     )
 
@@ -408,6 +504,7 @@ def test_eval_live_resume_uses_existing_checkpoint(
     resumed_checkpoint = load_live_checkpoint(
         checkpoint_path,
         expected_bindings=bindings,
+        seal_key=CHECKPOINT_SEAL_KEY,
     )
     assert resumed_checkpoint.records[0] == preserved
 

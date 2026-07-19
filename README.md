@@ -152,20 +152,20 @@ is all known providers.
 
 ### Experimental evaluation (DSE-708)
 
-Offline `conclave eval run` validates only a frozen replay artifact and never calls a provider.
-The live lane is **paid exploratory only**. Dry-run is the default; execution requires both `--execute` and exact
-`--approve-spend-usd 10.00`. During execution, one provider call is in flight, a reservation
-is persisted before each call, and resume never repeats an interrupted cell. Outputs stay
-labelled paid exploratory and not decision eligible. The 24-task fixture remains
-offline/open-book and is not the paid smoke corpus. Smoke checks correctness only, not
-efficiency or decision quality; no result supports a product-quality or confirmatory claim.
+Offline `conclave eval run` validates a frozen replay and never calls a provider. The live lane
+is **paid exploratory only**. Dry-run is the default; execution also requires `--execute`, exact
+`--approve-spend-usd 10.00`, and an owner-only `--checkpoint-seal-key-file` containing at least
+32 random bytes. Checkpoints use a versioned HMAC-SHA256 seal; the key is never serialized.
+Each frozen price entry attests `max_output_bytes_per_token`, so estimates bound inserted UTF-8 bytes. One provider call is in flight, a reservation is persisted before each call, and resume never repeats an
+interrupted cell. Smoke checks correctness only, not efficiency or decision quality; outputs
+remain paid exploratory, not decision eligible, and separate from the offline 24-task fixture.
 
 ```bash
 conclave eval plan path/tasks.json path/manifest.json --study-id qa --replicates 2 --seed 19 --max-output-tokens 1200
 conclave eval run path/manifest.json path/run.json --replay-artifact path/replay.json
 conclave eval live path/manifest.json path/tasks.json path/prices.json path/run.json path/checkpoint.json path/receipts.json
 conclave eval live path/manifest.json path/tasks.json path/prices.json path/run.json path/checkpoint.json path/receipts.json \
-  --execute --approve-spend-usd 10.00
+  --execute --approve-spend-usd 10.00 --checkpoint-seal-key-file path/checkpoint-seal.key
 ```
 
 Add `--stream` to render member (and synthesizer) tokens live as they arrive

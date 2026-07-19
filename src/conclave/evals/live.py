@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import inspect
 import json
 import os
 import tempfile
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from decimal import ROUND_CEILING, Decimal, localcontext
 from pathlib import Path
 from typing import Literal
@@ -54,6 +55,20 @@ ProviderCallErrorCategory = Literal[
 CostBasisSource = Literal["reported_usage", "full_reservation"]
 _BOUNDED_PROVIDER_ERROR_CATEGORIES = frozenset(
     {"authentication", "rate_limit", "timeout", "transport", "provider_error"}
+)
+CHECKPOINT_FORMAT_VERSION = "conclave_live_checkpoint_v2"
+_MINIMUM_CHECKPOINT_SEAL_KEY_BYTES = 32
+_CHECKPOINT_DECIMAL_FIELDS = frozenset(
+    {
+        "hard_cap_usd",
+        "committed_cost_usd",
+        "input_ceiling_usd_per_million_tokens",
+        "output_ceiling_usd_per_million_tokens",
+        "input_cost_upper_bound_usd",
+        "output_cost_upper_bound_usd",
+        "reserved_cost_usd",
+        "charged_cost_usd",
+    }
 )
 
 
@@ -173,21 +188,33 @@ def _canonical_hash(payload: object) -> str:
     return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
 
 
+def _canonical_checkpoint_value(value: object) -> object:
+    if isinstance(value, dict):
+        normalized = {}
+        for key, item in value.items():
+            if key in _CHECKPOINT_DECIMAL_FIELDS and isinstance(item, str):
+                item = Decimal(item)
+            normalized[str(key)] = _canonical_checkpoint_value(item)
+        return normalized
+    if isinstance(value, (list, tuple)):
+        return [_canonical_checkpoint_value(item) for item in value]
+    return _canonical_value(value)
+
+
 class LiveCheckpoint(EvalModel):
     """Secret-free, integrity-sealed state for one sequential live study."""
 
+    checkpoint_format_version: Literal["conclave_live_checkpoint_v2"]
     bindings: CheckpointBindings
     committed_cost_usd: Decimal = Field(ge=0)
     hard_cap_breached: bool = False
     records: tuple[RunRecord, ...] = ()
     receipts: tuple[ProviderCallReceipt, ...] = ()
     active_cell: ActiveCell | None = None
-    checkpoint_hash: Sha256Digest
+    checkpoint_hash: str = Field(pattern=r"^hmac-sha256:[0-9a-f]{64}$")
 
     @model_validator(mode="after")
-    def validate_integrity(self) -> LiveCheckpoint:
-        if self.checkpoint_hash != hash_live_checkpoint(self):
-            raise ValueError("checkpoint integrity hash mismatch")
+    def validate_state(self) -> LiveCheckpoint:
         record_ids = [record.planned_run_id for record in self.records]
         if len(set(record_ids)) != len(record_ids):
             raise ValueError("checkpoint records must have unique planned_run_id values")
@@ -233,14 +260,47 @@ def build_checkpoint_bindings(
     )
 
 
-def hash_live_checkpoint(checkpoint: LiveCheckpoint) -> str:
-    """Return a canonical digest over checkpoint content and all study bindings."""
+def _validate_checkpoint_seal_key(seal_key: bytes) -> None:
+    if not isinstance(seal_key, bytes):
+        raise CheckpointValidationError("checkpoint seal key must be bytes")
+    if len(seal_key) < _MINIMUM_CHECKPOINT_SEAL_KEY_BYTES:
+        raise CheckpointValidationError("checkpoint seal key must contain at least 32 bytes")
 
-    return _canonical_hash(checkpoint.model_dump(mode="python", exclude={"checkpoint_hash"}))
+
+def _checkpoint_hmac(checkpoint: LiveCheckpoint, *, seal_key: bytes) -> str:
+    return _checkpoint_payload_hmac(
+        checkpoint.model_dump(mode="python", exclude={"checkpoint_hash"}),
+        seal_key=seal_key,
+    )
+
+
+def _checkpoint_payload_hmac(payload: Mapping[str, object], *, seal_key: bytes) -> str:
+    _validate_checkpoint_seal_key(seal_key)
+    canonical = json.dumps(
+        _canonical_checkpoint_value(payload),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    digest = hmac.new(seal_key, canonical, hashlib.sha256).hexdigest()
+    return f"hmac-sha256:{digest}"
+
+
+def hash_live_checkpoint(checkpoint: LiveCheckpoint, *, seal_key: bytes) -> str:
+    """Return a keyed HMAC over checkpoint content and all study bindings."""
+
+    return _checkpoint_hmac(checkpoint, seal_key=seal_key)
+
+
+def _verify_checkpoint_seal(checkpoint: LiveCheckpoint, *, seal_key: bytes) -> None:
+    expected = _checkpoint_hmac(checkpoint, seal_key=seal_key)
+    if not hmac.compare_digest(checkpoint.checkpoint_hash, expected):
+        raise CheckpointValidationError("integrity live checkpoint")
 
 
 def create_live_checkpoint(
     *,
+    seal_key: bytes,
     bindings: CheckpointBindings,
     records: tuple[RunRecord, ...] = (),
     receipts: tuple[ProviderCallReceipt, ...] = (),
@@ -253,17 +313,20 @@ def create_live_checkpoint(
         committed_cost_usd = sum((receipt.charged_cost_usd for receipt in receipts), Decimal("0"))
     unsealed = LiveCheckpoint.model_construct(
         schema_version=EVAL_SCHEMA_VERSION,
+        checkpoint_format_version=CHECKPOINT_FORMAT_VERSION,
         bindings=bindings,
         committed_cost_usd=committed_cost_usd,
         hard_cap_breached=committed_cost_usd > bindings.hard_cap_usd,
         records=tuple(records),
         receipts=tuple(receipts),
         active_cell=active_cell,
-        checkpoint_hash="sha256:" + ("0" * 64),
+        checkpoint_hash="hmac-sha256:" + ("0" * 64),
     )
     payload = unsealed.model_dump(mode="python")
-    payload["checkpoint_hash"] = hash_live_checkpoint(unsealed)
-    return LiveCheckpoint.model_validate(payload)
+    payload["checkpoint_hash"] = hash_live_checkpoint(unsealed, seal_key=seal_key)
+    checkpoint = LiveCheckpoint.model_validate(payload)
+    _verify_checkpoint_seal(checkpoint, seal_key=seal_key)
+    return checkpoint
 
 
 def _active_provider_key_values() -> tuple[str, ...]:
@@ -276,9 +339,10 @@ def _active_provider_key_values() -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def _checkpoint_json(checkpoint: LiveCheckpoint) -> str:
+def _checkpoint_json(checkpoint: LiveCheckpoint, *, seal_key: bytes) -> str:
     try:
         validated = LiveCheckpoint.model_validate(checkpoint.model_dump(mode="python"))
+        _verify_checkpoint_seal(validated, seal_key=seal_key)
     except (ValidationError, ValueError) as exc:
         raise CheckpointValidationError("invalid live checkpoint state") from exc
     return (
@@ -292,11 +356,16 @@ def _checkpoint_json(checkpoint: LiveCheckpoint) -> str:
     )
 
 
-def write_live_checkpoint(path: str | Path, checkpoint: LiveCheckpoint) -> None:
+def write_live_checkpoint(
+    path: str | Path,
+    checkpoint: LiveCheckpoint,
+    *,
+    seal_key: bytes,
+) -> None:
     """Secret-scan and atomically replace a checkpoint in its destination directory."""
 
     destination = Path(path)
-    payload = _checkpoint_json(checkpoint)
+    payload = _checkpoint_json(checkpoint, seal_key=seal_key)
     if redact(payload) != payload or any(
         key_value in payload for key_value in _active_provider_key_values()
     ):
@@ -330,17 +399,46 @@ def load_live_checkpoint(
     path: str | Path,
     *,
     expected_bindings: CheckpointBindings,
+    seal_key: bytes,
 ) -> LiveCheckpoint:
     """Strictly load and bind an integrity-sealed checkpoint, failing closed."""
 
     try:
         with Path(path).open(encoding="utf-8") as handle:
-            payload = json.load(handle, parse_float=Decimal)
+            payload = json.load(handle)
+        if payload.get("checkpoint_format_version") != CHECKPOINT_FORMAT_VERSION:
+            raise CheckpointValidationError("invalid live checkpoint format version")
+        expected_fields = {
+            "schema_version",
+            "checkpoint_format_version",
+            "bindings",
+            "committed_cost_usd",
+            "hard_cap_breached",
+            "records",
+            "receipts",
+            "active_cell",
+            "checkpoint_hash",
+        }
+        if set(payload) != expected_fields:
+            raise CheckpointValidationError("invalid live checkpoint fields")
+        checkpoint_hash = payload["checkpoint_hash"]
+        unsigned_payload = dict(payload)
+        unsigned_payload.pop("checkpoint_hash")
+        expected_hash = _checkpoint_payload_hmac(unsigned_payload, seal_key=seal_key)
+        if not isinstance(checkpoint_hash, str) or not hmac.compare_digest(
+            checkpoint_hash,
+            expected_hash,
+        ):
+            raise CheckpointValidationError("integrity live checkpoint")
         checkpoint = LiveCheckpoint.model_validate(payload)
+        _verify_checkpoint_seal(checkpoint, seal_key=seal_key)
+    except CheckpointValidationError:
+        raise
     except json.JSONDecodeError as exc:
         raise CheckpointValidationError("invalid live checkpoint JSON") from exc
     except (OSError, TypeError, ValidationError, ValueError) as exc:
-        label = "integrity" if "integrity" in str(exc).lower() else "invalid"
+        text = str(exc).lower()
+        label = "integrity" if "integrity" in text or "checkpoint_hash" in text else "invalid"
         raise CheckpointValidationError(f"{label} live checkpoint") from exc
 
     for field in (
@@ -354,7 +452,12 @@ def load_live_checkpoint(
     return checkpoint
 
 
-def start_active_cell(checkpoint: LiveCheckpoint, *, planned_run_id: str) -> LiveCheckpoint:
+def start_active_cell(
+    checkpoint: LiveCheckpoint,
+    *,
+    planned_run_id: str,
+    seal_key: bytes,
+) -> LiveCheckpoint:
     """Persist the start of a cell before its first provider reservation."""
 
     if checkpoint.active_cell is not None:
@@ -362,6 +465,7 @@ def start_active_cell(checkpoint: LiveCheckpoint, *, planned_run_id: str) -> Liv
     if not checkpoint.should_execute(planned_run_id):
         raise CheckpointValidationError("planned run already has a final record")
     return create_live_checkpoint(
+        seal_key=seal_key,
         bindings=checkpoint.bindings,
         records=checkpoint.records,
         receipts=checkpoint.receipts,
@@ -376,6 +480,7 @@ def start_active_cell(checkpoint: LiveCheckpoint, *, planned_run_id: str) -> Liv
 def update_live_checkpoint(
     checkpoint: LiveCheckpoint,
     *,
+    seal_key: bytes,
     pending_call: PendingCall | None,
     receipts: tuple[ProviderCallReceipt, ...],
 ) -> LiveCheckpoint:
@@ -391,6 +496,7 @@ def update_live_checkpoint(
     receipt_tuple = tuple(receipts)
     committed = sum((receipt.charged_cost_usd for receipt in receipt_tuple), Decimal("0"))
     return create_live_checkpoint(
+        seal_key=seal_key,
         bindings=checkpoint.bindings,
         records=checkpoint.records,
         receipts=receipt_tuple,
@@ -421,7 +527,11 @@ def _interrupted_receipt(pending: PendingCall) -> ProviderCallReceipt:
     )
 
 
-def recover_interrupted_checkpoint(checkpoint: LiveCheckpoint) -> LiveCheckpoint:
+def recover_interrupted_checkpoint(
+    checkpoint: LiveCheckpoint,
+    *,
+    seal_key: bytes,
+) -> LiveCheckpoint:
     """Charge pending work and finalize the interrupted cell without retrying it."""
 
     active = checkpoint.active_cell
@@ -443,6 +553,7 @@ def recover_interrupted_checkpoint(checkpoint: LiveCheckpoint) -> LiveCheckpoint
         deviation_codes=("interrupted_cell_not_retried",),
     )
     return create_live_checkpoint(
+        seal_key=seal_key,
         bindings=checkpoint.bindings,
         records=(*checkpoint.records, record),
         receipts=receipts,
@@ -450,7 +561,12 @@ def recover_interrupted_checkpoint(checkpoint: LiveCheckpoint) -> LiveCheckpoint
     )
 
 
-def finish_active_cell(checkpoint: LiveCheckpoint, *, record: RunRecord) -> LiveCheckpoint:
+def finish_active_cell(
+    checkpoint: LiveCheckpoint,
+    *,
+    record: RunRecord,
+    seal_key: bytes,
+) -> LiveCheckpoint:
     """Finalize the active cell while preserving all receipt and cost history."""
 
     active = checkpoint.active_cell
@@ -461,6 +577,7 @@ def finish_active_cell(checkpoint: LiveCheckpoint, *, record: RunRecord) -> Live
     if active.pending_call is not None:
         raise CheckpointValidationError("cannot finalize a cell with a pending provider call")
     return create_live_checkpoint(
+        seal_key=seal_key,
         bindings=checkpoint.bindings,
         records=(*checkpoint.records, record),
         receipts=checkpoint.receipts,
@@ -497,13 +614,25 @@ def _resolve_call_price(price_book: PriceBook, call: StageCall) -> ModelPrice:
     )
 
 
-def _reserve_stage_call(call: StageCall, price: ModelPrice) -> CallReservation:
+def _reserve_stage_call(
+    call: StageCall,
+    price: ModelPrice,
+    *,
+    prompt_token_upper_bound: int | None = None,
+    upstream_output_token_ceilings: Sequence[int] = (),
+    upstream_output_bytes_per_token: int | None = None,
+) -> CallReservation:
+    if prompt_token_upper_bound is None:
+        prompt_token_upper_bound = _prompt_token_upper_bound(call)
+    if upstream_output_bytes_per_token is None:
+        upstream_output_bytes_per_token = price.max_output_bytes_per_token
     return reserve_call_cost(
         price,
-        prompt_token_upper_bound=_prompt_token_upper_bound(call),
+        prompt_token_upper_bound=prompt_token_upper_bound,
         prompt_template_token_allowance=0,
         provider_framing_token_allowance=_provider_framing_token_allowance(call),
-        upstream_output_token_ceilings=call.upstream_output_token_ceilings,
+        upstream_output_token_ceilings=upstream_output_token_ceilings,
+        upstream_output_bytes_per_token=upstream_output_bytes_per_token,
         max_output_tokens=call.max_output_tokens,
     )
 
@@ -759,23 +888,38 @@ class _LiveEstimateClient:
 
     def __init__(self, price_book: PriceBook) -> None:
         self._price_book = price_book
+        self._max_output_bytes_per_token = max(
+            price.max_output_bytes_per_token for price in price_book.entries
+        )
+        self._upstream_placeholders: dict[str, int] = {}
         self.reservations: list[CallReservation] = []
 
     async def call(self, call: StageCall) -> ModelAnswer:
         price = _resolve_call_price(self._price_book, call)
-        self.reservations.append(_reserve_stage_call(call, price))
-        if call.stage == "verdict":
-            return ModelAnswer(
-                name=call.provider_id,
-                model_id=call.model_id,
-                answer="invalid-first-verdict-for-max-graph-estimate",
+        static_prompt_bytes = _prompt_token_upper_bound(call)
+        upstream_ceilings: list[int] = []
+        for placeholder, token_ceiling in self._upstream_placeholders.items():
+            occurrences = sum(message.content.count(placeholder) for message in call.messages)
+            if occurrences:
+                static_prompt_bytes -= occurrences * len(placeholder.encode("utf-8"))
+                upstream_ceilings.extend([token_ceiling] * occurrences)
+        self.reservations.append(
+            _reserve_stage_call(
+                call,
+                price,
+                prompt_token_upper_bound=static_prompt_bytes,
+                upstream_output_token_ceilings=upstream_ceilings,
+                upstream_output_bytes_per_token=self._max_output_bytes_per_token,
             )
+        )
         if call.stage == "verdict_repair":
             raise _EstimateMaxGraphComplete
+        placeholder = f"__conclave_estimated_output_{len(self._upstream_placeholders):08d}__"
+        self._upstream_placeholders[placeholder] = call.max_output_tokens
         return ModelAnswer(
             name=call.provider_id,
             model_id=call.model_id,
-            answer="x" * call.max_output_tokens,
+            answer=placeholder,
         )
 
 

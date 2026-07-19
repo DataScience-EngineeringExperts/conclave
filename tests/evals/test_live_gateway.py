@@ -36,6 +36,7 @@ def _price_book(
                 model_revision="fixture-r1",
                 input_ceiling_usd_per_million_tokens=Decimal(input_rate),
                 output_ceiling_usd_per_million_tokens=Decimal(output_rate),
+                max_output_bytes_per_token=4,
             ),
         ),
     )

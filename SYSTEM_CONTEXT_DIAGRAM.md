@@ -35,7 +35,7 @@ flowchart TB
         elite["Elite (UNRELEASED)<br/>initial → claim audit → revision<br/>fixed 3-success gate each phase"]
         evalcli["Experimental eval CLI (DSE-708)<br/>offline replay · live dry-run<br/>gated paid exploratory execute"]
         evalartifacts["Versioned eval artifacts<br/>manifest · run · grader set + separate map<br/>exploratory report"]
-        liveguard["Live guard<br/>exact USD 10.00 approval · reservation before call<br/>one in flight · no-repeat resume"]
+        liveguard["Live guard<br/>exact USD 10.00 approval · owner-only seal key<br/>HMAC checkpoint · one in flight · no-repeat resume"]
         registry["Registry · name to model-id<br/>key PRESENCE only, never values (registry.py)"]
         config["Config loader · custom endpoints (config.py)"]
         models["Result contract · CouncilResult v2<br/>answers · verdict · consensus · manifest (models.py)"]
@@ -133,10 +133,11 @@ flowchart TB
   orchestrator. There is no behavior in the CLI that the library can't reach.
 - **The DSE-708 eval lane is paid exploratory only.** Offline `eval run` still validates
   pre-recorded artifacts without provider calls. `eval live` defaults to dry-run; execution
-  requires `--execute` plus exact USD 10.00 approval. One provider call is in flight, its
-  reservation is persisted first, and resume skips an interrupted cell rather than repeating
-  it. The capped smoke checks correctness only, not efficiency or decision quality, and its
-  outputs remain not decision eligible.
+  requires `--execute`, exact USD 10.00 approval, and an owner-only checkpoint-seal key file.
+  HMAC-SHA256 authenticates checkpoint state, and the price hash includes each model's
+  `max_output_bytes_per_token` estimate bound. One call is in flight, its reservation persists
+  first, and resume skips an interrupted cell. The smoke checks correctness only—not efficiency
+  or decision quality—and remains not decision eligible.
 - **mcp-warden is dashed and dev-time.** The dotted edge from `mcp-warden` to the library
   is deliberate: warden imports conclave **only at design/eval time**. conclave is
   stochastic and must never sit in warden's deterministic runtime decision path. See PDD

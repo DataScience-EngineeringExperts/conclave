@@ -26,8 +26,8 @@ orchestration, call order, reservations, and persistence.
 
 - `pricing.py` defines and loads an external, immutable price book. It validates exact
   provider/model/revision coverage, canonical hashing, USD currency, positive pessimistic
-  input/output rates, and the `FrozenStudyDesign.price_snapshot` binding. No current prices
-  are compiled into library code.
+  input/output rates, a positive operator-attested `max_output_bytes_per_token`, and the
+  `FrozenStudyDesign.price_snapshot` binding. No current prices are compiled into library code.
 - `live_protocols.py` defines the six versioned condition call graphs and deterministic
   per-stage output-token allocation. Calls are awaited serially and all stage caps sum to the
   cell's frozen `max_output_tokens`.
@@ -35,7 +35,8 @@ orchestration, call order, reservations, and persistence.
   interruption recovery, dry-run estimation, and final `StudyRun` assembly.
 - `eval_cli.py` adds a separate `conclave eval live` surface. Dry-run is the default. Paid
   execution requires both `--execute` and an `--approve-spend-usd` value that exactly matches
-  the frozen manifest ceiling.
+  the frozen manifest ceiling, plus `--checkpoint-seal-key-file` naming an owner-only POSIX
+  regular file containing at least 32 operator-generated random bytes.
 
 The new path accepts only a complete `paid_exploratory_pilot` manifest with a frozen design.
 It rejects legacy synthetic manifests and confirmatory manifests.
@@ -49,11 +50,14 @@ the snapshot ID, capture time, and currency must also match. Duplicate or missin
 unknown models, non-USD currency, and nonpositive rates fail before key resolution or network
 access.
 
-Each call reservation is computed from the frozen call specification, exact public prompt,
-fixed prompt-template allowance, upstream stage token ceilings that may be inserted into a
-later prompt, provider framing allowance, and the call's output-token ceiling. The price book
-uses maximum applicable input and output rates, not discounted or cached rates. Reservation
-arithmetic uses `Decimal` and rounds upward to USD microcents. Tests pin the formula.
+Execution reservations use the exact UTF-8 byte length of resolved messages plus provider
+framing and the call's output-token ceiling; treating every input byte as a possible token is
+pessimistic. Dry-run cannot know future upstream text, so it removes its internal sentinels and
+reserves each upstream token ceiling multiplied by the maximum
+`max_output_bytes_per_token` attestation in the frozen price book. That attestation is part of
+the canonical price hash, so drift invalidates the manifest binding. The price book uses
+maximum input/output rates, not discounted or cached rates. `Decimal` arithmetic rounds upward
+to USD microcents. Tests pin the formula and multibyte maximum-expansion case.
 
 Before network I/O:
 
@@ -134,10 +138,13 @@ basis, outcome, and bounded error category.
 
 ## Checkpoint and resume
 
-The checkpoint is bound to the manifest hash, price-book hash, public-task hash, and USD
-10.00 ceiling. It contains completed `RunRecord` values, completed call receipts, committed
-cost, and at most one active cell with at most one pending call. It never stores headers,
-credential values, endpoint query secrets, raw exceptions, or grader material.
+Checkpoint format `conclave_live_checkpoint_v2` is authenticated with HMAC-SHA256 under the
+external seal key. Old unkeyed checkpoints, a wrong key, or a publicly recomputed SHA-256
+digest fail closed. The key is required by the paid `run_live_study` API but is never serialized.
+The authenticated payload binds the manifest hash, price-book hash, public-task hash, USD
+10.00 ceiling, records, receipts, committed cost, and active/pending state. It never stores
+headers, credential values, endpoint query secrets, raw exceptions, grader material, or the
+seal key.
 
 Every transition is written to a temporary file in the destination directory, flushed,
 `fsync`ed, and installed with `os.replace`. Before replacement, serialized content must be
@@ -157,7 +164,7 @@ non-executed cell remains in the denominator.
 ## Dry-run and replay
 
 Dry-run traverses the exact same condition call graph without loading configuration, reading
-keys, or invoking transport. It reports planned cells, maximum provider calls, worst-case
+provider or checkpoint-seal keys, or invoking transport. It reports planned cells, maximum provider calls, worst-case
 reserved cost by roster and condition, largest single reservation, total upper bound, the
 USD 10.00 ceiling, and whether the complete plan fits. It is an authorization aid, not a bill
 forecast.
@@ -173,6 +180,8 @@ asserts exact consumption, and produces the same call receipts and `StudyRun` on
 |---|---|
 | Snapshot, manifest, task, or checkpoint hash drift | Abort before keys or network. |
 | Missing/duplicate/unknown price entry | Abort before keys or network. |
+| Missing/short/insecure seal-key file or unsupported POSIX checks | Abort before live execution. |
+| Old, forged, or wrong-key checkpoint | Reject before state or cost is trusted. |
 | Next reservation crosses USD 10.00 | No call; mark remaining cells `budget_exhausted`. |
 | Provider timeout/error/malformed output | Bounded failure receipt; retain cell in denominator. |
 | Missing usage | Charge full reservation; mark cost basis pessimistic. |
@@ -191,6 +200,8 @@ asserts exact consumption, and produces the same call receipts and `StudyRun` on
 - Total charged cost never exceeds the manifest-bound USD 10.00 ceiling in success, timeout,
   missing-usage, budget-exhaustion, and crash/resume tests.
 - Resume never repeats an interrupted paid cell.
+- Tests reject public resealing, wrong keys, old formats, and group/other-readable key files.
+- Maximum-expansion multibyte execution reservations do not exceed the dry-run estimate.
 - Every planned cell appears once in the final `StudyRun`, including unscheduled failures.
 - Live/checkpoint/replay artifacts contain no credential values or raw exception chains.
 - Focused tests, full pytest, Ruff lint/format, `git diff --check`, and Gitleaks pass.

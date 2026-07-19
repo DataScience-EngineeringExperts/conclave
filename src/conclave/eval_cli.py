@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import stat
 import tempfile
 from collections import Counter
 from decimal import Decimal, InvalidOperation
@@ -125,6 +126,37 @@ def _require_live_approval(value: str | None, manifest: StudyManifest) -> None:
         _abort("spend approval must exactly match USD 10.00 and the frozen design ceiling")
 
 
+def _read_checkpoint_seal_key(path: Path | None) -> bytes:
+    if path is None:
+        _abort("--execute requires --checkpoint-seal-key-file")
+    if os.name != "posix" or not hasattr(os, "O_NOFOLLOW"):
+        _abort("checkpoint seal key permission checks are unsupported on this platform")
+
+    descriptor: int | None = None
+    try:
+        flags = os.O_RDONLY | os.O_NOFOLLOW
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        descriptor = os.open(path, flags)
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode):
+            _abort("checkpoint seal key must be a regular POSIX file")
+        if stat.S_IMODE(file_stat.st_mode) & (stat.S_IRWXG | stat.S_IRWXO):
+            _abort("checkpoint seal key file must be owner-only")
+        chunks = []
+        while chunk := os.read(descriptor, 4096):
+            chunks.append(chunk)
+        seal_key = b"".join(chunks)
+    except OSError as exc:
+        _abort(f"could not securely read checkpoint seal key file: {exc.strerror or 'I/O error'}")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if len(seal_key) < 32:
+        _abort("checkpoint seal key file must contain at least 32 bytes")
+    return seal_key
+
+
 @app.command("live")
 def live_command(
     manifest_path: Annotated[Path, typer.Argument(exists=True, readable=True)],
@@ -147,6 +179,16 @@ def live_command(
             help="Allow the guarded live runner to reach providers.",
         ),
     ] = False,
+    checkpoint_seal_key_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--checkpoint-seal-key-file",
+            help=(
+                "Owner-only POSIX file containing at least 32 random bytes; "
+                "required only with --execute."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Estimate by default; execute only a frozen USD 10 paid exploratory pilot."""
 
@@ -170,8 +212,20 @@ def live_command(
         return
 
     _require_live_approval(approve_spend_usd, manifest)
-    if len({output.resolve(), checkpoint.resolve(), receipts.resolve()}) != 3:
-        _abort("run, checkpoint, and receipt artifacts require separate paths")
+    checkpoint_seal_key = _read_checkpoint_seal_key(checkpoint_seal_key_file)
+    assert checkpoint_seal_key_file is not None  # narrowed by the fail-closed loader
+    if (
+        len(
+            {
+                output.resolve(),
+                checkpoint.resolve(),
+                receipts.resolve(),
+                checkpoint_seal_key_file.resolve(),
+            }
+        )
+        != 4
+    ):
+        _abort("run, checkpoint, receipt, and seal-key paths must be separate")
     try:
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
         study_run = asyncio.run(
@@ -180,6 +234,7 @@ def live_command(
                 tasks=tasks,
                 price_book=price_book,
                 checkpoint_path=checkpoint,
+                checkpoint_seal_key=checkpoint_seal_key,
             )
         )
         bindings = build_checkpoint_bindings(
@@ -190,6 +245,7 @@ def live_command(
         final_checkpoint = load_live_checkpoint(
             checkpoint,
             expected_bindings=bindings,
+            seal_key=checkpoint_seal_key,
         )
     except (OSError, LiveGatewayError, RunValidationError, ValidationError, ValueError) as exc:
         _abort(f"live execution rejected: {exc}")

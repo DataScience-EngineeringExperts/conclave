@@ -34,7 +34,7 @@ the canonical authority spec on top of those.
 | **H1 Evaluation Plan** | [`docs/plans/2026-07-17-h1-budget-matched-evaluation.md`](docs/plans/2026-07-17-h1-budget-matched-evaluation.md) | TDD delivery plan for the offline, budget-matched evaluation substrate. |
 | **H1 Method Hardening** | [`docs/plans/2026-07-17-h1-method-hardening-design.md`](docs/plans/2026-07-17-h1-method-hardening-design.md) | Paid-study provenance, task-clustered inference, grader controls, confirmatory refusal boundaries, and QA design. |
 | **H1 Synthetic QA Pack** | [`studies/elite_qa_v1/README.md`](studies/elite_qa_v1/README.md) | Balanced 24-task open-book harness fixture, QA protocol, and confirmatory preregistration template. |
-| **H1 Live Runner Design** | [`docs/plans/2026-07-18-h1-live-evaluation-runner-design.md`](docs/plans/2026-07-18-h1-live-evaluation-runner-design.md) | Sequential paid-exploratory execution, frozen pricing, pessimistic reservations, USD 10 cap, atomic checkpoints, and no-repeat resume. |
+| **H1 Live Runner Design** | [`docs/plans/2026-07-18-h1-live-evaluation-runner-design.md`](docs/plans/2026-07-18-h1-live-evaluation-runner-design.md) | Sequential paid-exploratory execution, hash-bound UTF-8 estimates, USD 10 cap, authenticated checkpoints, and no-repeat resume. |
 | **H1 Live Runner Plan** | [`docs/plans/2026-07-18-h1-live-evaluation-runner.md`](docs/plans/2026-07-18-h1-live-evaluation-runner.md) | Exact TDD tasks for the six live conditions, dry-run estimator, replay fixtures, CLI gate, and correctness-only paid smoke. |
 
 ---
@@ -67,7 +67,7 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 | Models | [`src/conclave/models.py`](src/conclave/models.py) | Stable Pydantic contract, including `EliteResult` phase artifacts and backward-compatible `CouncilResult.elite`. |
 | CLI | [`src/conclave/cli.py`](src/conclave/cli.py) | Five released `conclave ask` modes plus source-only Elite and `providers`; Elite exits 1 unless decision readiness is `ready`, emits full JSON before failure, and rejects streaming. |
 | Experimental evals | [`src/conclave/evals/`](src/conclave/evals/) | Versioned DSE-708 planning, strict replay, failure-inclusive running, blinding, scoring, and exploratory reports; no product-quality claim. |
-| Eval CLI | [`src/conclave/eval_cli.py`](src/conclave/eval_cli.py) | Offline `plan/run/blind/report` plus `eval live`; live defaults to dry-run and paid execution requires `--execute` with exact USD 10.00 approval. |
+| Eval CLI | [`src/conclave/eval_cli.py`](src/conclave/eval_cli.py) | Offline `plan/run/blind/report` plus `eval live`; paid execution requires `--execute`, exact USD 10.00 approval, and an owner-only `--checkpoint-seal-key-file`. |
 | Logging | [`src/conclave/logging.py`](src/conclave/logging.py) | Logger factory; stderr; verbosity via `CONCLAVE_LOG_LEVEL` (default `WARNING`). |
 
 ## Tests
