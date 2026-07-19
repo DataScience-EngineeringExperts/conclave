@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from decimal import Decimal
 
 import pytest
@@ -105,6 +106,7 @@ async def test_gateway_passes_stage_output_contract_to_provider() -> None:
         strict=True,
     )
     observed: list[OutputContract | None] = []
+    reservations = []
 
     async def fake_call_model(name, model_id, messages, **kwargs):
         del messages
@@ -120,13 +122,26 @@ async def test_gateway_passes_stage_output_contract_to_provider() -> None:
         price_book=_price_book(input_rate="1", output_rate="1"),
         hard_cap_usd=Decimal("1"),
         call_model_func=fake_call_model,
-        checkpoint=lambda pending, receipts: None,
+        checkpoint=lambda pending, receipts: (
+            reservations.append(pending.reservation) if pending is not None else None
+        ),
     )
     call = _stage_call(output_contract=contract)
 
     await client.call(call)
 
     assert observed == [contract]
+    serialized_contract_bytes = len(
+        json.dumps(
+            contract.model_dump(mode="json"),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    )
+    assert reservations[0].prompt_token_upper_bound >= (
+        len(call.messages[0].content.encode("utf-8")) + serialized_contract_bytes
+    )
 
 
 @pytest.mark.asyncio
@@ -293,6 +308,36 @@ async def test_gateway_records_actual_cost_when_breach_exceeds_hard_cap() -> Non
     assert receipt.error_category == "reservation_breach"
     assert receipt.hard_cap_breached is True
     assert client.committed_cost_usd == receipt.charged_cost_usd
+
+
+@pytest.mark.asyncio
+async def test_gateway_accounts_for_provider_reported_unattributed_total_tokens() -> None:
+    async def fake_call_model(name, model_id, messages, **kwargs):
+        del messages, kwargs
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            answer="provider reported hidden billed tokens",
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=10_000),
+        )
+
+    client = LiveProviderClient(
+        price_book=_price_book(input_rate="1", output_rate="2"),
+        hard_cap_usd=Decimal("1"),
+        call_model_func=fake_call_model,
+        checkpoint=lambda pending, receipts: None,
+    )
+
+    with pytest.raises(ReservationBreachError, match="reservation"):
+        await client.call(_stage_call(cap=5))
+
+    receipt = client.receipts[-1]
+    assert receipt.cost_basis.total_tokens == 10_000
+    assert receipt.cost_basis.unattributed_tokens == 9_998
+    assert receipt.charged_cost_usd == Decimal("0.019999")
+    assert receipt.charged_cost_usd > receipt.reserved_cost_usd
+    assert receipt.error_category == "reservation_breach"
+    assert client.stopped is True
 
 
 def test_token_usage_rejects_negative_counts() -> None:

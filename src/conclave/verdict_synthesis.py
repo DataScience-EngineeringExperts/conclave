@@ -84,6 +84,7 @@ from .verdict import (
 
 __all__ = [
     "VERDICT_EXTRACTION_PROMPT_VERSION",
+    "VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES",
     "VerdictSynthesisResult",
     "extract_verdict",
     "verdict_extraction_json_schema",
@@ -91,11 +92,24 @@ __all__ = [
 
 logger = get_logger("verdict_synthesis")
 
+# Repair prompts are paid input. Bound validation detail by UTF-8 bytes so a
+# malformed structured response cannot amplify into an unbounded second call.
+VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES = 2048
+
 # Recorded reasons for an absent verdict (DD-2 verdict-absent rule). Named as
 # constants so the three call sites and the test suite share the exact strings.
 _REASON_TOO_FEW = "fewer than 2 responding members"
 _REASON_OPEN_ENDED = "open-ended prompt (no decision/review to adjudicate)"
 _REASON_EXTRACTION_FAILED = "verdict extraction failed schema validation"
+
+
+def _bounded_repair_error(detail: object) -> str:
+    scrubbed = redact(str(detail))
+    encoded = scrubbed.encode("utf-8")
+    if len(encoded) <= VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES:
+        return scrubbed
+    return encoded[:VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES].decode("utf-8", errors="ignore")
+
 
 # The extraction system prompt. Versioned via VERDICT_EXTRACTION_PROMPT_VERSION
 # (bump that constant in verdict.py on any wording change here). It instructs the
@@ -310,18 +324,18 @@ def _parse_and_validate(answer: ModelAnswer | None) -> tuple[VerdictExtractionMo
     """
     if answer is None or answer.error or not answer.answer or not answer.answer.strip():
         detail = answer.error if (answer and answer.error) else "empty extractor response"
-        return None, redact(str(detail))
+        return None, _bounded_repair_error(detail)
 
     candidate = _strip_code_fence(answer.answer)
     try:
         data = json.loads(candidate)
     except json.JSONDecodeError as exc:
-        return None, redact(f"response was not valid JSON: {exc}")
+        return None, _bounded_repair_error(f"response was not valid JSON: {exc}")
 
     try:
         return VerdictExtractionModel.model_validate(data), ""
     except ValidationError as exc:
-        return None, redact(f"JSON did not match the verdict schema: {exc}")
+        return None, _bounded_repair_error(f"JSON did not match the verdict schema: {exc}")
 
 
 def _member_vote_sequence(

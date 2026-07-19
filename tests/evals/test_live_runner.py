@@ -420,6 +420,17 @@ def test_live_runner_allows_only_one_process_per_checkpoint(tmp_path) -> None:
     assert all(process.exitcode == 0 for process in processes)
 
 
+def test_live_runner_rejects_symlinked_lifecycle_lock(tmp_path) -> None:
+    checkpoint_path = tmp_path / "symlinked-checkpoint.json"
+    checkpoint_path.write_text("{}", encoding="utf-8")
+    lock_path = checkpoint_path.with_name(f"{checkpoint_path.name}.lock")
+    lock_path.symlink_to(checkpoint_path)
+
+    with pytest.raises(CheckpointValidationError, match="lease"):
+        with runner_module._checkpoint_lifecycle_lease(checkpoint_path):
+            pass
+
+
 @pytest.mark.asyncio
 async def test_live_runner_fails_closed_when_filesystem_leases_are_unsupported(
     tmp_path, monkeypatch

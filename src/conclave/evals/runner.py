@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import stat
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
@@ -70,7 +71,7 @@ class RunValidationError(ValueError):
 def _checkpoint_lifecycle_lease(checkpoint_path: Path) -> Iterator[None]:
     """Hold one nonblocking process lease for the checkpoint's full lifecycle."""
 
-    if _fcntl is None:
+    if _fcntl is None or not hasattr(os, "O_NOFOLLOW"):
         raise CheckpointValidationError(
             "checkpoint filesystem leases are unsupported on this platform"
         )
@@ -79,10 +80,18 @@ def _checkpoint_lifecycle_lease(checkpoint_path: Path) -> Iterator[None]:
     descriptor: int | None = None
     acquired = False
     try:
-        flags = os.O_CREAT | os.O_RDWR
+        flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW
         if hasattr(os, "O_CLOEXEC"):
             flags |= os.O_CLOEXEC
         descriptor = os.open(lock_path, flags, 0o600)
+        lock_stat = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(lock_stat.st_mode)
+            or lock_stat.st_nlink != 1
+            or lock_stat.st_uid != os.getuid()
+            or stat.S_IMODE(lock_stat.st_mode) & (stat.S_IRWXG | stat.S_IRWXO)
+        ):
+            raise OSError("unsafe checkpoint lease file")
         _fcntl.flock(descriptor, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
         acquired = True
     except (AttributeError, OSError):

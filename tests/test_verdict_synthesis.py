@@ -35,6 +35,7 @@ from conclave.models import ModelAnswer
 from conclave.verdict import CouncilVerdict
 from conclave.verdict_synthesis import (
     VERDICT_EXTRACTION_PROMPT_VERSION,
+    VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES,
     VerdictSynthesisResult,
     extract_verdict,
     verdict_extraction_json_schema,
@@ -495,6 +496,29 @@ def test_repair_message_includes_validation_errors(monkeypatch):
     assert len(repair_msgs) > len(first_msgs)
     repair_text = repair_msgs[-1]["content"].lower()
     assert "valid json" in repair_text or "error" in repair_text
+
+
+def test_repair_message_caps_schema_errors_by_utf8_bytes(monkeypatch):
+    malformed = json.dumps({"positions": ["\U0001f600" * 2048]})
+    fake = _ScriptedExtractor(malformed, json.dumps(_payload()))
+    _install(monkeypatch, fake)
+
+    result = __import__("asyncio").run(
+        extract_verdict(
+            "Choose.",
+            [member("alpha", "A", answer_id="alpha-1"), member("beta", "B", answer_id="beta-1")],
+            synthesizer_name=SYNTH_NAME,
+            synthesizer_model_id=SYNTH_MODEL_ID,
+        )
+    )
+
+    assert result.verdict is not None
+    repair_error = (
+        fake.calls[1]["messages"][-1]["content"]
+        .split("The problem was:\n", 1)[1]
+        .split("\n\nReturn only", 1)[0]
+    )
+    assert len(repair_error.encode("utf-8")) <= VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES
 
 
 def test_repair_once_then_success(monkeypatch):

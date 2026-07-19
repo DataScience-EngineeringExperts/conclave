@@ -23,6 +23,7 @@ from conclave.evals.live_protocols import (
 )
 from conclave.evals.pricing import ModelPrice, PriceBook
 from conclave.models import ModelAnswer, TokenUsage
+from conclave.verdict_synthesis import VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES
 from tests.evals.test_live_runner import _live_inputs
 
 
@@ -126,6 +127,39 @@ async def test_dry_run_prices_the_optional_elite_verdict_repair_max_graph() -> N
         len(stage_call_sequence(run.condition_id, roster_size=3)) for run in manifest.planned_runs
     )
     assert estimate.maximum_call_count == expected_calls
+
+
+@pytest.mark.asyncio
+async def test_dry_run_models_maximum_bounded_verdict_repair_error() -> None:
+    price_book = PriceBook(
+        snapshot_id="fictional-repair-bound",
+        captured_at="2026-07-18T12:00:00Z",
+        currency="USD",
+        entries=(
+            ModelPrice(
+                provider_id="fictional-provider",
+                model_id="fictional/model",
+                model_revision="fixture-r1",
+                input_ceiling_usd_per_million_tokens=Decimal("1"),
+                output_ceiling_usd_per_million_tokens=Decimal("1"),
+                max_output_bytes_per_token=4,
+            ),
+        ),
+    )
+    client = _LiveEstimateClient(price_book)
+    verdict = StageCall(
+        stage="verdict",
+        provider_id="fictional-provider",
+        model_id="fictional/model",
+        model_revision="fixture-r1",
+        messages=(ChatMessage(role="user", content="extract verdict"),),
+        max_output_tokens=2,
+    )
+
+    answer = await client.call(verdict)
+
+    assert answer.error is not None
+    assert len(answer.error.encode("utf-8")) == VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES
 
 
 @pytest.mark.asyncio

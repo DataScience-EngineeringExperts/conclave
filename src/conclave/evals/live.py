@@ -20,6 +20,7 @@ from conclave.adapters.base import redact
 from conclave.models import ModelAnswer, TokenUsage
 from conclave.providers import _receipt_error_category, call_model
 from conclave.registry import PROVIDER_ENV_VARS
+from conclave.verdict_synthesis import VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES
 
 from .live_protocols import LIVE_PROTOCOL_REGISTRY, StageCall, execute_live_condition
 from .models import (
@@ -102,6 +103,8 @@ class ProviderCallCostBasis(EvalModel):
     source: CostBasisSource
     prompt_tokens: int | None = Field(default=None, ge=0)
     completion_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    unattributed_tokens: int | None = Field(default=None, ge=0)
     input_ceiling_usd_per_million_tokens: Decimal = Field(gt=0)
     output_ceiling_usd_per_million_tokens: Decimal = Field(gt=0)
 
@@ -593,15 +596,27 @@ CallModel = Callable[..., Awaitable[ModelAnswer]]
 
 
 def _prompt_token_upper_bound(call: StageCall) -> int:
-    """Bound prompt content by UTF-8 bytes, conservatively above BPE tokens."""
+    """Bound messages and native structured-output content by UTF-8 bytes."""
 
-    return sum(len(message.content.encode("utf-8")) for message in call.messages)
+    message_bytes = sum(len(message.content.encode("utf-8")) for message in call.messages)
+    if call.output_contract is None:
+        return message_bytes
+    contract_bytes = len(
+        json.dumps(
+            call.output_contract.model_dump(mode="json"),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    )
+    return message_bytes + contract_bytes
 
 
 def _provider_framing_token_allowance(call: StageCall) -> int:
     """Reserve fixed per-request and per-message provider framing overhead."""
 
-    return 64 + (16 * len(call.messages))
+    contract_wrapper_allowance = 256 if call.output_contract is not None else 0
+    return 64 + (16 * len(call.messages)) + contract_wrapper_allowance
 
 
 def _resolve_call_price(price_book: PriceBook, call: StageCall) -> ModelPrice:
@@ -637,7 +652,15 @@ def _reserve_stage_call(
     )
 
 
+def _unattributed_usage_tokens(usage: TokenUsage) -> int:
+    attributed = usage.prompt_tokens + usage.completion_tokens
+    if usage.total_tokens < attributed:
+        raise ValueError("provider total_tokens is smaller than its attributed usage")
+    return usage.total_tokens - attributed
+
+
 def _reported_usage_cost(price: ModelPrice, usage: TokenUsage) -> Decimal:
+    unattributed = _unattributed_usage_tokens(usage)
     precision = max(
         64,
         len(str(usage.prompt_tokens))
@@ -646,12 +669,23 @@ def _reported_usage_cost(price: ModelPrice, usage: TokenUsage) -> Decimal:
         len(str(usage.completion_tokens))
         + len(price.output_ceiling_usd_per_million_tokens.as_tuple().digits)
         + 20,
+        len(str(usage.total_tokens))
+        + max(
+            len(price.input_ceiling_usd_per_million_tokens.as_tuple().digits),
+            len(price.output_ceiling_usd_per_million_tokens.as_tuple().digits),
+        )
+        + 20,
     )
     with localcontext() as context:
         context.prec = precision
         cost = (
             Decimal(usage.prompt_tokens) * price.input_ceiling_usd_per_million_tokens
             + Decimal(usage.completion_tokens) * price.output_ceiling_usd_per_million_tokens
+            + Decimal(unattributed)
+            * max(
+                price.input_ceiling_usd_per_million_tokens,
+                price.output_ceiling_usd_per_million_tokens,
+            )
         ) / TOKENS_PER_MILLION
         return cost.quantize(USD_MICROCENT, rounding=ROUND_CEILING)
 
@@ -742,9 +776,12 @@ class LiveProviderClient:
 
     @staticmethod
     def _usage_breaches(usage: TokenUsage, reservation: CallReservation) -> bool:
+        unattributed = _unattributed_usage_tokens(usage)
         return (
             usage.prompt_tokens > reservation.input_token_upper_bound
-            or usage.completion_tokens > reservation.output_token_upper_bound
+            or usage.completion_tokens + unattributed > reservation.output_token_upper_bound
+            or usage.total_tokens
+            > reservation.input_token_upper_bound + reservation.output_token_upper_bound
         )
 
     async def call(self, call: StageCall) -> ModelAnswer:
@@ -816,6 +853,8 @@ class LiveProviderClient:
                         source="reported_usage",
                         prompt_tokens=usage.prompt_tokens,
                         completion_tokens=usage.completion_tokens,
+                        total_tokens=usage.total_tokens,
+                        unattributed_tokens=_unattributed_usage_tokens(usage),
                         input_ceiling_usd_per_million_tokens=(
                             reservation.input_ceiling_usd_per_million_tokens
                         ),
@@ -914,6 +953,12 @@ class _LiveEstimateClient:
         )
         if call.stage == "verdict_repair":
             raise _EstimateMaxGraphComplete
+        if call.stage == "verdict":
+            return ModelAnswer(
+                name=call.provider_id,
+                model_id=call.model_id,
+                error="x" * VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES,
+            )
         placeholder = f"__conclave_estimated_output_{len(self._upstream_placeholders):08d}__"
         self._upstream_placeholders[placeholder] = call.max_output_tokens
         return ModelAnswer(

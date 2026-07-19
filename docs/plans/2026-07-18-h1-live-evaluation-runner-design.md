@@ -50,9 +50,11 @@ the snapshot ID, capture time, and currency must also match. Duplicate or missin
 unknown models, non-USD currency, and nonpositive rates fail before key resolution or network
 access.
 
-Execution reservations use the exact UTF-8 byte length of resolved messages plus provider
-framing and the call's output-token ceiling; treating every input byte as a possible token is
-pessimistic. Dry-run cannot know future upstream text, so it removes its internal sentinels and
+Execution reservations use the exact UTF-8 byte length of resolved messages and any native
+structured-output contract plus provider framing and the call's output-token ceiling; treating
+every input byte as a possible token is pessimistic. Verdict validation errors are capped by
+UTF-8 bytes before the one repair prompt, and dry-run reserves that full cap. Dry-run cannot know
+future upstream text, so it removes its internal sentinels and
 reserves each upstream token ceiling multiplied by the maximum
 `max_output_bytes_per_token` attestation in the frozen price book. That attestation is part of
 the canonical price hash, so drift invalidates the manifest binding. The price book uses
@@ -67,12 +69,13 @@ Before network I/O:
 4. Atomically persist a pending call with the reservation.
 5. Invoke `call_model` with that stage's `max_output_tokens`.
 
-Afterward, complete usage is priced from provider token receipts. The runner commits the
-actual calculated cost when it is within the reservation; missing usage commits the full
-reservation. A usage count or calculated cost above the reservation is a fail-closed
-`reservation_breach`: the full reservation is charged, the cell is non-successful, and no
-new call is scheduled. The final artifacts distinguish usage-priced cost from pessimistically
-charged cost.
+Afterward, complete usage is priced from provider token receipts. Any provider-reported total
+above prompt plus completion is charged pessimistically at the higher frozen rate; a total below
+those components is a reconciliation failure. Missing usage commits the full reservation. A
+usage count or calculated cost above the reservation is a fail-closed `reservation_breach`: the
+actual usage-priced overage is preserved as evidence, the cell is non-successful, and no new call
+is scheduled. The final artifacts distinguish usage-priced cost from pessimistically charged
+cost.
 
 ## Six conditions
 
