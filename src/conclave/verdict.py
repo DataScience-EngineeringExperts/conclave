@@ -57,7 +57,7 @@ CONFIDENCE_LEVELS = ("low", "medium", "high")
 # audit can tell WHICH extractor wording produced a given clustering. Opaque
 # string; only equality/inequality is meaningful. Bump on any change to the
 # extraction system prompt in :mod:`conclave.verdict_synthesis`.
-VERDICT_EXTRACTION_PROMPT_VERSION = "3"
+VERDICT_EXTRACTION_PROMPT_VERSION = "4"
 
 
 class CouncilPosition(BaseModel):
@@ -383,16 +383,20 @@ def verdict_extraction_json_schema() -> dict:
       number; CAC-05 computes it deterministically from ``provider_votes`` via
       :mod:`conclave.agreement` (DD-1, the auditability-paradox fix).
     * **KEEPS** the judgment fields the model owns: ``verdict_type`` (enum),
-      ``headline``, ``recommendation``, ``positions``, plus the optional
-      ``conflicts``, ``provider_votes``, ``minority_reports``, ``caveats``,
-      ``dissent_summary``. ``provider_votes[*].position_label`` is what the engine
-      maps each member to in order to build the per-member clustering sequence.
+      ``headline``, ``recommendation``, ``positions``, ``conflicts``,
+      ``provider_votes``, ``minority_reports``, ``caveats``, and
+      ``dissent_summary``. Native structured-output schemas require every declared
+      object property, so semantically optional collections use an empty array and
+      optional prose uses an empty string. Optional self-reported vote confidence
+      is omitted from the extraction contract rather than forcing the model to
+      invent it. ``provider_votes[*].position_label`` is what the engine maps each
+      member to in order to build the per-member clustering sequence.
 
     Inherits all LCD constraints from the template (object nesting ≤ 3, ``enum``
     not ``oneOf``/``anyOf``/``allOf``, no ``$ref``/``$defs``,
-    ``additionalProperties: false`` on every object, optionality via
-    omission-from-required). The returned dict is a fresh object on each call so a
-    caller may mutate it freely.
+    ``additionalProperties: false`` on every object). Every declared object property
+    is required for OpenAI strict-schema compatibility. The returned dict is a
+    fresh object on each call so a caller may mutate it freely.
 
     Returns:
         A draft-style JSON Schema ``dict`` for the verdict-extraction object.
@@ -413,14 +417,35 @@ def verdict_extraction_json_schema() -> dict:
     # prompt is a decision/review at all.
     schema["properties"]["verdict_applies"] = {"type": "boolean"}
 
-    # REMOVE every consensus field — the model must never emit the number.
+    # REMOVE every top-level consensus field — the model must never emit the number.
     for field in _CONSENSUS_FIELDS:
         schema["properties"].pop(field, None)
 
-    # Rebuild ``required``: drop the consensus fields, add ``verdict_applies``
-    # (optionality stays via omission-from-required; we only add the new gate).
-    schema["required"] = [r for r in schema["required"] if r not in _CONSENSUS_FIELDS]
-    schema["required"].append("verdict_applies")
+    # Per-conflict consensus is also engine-computed. The full verdict schema
+    # carries it, but the extraction contract must never ask the model for it.
+    conflict_properties = schema["properties"]["conflicts"]["items"]["properties"]
+    conflict_properties.pop("consensus_score", None)
+
+    # Confidence is optional self-reporting and has no honest empty sentinel in
+    # its enum. Exclude it from strict extraction rather than force fabrication.
+    vote_properties = schema["properties"]["provider_votes"]["items"]["properties"]
+    vote_properties.pop("confidence", None)
+
+    # OpenAI's strict JSON-Schema surface requires every key declared in an
+    # object's ``properties`` to appear in that object's ``required`` array.
+    # Requiring empty arrays/strings for semantically optional blocks keeps this
+    # one contract valid across OpenAI, Anthropic tools, and Gemini responseSchema.
+    def require_all_declared_properties(node: object) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                node["required"] = list(node.get("properties", {}).keys())
+            for value in node.values():
+                require_all_declared_properties(value)
+        elif isinstance(node, list):
+            for value in node:
+                require_all_declared_properties(value)
+
+    require_all_declared_properties(schema)
     return schema
 
 

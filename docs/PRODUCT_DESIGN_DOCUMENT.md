@@ -227,8 +227,9 @@ repair retry. Capable providers **enforce the schema at decode time** — OpenAI
 `response_format` json_schema, Gemini `responseSchema`, Anthropic tool `input_schema`. The
 three public schemas (`verdict_json_schema`/`member_answer_json_schema`/
 `verdict_extraction_json_schema`) are a deliberate **lowest-common-denominator** shape
-(shallow nesting ≤3, enums not `oneOf`, no `$ref`, `additionalProperties:false`, optionality
-by omission) so one schema spans all three native surfaces. A **prompt-level fallback**
+(shallow nesting ≤3, enums not `oneOf`, no `$ref`, `additionalProperties:false`). The
+strict extraction schema requires every declared object property for OpenAI compatibility;
+semantic optionality uses empty arrays/strings. A **prompt-level fallback**
 (schema in messages → JSON parsed → Pydantic-validated → repair-once) is retained for
 providers without strict support; the native contract is *additive*, failure behavior
 unchanged.

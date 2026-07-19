@@ -72,7 +72,7 @@
       "independent_synthesis": "live_synthesis_2026-06-29",
       "critique_only": "live_critique_1_synthesis_2026-06-29",
       "revision_only": "live_revision_v1_synthesis_2026-06-29",
-      "elite_full": "elite_1_synthesis_2026-06-29_verdict_3"
+      "elite_full": "elite_1_synthesis_2026-06-29_verdict_4"
     },
     "condition_protocol_versions": {
       "single_frontier": "single_frontier_live_v2",
@@ -146,11 +146,11 @@
     "preregistration_id": null,
     "preregistration_hash": null
   },
-  "frozen_design_hash": "sha256:a811130bd4a986fdacf090e66192818fa235819bc2e4f9401714e42bcb41bdac",
+  "frozen_design_hash": "sha256:3820a9f0ede9ef384f80e4a2316348c56198f13a29c043a550beaf337363f1c9",
   "planned_runs": [
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_c1a93e940605e8292b67094e",
+      "planned_run_id": "run_a3714bb73693b82cba1b46a0",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-forward",
@@ -160,7 +160,7 @@
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_ed6a702b1b84a176d5f72a93",
+      "planned_run_id": "run_3959915e5861e0e386f10dd1",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-forward",
@@ -170,7 +170,7 @@
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_f5fe0ed0dd5f1dae988451dd",
+      "planned_run_id": "run_e945c62092f8a1fdedda86d6",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-forward",
@@ -180,7 +180,7 @@
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_bc95d6a828b012df89b302b5",
+      "planned_run_id": "run_3f4e873ac9d9cbbec606ad8b",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-forward",
@@ -190,7 +190,7 @@
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_b9d0b8fe2b475b93dbf25a2c",
+      "planned_run_id": "run_8c474c7b94b16590d4d77cd2",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-forward",
@@ -200,7 +200,7 @@
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_03a8814ed89c23591f147c7a",
+      "planned_run_id": "run_8d649076e8e6d213b87dfb75",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-forward",
@@ -210,7 +210,7 @@
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_5658e9381ae1544529e0e864",
+      "planned_run_id": "run_640e82505d2ddd6a779005be",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-reverse",
@@ -220,7 +220,7 @@
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_0bdce4dc58acd7a2e6f6a18b",
+      "planned_run_id": "run_94b3754c04fc4475df0d42da",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-reverse",
@@ -230,7 +230,7 @@
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_86382226fc3cc0317ff6cbe3",
+      "planned_run_id": "run_75c738b6d6961216b51638d8",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-reverse",
@@ -240,7 +240,7 @@
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_747e55eb644e03a5f1d8c156",
+      "planned_run_id": "run_c4d3105b4eacb5a97c6f2fd7",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-reverse",
@@ -250,7 +250,7 @@
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_51bcfb311c31532f81ac0e5a",
+      "planned_run_id": "run_77dc81b9630663343fda69bf",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-reverse",
@@ -260,7 +260,7 @@
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_433504af776bc9a6d70694d3",
+      "planned_run_id": "run_867c14229638f374c3d091d6",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-reverse",
