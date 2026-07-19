@@ -424,6 +424,22 @@ def recover_interrupted_checkpoint(checkpoint: LiveCheckpoint) -> LiveCheckpoint
     )
 
 
+def finish_active_cell(checkpoint: LiveCheckpoint, *, record: RunRecord) -> LiveCheckpoint:
+    """Finalize the active cell while preserving all receipt and cost history."""
+
+    active = checkpoint.active_cell
+    if active is None:
+        raise CheckpointValidationError("a final record requires an active checkpoint cell")
+    if active.planned_run_id != record.planned_run_id:
+        raise CheckpointValidationError("final record does not match the active checkpoint cell")
+    return create_live_checkpoint(
+        bindings=checkpoint.bindings,
+        records=(*checkpoint.records, record),
+        receipts=checkpoint.receipts,
+        committed_cost_usd=checkpoint.committed_cost_usd,
+    )
+
+
 CheckpointCallback = Callable[
     [PendingCall | None, tuple[ProviderCallReceipt, ...]],
     Awaitable[None] | None,
@@ -637,6 +653,16 @@ class LiveProviderClient:
             if breached:
                 category = "reservation_breach"
                 answer = answer.model_copy(update={"answer": None, "error": category})
+                charged_cost = reservation.reserved_cost_usd
+                cost_basis = ProviderCallCostBasis(
+                    source="full_reservation",
+                    input_ceiling_usd_per_million_tokens=(
+                        reservation.input_ceiling_usd_per_million_tokens
+                    ),
+                    output_ceiling_usd_per_million_tokens=(
+                        reservation.output_ceiling_usd_per_million_tokens
+                    ),
+                )
 
             receipt = ProviderCallReceipt(
                 stage=call.stage,
@@ -679,6 +705,7 @@ __all__ = [
     "ReservationBreachError",
     "build_checkpoint_bindings",
     "create_live_checkpoint",
+    "finish_active_cell",
     "hash_live_checkpoint",
     "hash_study_manifest",
     "load_live_checkpoint",
