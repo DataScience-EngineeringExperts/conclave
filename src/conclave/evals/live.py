@@ -8,7 +8,7 @@ import inspect
 import json
 import os
 import tempfile
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from decimal import ROUND_CEILING, Decimal, localcontext
 from pathlib import Path
 from typing import Literal
@@ -20,8 +20,16 @@ from conclave.models import ModelAnswer, TokenUsage
 from conclave.providers import _receipt_error_category, call_model
 from conclave.registry import PROVIDER_ENV_VARS
 
-from .live_protocols import StageCall
-from .models import EVAL_SCHEMA_VERSION, EvalModel, RunRecord, Sha256Digest, StudyManifest
+from .live_protocols import LIVE_PROTOCOL_REGISTRY, StageCall, execute_live_condition
+from .models import (
+    EVAL_SCHEMA_VERSION,
+    ConditionId,
+    EvalModel,
+    PublicTask,
+    RunRecord,
+    Sha256Digest,
+    StudyManifest,
+)
 from .pricing import (
     TOKENS_PER_MILLION,
     USD_MICROCENT,
@@ -107,6 +115,20 @@ class ProviderCallReceipt(EvalModel):
     reserved_cost_usd: Decimal = Field(gt=0)
     charged_cost_usd: Decimal = Field(ge=0)
     cost_basis: ProviderCallCostBasis
+
+
+class LiveStudyEstimate(EvalModel):
+    """Network-free pessimistic cost summary for one frozen live study."""
+
+    planned_cells: int = Field(ge=1)
+    maximum_call_count: int = Field(ge=1)
+    per_roster_upper_bound_usd: dict[str, Decimal]
+    per_condition_upper_bound_usd: dict[ConditionId, Decimal]
+    largest_reservation_usd: Decimal = Field(gt=0)
+    total_upper_bound_usd: Decimal = Field(gt=0)
+    ceiling_usd: Decimal = Field(gt=0)
+    headroom_usd: Decimal
+    fits_ceiling: bool
 
 
 class CheckpointBindings(EvalModel):
@@ -459,6 +481,27 @@ def _provider_framing_token_allowance(call: StageCall) -> int:
     return 64 + (16 * len(call.messages))
 
 
+def _resolve_call_price(price_book: PriceBook, call: StageCall) -> ModelPrice:
+    identity = (call.provider_id, call.model_id, call.model_revision)
+    for price in price_book.entries:
+        if price.identity == identity:
+            return price
+    raise ValueError(
+        f"provider/model/revision is absent from the frozen price book: {'/'.join(identity)}"
+    )
+
+
+def _reserve_stage_call(call: StageCall, price: ModelPrice) -> CallReservation:
+    return reserve_call_cost(
+        price,
+        prompt_token_upper_bound=_prompt_token_upper_bound(call),
+        prompt_template_token_allowance=0,
+        provider_framing_token_allowance=_provider_framing_token_allowance(call),
+        upstream_output_token_ceilings=call.upstream_output_token_ceilings,
+        max_output_tokens=call.max_output_tokens,
+    )
+
+
 def _reported_usage_cost(price: ModelPrice, usage: TokenUsage) -> Decimal:
     precision = max(
         64,
@@ -540,13 +583,7 @@ class LiveProviderClient:
         return self._stopped
 
     def _resolve_price(self, call: StageCall) -> ModelPrice:
-        identity = (call.provider_id, call.model_id, call.model_revision)
-        for price in self._price_book.entries:
-            if price.identity == identity:
-                return price
-        raise ValueError(
-            f"provider/model/revision is absent from the frozen price book: {'/'.join(identity)}"
-        )
+        return _resolve_call_price(self._price_book, call)
 
     async def _persist(self) -> None:
         try:
@@ -558,14 +595,7 @@ class LiveProviderClient:
             raise
 
     def _reserve(self, call: StageCall, price: ModelPrice) -> CallReservation:
-        return reserve_call_cost(
-            price,
-            prompt_token_upper_bound=_prompt_token_upper_bound(call),
-            prompt_template_token_allowance=0,
-            provider_framing_token_allowance=_provider_framing_token_allowance(call),
-            upstream_output_token_ceilings=call.upstream_output_token_ceilings,
-            max_output_tokens=call.max_output_tokens,
-        )
+        return _reserve_stage_call(call, price)
 
     @staticmethod
     def _usage_breaches(usage: TokenUsage, reservation: CallReservation) -> bool:
@@ -689,6 +719,82 @@ class LiveProviderClient:
             return answer
 
 
+class _LiveEstimateClient:
+    """Walk live protocols while recording reservations without provider access."""
+
+    def __init__(self, price_book: PriceBook) -> None:
+        self._price_book = price_book
+        self.reservations: list[CallReservation] = []
+
+    async def call(self, call: StageCall) -> ModelAnswer:
+        price = _resolve_call_price(self._price_book, call)
+        self.reservations.append(_reserve_stage_call(call, price))
+        return ModelAnswer(
+            name=call.provider_id,
+            model_id=call.model_id,
+            answer="x" * call.max_output_tokens,
+        )
+
+
+async def estimate_live_study(
+    *,
+    manifest: StudyManifest,
+    tasks: Sequence[PublicTask],
+    price_book: PriceBook,
+) -> LiveStudyEstimate:
+    """Estimate the full frozen live matrix without loading config, keys, or transport."""
+
+    from .runner import LIVE_HARD_CAP_USD, _validate_live_inputs
+
+    task_by_id, roster_by_id = _validate_live_inputs(manifest, tasks, price_book)
+    design = manifest.frozen_design
+    if design is None:  # pragma: no cover - enforced by shared validation
+        raise ValueError("live estimate requires a frozen study design")
+
+    client = _LiveEstimateClient(price_book)
+    per_roster = {roster.roster_id: Decimal("0") for roster in design.rosters}
+    per_condition = {condition: Decimal("0") for condition in LIVE_PROTOCOL_REGISTRY}
+
+    for planned_run in manifest.planned_runs:
+        reservation_start = len(client.reservations)
+        await execute_live_condition(
+            planned_run.condition_id,
+            task=task_by_id[planned_run.task_id],
+            roster=roster_by_id[planned_run.roster_id],
+            cell_ceiling=planned_run.max_output_tokens,
+            client=client,
+        )
+        cell_upper_bound = sum(
+            (
+                reservation.reserved_cost_usd
+                for reservation in client.reservations[reservation_start:]
+            ),
+            Decimal("0"),
+        )
+        per_roster[planned_run.roster_id] += cell_upper_bound
+        per_condition[planned_run.condition_id] += cell_upper_bound
+
+    reservation_costs = tuple(reservation.reserved_cost_usd for reservation in client.reservations)
+    total_upper_bound = sum(reservation_costs, Decimal("0"))
+    ceiling = Decimal(str(design.approved_spend_ceiling_usd))
+    estimate = LiveStudyEstimate(
+        planned_cells=len(manifest.planned_runs),
+        maximum_call_count=len(reservation_costs),
+        per_roster_upper_bound_usd=per_roster,
+        per_condition_upper_bound_usd=per_condition,
+        largest_reservation_usd=max(reservation_costs),
+        total_upper_bound_usd=total_upper_bound,
+        ceiling_usd=ceiling,
+        headroom_usd=ceiling - total_upper_bound,
+        fits_ceiling=total_upper_bound <= ceiling,
+    )
+    if not estimate.fits_ceiling:
+        raise BudgetExceededError("live study worst-case estimate exceeds the frozen ceiling")
+    if estimate.ceiling_usd != LIVE_HARD_CAP_USD:  # pragma: no cover - shared validation
+        raise ValueError("live estimate ceiling drift")
+    return estimate
+
+
 __all__ = [
     "ActiveCell",
     "BudgetExceededError",
@@ -699,12 +805,14 @@ __all__ = [
     "LiveCheckpoint",
     "LiveGatewayError",
     "LiveProviderClient",
+    "LiveStudyEstimate",
     "PendingCall",
     "ProviderCallCostBasis",
     "ProviderCallReceipt",
     "ReservationBreachError",
     "build_checkpoint_bindings",
     "create_live_checkpoint",
+    "estimate_live_study",
     "finish_active_cell",
     "hash_live_checkpoint",
     "hash_study_manifest",
