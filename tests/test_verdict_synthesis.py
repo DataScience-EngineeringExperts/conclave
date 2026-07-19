@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from conclave import agreement
 from conclave.manifest import VerdictExtraction
 from conclave.models import ModelAnswer
@@ -511,6 +513,22 @@ def test_repair_once_then_success(monkeypatch):
     # Original + one repair = exactly two calls.
     assert len(fake.calls) == 2
     assert result.verdict.consensus_label == "unanimous"
+
+
+@pytest.mark.asyncio
+async def test_extract_verdict_accepts_an_injected_guarded_call_seam() -> None:
+    fake = _ScriptedExtractor(json.dumps(_payload()))
+
+    result = await extract_verdict(
+        "Choose A or B.",
+        [member("alpha", "A", answer_id="alpha-1"), member("beta", "A", answer_id="beta-1")],
+        synthesizer_name=SYNTH_NAME,
+        synthesizer_model_id=SYNTH_MODEL_ID,
+        call_model_func=fake,
+    )
+
+    assert result.verdict is not None
+    assert len(fake.calls) == 1
 
 
 def test_absent_when_extractor_returns_error(monkeypatch, conclave_caplog):

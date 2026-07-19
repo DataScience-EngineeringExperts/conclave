@@ -75,12 +75,12 @@
       "elite_full": "elite_1_synthesis_2026-06-29_verdict_2"
     },
     "condition_protocol_versions": {
-      "single_frontier": "single_frontier_live_v1",
-      "self_refine": "self_refine_live_v1",
-      "independent_synthesis": "independent_synthesis_live_v1",
-      "critique_only": "critique_only_live_v1",
-      "revision_only": "revision_only_live_v1",
-      "elite_full": "elite_full_live_v1"
+      "single_frontier": "single_frontier_live_v2",
+      "self_refine": "self_refine_live_v2",
+      "independent_synthesis": "independent_synthesis_live_v2",
+      "critique_only": "critique_only_live_v2",
+      "revision_only": "revision_only_live_v2",
+      "elite_full": "elite_full_live_v2"
     },
     "generation_settings_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
     "evaluator_version": "fictional-live-evaluator-v1",
@@ -146,127 +146,127 @@
     "preregistration_id": null,
     "preregistration_hash": null
   },
-  "frozen_design_hash": "sha256:7b8fc1a68dd70af8538d61af258d84dfb16f97b744b8fa584b45a12ea352e9d0",
+  "frozen_design_hash": "sha256:1870bb73e7e57f7b762cbd76898ab07267c1948a799f01b86a5e05a9be9581af",
   "planned_runs": [
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_c89136045f317beb2776b8a7",
+      "planned_run_id": "run_1514260bbb609559e7fac798",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-forward",
       "condition_id": "revision_only",
       "replicate": 1,
-      "max_output_tokens": 64
+      "max_output_tokens": 6144
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_26d60cf8204277ed433cf693",
+      "planned_run_id": "run_250a6a43f71c819882567f2f",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-forward",
       "condition_id": "elite_full",
       "replicate": 1,
-      "max_output_tokens": 64
+      "max_output_tokens": 6144
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_2d94e5980d36edfdd6f924ef",
+      "planned_run_id": "run_03e305fc346582f50bd98a86",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-forward",
       "condition_id": "independent_synthesis",
       "replicate": 1,
-      "max_output_tokens": 64
+      "max_output_tokens": 6144
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_6354ef6a4d3a3d6af3b0ba5b",
+      "planned_run_id": "run_5ab2ccbb3c51c7c9b798847b",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-forward",
       "condition_id": "self_refine",
       "replicate": 1,
-      "max_output_tokens": 64
+      "max_output_tokens": 6144
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_0677ca748602fc84dd97a6f2",
+      "planned_run_id": "run_56ace8153142d9801dc5d6cb",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-forward",
       "condition_id": "critique_only",
       "replicate": 1,
-      "max_output_tokens": 64
+      "max_output_tokens": 6144
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_fbf0a2094bd7071b3fd15766",
+      "planned_run_id": "run_9663dc1ddd27fe7f45e59c47",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-forward",
       "condition_id": "single_frontier",
       "replicate": 1,
-      "max_output_tokens": 64
+      "max_output_tokens": 6144
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_12f47bc053d373a70c36e190",
+      "planned_run_id": "run_c75cdbf92f852ab704e4e831",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-reverse",
       "condition_id": "elite_full",
       "replicate": 1,
-      "max_output_tokens": 64
+      "max_output_tokens": 6144
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_22980c01680221e2a1af883f",
+      "planned_run_id": "run_0dad25939ce03c3ca19f7dcf",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-reverse",
       "condition_id": "self_refine",
       "replicate": 1,
-      "max_output_tokens": 64
+      "max_output_tokens": 6144
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_2d41f152248bbbe7b0a872f3",
+      "planned_run_id": "run_a6934c752d97ad8fced5c4b4",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-reverse",
       "condition_id": "revision_only",
       "replicate": 1,
-      "max_output_tokens": 64
+      "max_output_tokens": 6144
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_5aa1617957acbe77c6e416a1",
+      "planned_run_id": "run_1e19e08e1ce475e8d6fd9e64",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-reverse",
       "condition_id": "critique_only",
       "replicate": 1,
-      "max_output_tokens": 64
+      "max_output_tokens": 6144
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_c0acdec7f0d30a4b7db4e7b5",
+      "planned_run_id": "run_fa0d8ba45a49c759dd057670",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-reverse",
       "condition_id": "independent_synthesis",
       "replicate": 1,
-      "max_output_tokens": 64
+      "max_output_tokens": 6144
     },
     {
       "schema_version": "conclave_eval_v1",
-      "planned_run_id": "run_9354497a641db13eb5d91cdd",
+      "planned_run_id": "run_f789cd855c22413292bf37be",
       "study_id": "fictional-live-smoke",
       "task_id": "fictional-live-task",
       "roster_id": "fictional-roster-reverse",
       "condition_id": "single_frontier",
       "replicate": 1,
-      "max_output_tokens": 64
+      "max_output_tokens": 6144
     }
   ]
 }

@@ -10,10 +10,11 @@ from typing import Literal, Protocol
 from pydantic import Field
 
 from conclave import prompts
+from conclave.adapters.base import OutputContract
 from conclave.council import _SYNTH_SYSTEM
 from conclave.models import ELITE_MIN_RESPONDERS, ModelAnswer, derive_phase_answer_id
 from conclave.verdict import VERDICT_EXTRACTION_PROMPT_VERSION
-from conclave.verdict_synthesis import _build_messages as _verdict_messages
+from conclave.verdict_synthesis import extract_verdict
 
 from .models import (
     EVAL_CONDITION_IDS,
@@ -31,6 +32,7 @@ StageName = Literal[
     "revision",
     "synthesis",
     "verdict",
+    "verdict_repair",
 ]
 
 
@@ -51,6 +53,7 @@ class StageCall(EvalModel):
     messages: tuple[ChatMessage, ...] = Field(min_length=1)
     max_output_tokens: int = Field(gt=0)
     upstream_output_token_ceilings: tuple[int, ...] = ()
+    output_contract: OutputContract | None = None
 
 
 class SequentialStageClient(Protocol):
@@ -92,7 +95,28 @@ _STAGE_ALLOCATION_TABLE: Mapping[
             ("revision", "all"),
             ("synthesis", "lead"),
             ("verdict", "lead"),
+            ("verdict_repair", "lead"),
         ),
+    }
+)
+
+# These are minimum *output* caps, not expected response lengths. They keep a
+# frozen live manifest from authorizing calls that cannot produce a useful
+# artifact even in principle. Member answers/audits need room for a short
+# reasoned response; revisions need room to integrate peers; synthesis needs a
+# complete decision artifact; and both structured-verdict attempts need enough
+# room for the current multi-position CouncilVerdict JSON shape.
+LIVE_STAGE_MINIMUM_CAPS_VERSION = "live_stage_minimum_caps_v1"
+LIVE_STAGE_MINIMUM_CAPS: Mapping[StageName, int] = MappingProxyType(
+    {
+        "initial": 256,
+        "draft": 256,
+        "self_revision": 384,
+        "critique": 256,
+        "revision": 384,
+        "synthesis": 512,
+        "verdict": 768,
+        "verdict_repair": 768,
     }
 )
 
@@ -131,17 +155,40 @@ def stage_call_sequence(
 def allocate_stage_caps(
     condition_id: ConditionId, *, roster_size: int, cell_ceiling: int
 ) -> tuple[int, ...]:
-    """Allocate positive equal caps, assigning integer remainder to graded output."""
+    """Allocate versioned useful minima plus deterministic exact headroom."""
 
     if isinstance(cell_ceiling, bool) or not isinstance(cell_ceiling, int):
         raise TypeError("cell_ceiling must be an integer")
-    call_count = len(stage_call_sequence(condition_id, roster_size=roster_size))
-    if cell_ceiling < call_count:
+    sequence = stage_call_sequence(condition_id, roster_size=roster_size)
+    call_count = len(sequence)
+    minimum_caps = [LIVE_STAGE_MINIMUM_CAPS[stage] for stage, _index in sequence]
+    minimum = sum(minimum_caps)
+    if cell_ceiling < minimum:
         raise ValueError(
-            f"cell ceiling {cell_ceiling} is too small for {call_count} positive stage caps"
+            f"cell ceiling {cell_ceiling} is too small for {condition_id}; "
+            f"{LIVE_STAGE_MINIMUM_CAPS_VERSION} requires at least {minimum} tokens"
         )
-    per_call, remainder = divmod(cell_ceiling, call_count)
-    return (*([per_call] * (call_count - 1)), per_call + remainder)
+    per_call_extra, remainder = divmod(cell_ceiling - minimum, call_count)
+    caps = [cap + per_call_extra for cap in minimum_caps]
+    graded_index = (
+        next(index for index, (stage, _member) in enumerate(sequence) if stage == "verdict")
+        if condition_id == "elite_full"
+        else call_count - 1
+    )
+    caps[graded_index] += remainder
+    return tuple(caps)
+
+
+def minimum_cell_ceiling(condition_id: ConditionId, *, roster_size: int) -> int:
+    """Return the versioned minimum useful token ceiling for one max call graph."""
+
+    return sum(
+        LIVE_STAGE_MINIMUM_CAPS[stage]
+        for stage, _member_index in stage_call_sequence(
+            condition_id,
+            roster_size=roster_size,
+        )
+    )
 
 
 def _public_prompt(task: PublicTask) -> str:
@@ -239,6 +286,7 @@ class _Execution:
         messages: tuple[ChatMessage, ...],
         *,
         upstream: Sequence[int] = (),
+        output_contract: OutputContract | None = None,
     ) -> ModelAnswer:
         member = self.roster[member_index]
         return await self.client.call(
@@ -250,6 +298,7 @@ class _Execution:
                 messages=messages,
                 max_output_tokens=self._caps[(stage, member_index)],
                 upstream_output_token_ceilings=tuple(upstream),
+                output_contract=output_contract,
             )
         )
 
@@ -447,16 +496,39 @@ async def execute_elite_full(run: _Execution, public_prompt: str) -> str:
         upstream=run.caps("revision", [index for index, _answer in revisions]),
     )
     _required(synthesis, "synthesis")
-    verdict = await run.call(
-        "verdict",
-        0,
-        tuple(
-            ChatMessage.model_validate(message)
-            for message in _verdict_messages(public_prompt, revision_answers)
-        ),
-        upstream=run.caps("revision", [index for index, _answer in revisions]),
+    verdict_attempt = 0
+
+    async def guarded_verdict_call(name, model_id, messages, **kwargs):  # noqa: ANN001
+        nonlocal verdict_attempt
+        lead = run.roster[0]
+        if (name, model_id) != (lead.provider_id, lead.model_id):
+            raise ValueError("verdict extraction drifted from the frozen lead model")
+        verdict_attempt += 1
+        if verdict_attempt > 2:
+            raise ValueError("verdict extraction exceeded one repair attempt")
+        stage: StageName = "verdict" if verdict_attempt == 1 else "verdict_repair"
+        return await run.call(
+            stage,
+            0,
+            tuple(ChatMessage.model_validate(message) for message in messages),
+            upstream=run.caps("revision", [index for index, _answer in revisions]),
+            output_contract=kwargs.get("output_contract"),
+        )
+
+    lead = run.roster[0]
+    verdict_result = await extract_verdict(
+        public_prompt,
+        revision_answers,
+        synthesizer_name=lead.provider_id,
+        synthesizer_model_id=lead.model_id,
+        temperature=0.0,
+        protocol_version="elite_full_live_v2",
+        call_model_func=guarded_verdict_call,
     )
-    return _required(verdict, "verdict")
+    if verdict_result.verdict is None:
+        reason = verdict_result.verdict_absent_reason or "unknown verdict failure"
+        raise ValueError(f"verdict stage did not produce a canonical CouncilVerdict: {reason}")
+    return verdict_result.verdict.model_dump_json()
 
 
 _EXECUTORS: Mapping[ConditionId, Callable[[_Execution, str], Awaitable[str]]] = MappingProxyType(
@@ -474,7 +546,7 @@ LIVE_PROTOCOL_REGISTRY: Mapping[ConditionId, LiveProtocolSpec] = MappingProxyTyp
     {
         condition_id: LiveProtocolSpec(
             condition_id=condition_id,
-            protocol_version=f"{condition_id}_live_v1",
+            protocol_version=f"{condition_id}_live_v2",
             prompt_version=LIVE_PROMPT_VERSIONS[condition_id],
             executor=_EXECUTORS[condition_id],
         )

@@ -444,6 +444,7 @@ async def extract_verdict(
     temperature: float = 0.7,
     timeout: float = 120.0,
     protocol_version: str | None = None,
+    call_model_func=None,  # noqa: ANN001 -- injectable async seam for guarded callers
 ) -> VerdictSynthesisResult:
     """Extract a structured, auditable verdict from a council's member answers.
 
@@ -481,6 +482,10 @@ async def extract_verdict(
             ``"anthropic/claude-sonnet-4"``). Recorded as provenance.
         config: Optional pre-resolved :class:`conclave.config.ConclaveConfig`
             threaded through to ``call_model`` (custom endpoints / no re-read).
+        call_model_func: Optional async call seam matching :func:`call_model`.
+            ``None`` preserves the normal module-level provider path. Guarded
+            eval runners inject their reservation-aware gateway here so both the
+            initial extraction and optional repair remain paid-call protected.
 
     Returns:
         A :class:`VerdictSynthesisResult`. On success ``verdict`` is populated and
@@ -528,7 +533,8 @@ async def extract_verdict(
         schema_name="VerdictExtraction",
         strict=True,
     )
-    answer = await call_model(
+    model_caller = call_model if call_model_func is None else call_model_func
+    answer = await model_caller(
         synthesizer_name,
         synthesizer_model_id,
         messages,
@@ -564,7 +570,7 @@ async def extract_verdict(
                 ),
             }
         ]
-        retry = await call_model(
+        retry = await model_caller(
             synthesizer_name,
             synthesizer_model_id,
             repair_messages,

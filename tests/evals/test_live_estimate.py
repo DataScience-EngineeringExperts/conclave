@@ -99,6 +99,24 @@ async def test_dry_run_reports_calls_costs_largest_reservation_and_headroom(
 
 
 @pytest.mark.asyncio
+async def test_dry_run_prices_the_optional_elite_verdict_repair_max_graph() -> None:
+    tasks, manifest, price_book = _live_inputs()
+
+    estimate = await estimate_live_study(
+        manifest=manifest,
+        tasks=tasks,
+        price_book=price_book,
+    )
+
+    elite_max_graph = stage_call_sequence("elite_full", roster_size=3)
+    assert elite_max_graph[-2:] == (("verdict", 0), ("verdict_repair", 0))
+    expected_calls = sum(
+        len(stage_call_sequence(run.condition_id, roster_size=3)) for run in manifest.planned_runs
+    )
+    assert estimate.maximum_call_count == expected_calls
+
+
+@pytest.mark.asyncio
 async def test_dry_run_breaks_down_upper_bound_by_roster_and_condition() -> None:
     tasks, manifest, price_book = _live_inputs()
 

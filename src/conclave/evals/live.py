@@ -651,6 +651,7 @@ class LiveProviderClient:
                     temperature=self._temperature,
                     timeout=self._timeout,
                     max_output_tokens=call.max_output_tokens,
+                    output_contract=call.output_contract,
                 )
             except Exception as exc:  # noqa: BLE001 -- injected seam may raise
                 raw_error = f"{type(exc).__name__}: {exc}"
@@ -763,11 +764,23 @@ class _LiveEstimateClient:
     async def call(self, call: StageCall) -> ModelAnswer:
         price = _resolve_call_price(self._price_book, call)
         self.reservations.append(_reserve_stage_call(call, price))
+        if call.stage == "verdict":
+            return ModelAnswer(
+                name=call.provider_id,
+                model_id=call.model_id,
+                answer="invalid-first-verdict-for-max-graph-estimate",
+            )
+        if call.stage == "verdict_repair":
+            raise _EstimateMaxGraphComplete
         return ModelAnswer(
             name=call.provider_id,
             model_id=call.model_id,
             answer="x" * call.max_output_tokens,
         )
+
+
+class _EstimateMaxGraphComplete(Exception):
+    """Internal signal emitted after the optional repair reservation is recorded."""
 
 
 async def estimate_live_study(
@@ -791,13 +804,17 @@ async def estimate_live_study(
 
     for planned_run in manifest.planned_runs:
         reservation_start = len(client.reservations)
-        await execute_live_condition(
-            planned_run.condition_id,
-            task=task_by_id[planned_run.task_id],
-            roster=roster_by_id[planned_run.roster_id],
-            cell_ceiling=planned_run.max_output_tokens,
-            client=client,
-        )
+        try:
+            await execute_live_condition(
+                planned_run.condition_id,
+                task=task_by_id[planned_run.task_id],
+                roster=roster_by_id[planned_run.roster_id],
+                cell_ceiling=planned_run.max_output_tokens,
+                client=client,
+            )
+        except _EstimateMaxGraphComplete:
+            if planned_run.condition_id != "elite_full":  # pragma: no cover - invariant
+                raise
         cell_upper_bound = sum(
             (
                 reservation.reserved_cost_usd

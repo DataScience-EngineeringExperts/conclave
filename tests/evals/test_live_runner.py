@@ -37,6 +37,34 @@ from conclave.models import ModelAnswer, TokenUsage
 
 DIGEST = "sha256:" + "a" * 64
 HARD_CAP = Decimal("10.00")
+LIVE_FIXTURE_CELL_CEILING = 6144
+
+
+def _valid_verdict_extraction_text() -> str:
+    return json.dumps(
+        {
+            "verdict_applies": True,
+            "verdict_type": "decision",
+            "headline": "Choose the fictional safe option.",
+            "recommendation": "Use the fictional safe option with safeguards.",
+            "positions": [
+                {
+                    "label": "safe-option",
+                    "summary": "The fictional safe option is preferred.",
+                    "providers": ["Model A", "Model B", "Model C"],
+                    "evidence_answer_ids": ["fixture-a", "fixture-b", "fixture-c"],
+                }
+            ],
+            "provider_votes": [
+                {"provider": "Model A", "position_label": "safe-option"},
+                {"provider": "Model B", "position_label": "safe-option"},
+                {"provider": "Model C", "position_label": "safe-option"},
+            ],
+            "conflicts": [],
+            "minority_reports": [],
+            "caveats": [],
+        }
+    )
 
 
 def _rosters(*, members_per_roster: int = 3) -> tuple[RosterSpec, ...]:
@@ -64,6 +92,7 @@ def _live_inputs(
     evidence_classification: str = "paid_exploratory_pilot",
     approved_spend_ceiling_usd: float = 10.0,
     version_drift: bool = False,
+    cell_ceiling: int = LIVE_FIXTURE_CELL_CEILING,
 ):
     tasks = [
         PublicTask(
@@ -136,18 +165,22 @@ def _live_inputs(
         tasks=tasks,
         replicates=1,
         seed=20260718,
-        output_token_budgets=dict.fromkeys(CONDITION_IDS, 64),
+        output_token_budgets=dict.fromkeys(CONDITION_IDS, cell_ceiling),
         frozen_design=design,
     )
     return tasks, manifest, price_book
 
 
 async def _successful_provider(name, model_id, messages, **kwargs):
-    del messages, kwargs
+    del messages
     return ModelAnswer(
         name=name,
         model_id=model_id,
-        answer=f"fictional decision from {name}",
+        answer=(
+            _valid_verdict_extraction_text()
+            if kwargs.get("output_contract") is not None
+            else f"fictional decision from {name}"
+        ),
         usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
     )
 
@@ -225,6 +258,7 @@ async def test_live_runner_requires_paid_exploratory_frozen_manifest(tmp_path) -
     invalid_cases.append(_live_inputs(approved_spend_ceiling_usd=9.99))
     invalid_cases.append(_live_inputs(members_per_roster=2))
     invalid_cases.append(_live_inputs(version_drift=True))
+    invalid_cases.append(_live_inputs(cell_ceiling=1024))
 
     for index, (tasks, manifest, price_book) in enumerate(invalid_cases):
         with pytest.raises(RunValidationError):
@@ -307,6 +341,7 @@ async def test_live_runner_executes_manifest_order_and_builds_complete_study_run
     assert first_seen_ids == expected_ids
     assert call_counts == {
         run.planned_run_id: len(stage_call_sequence(run.condition_id, roster_size=3))
+        - (1 if run.condition_id == "elite_full" else 0)
         for run in manifest.planned_runs
     }
     assert tuple(record.planned_run_id for record in study_run.records) == expected_ids
@@ -436,7 +471,15 @@ async def test_timeout_missing_usage_and_provider_error_never_exceed_ten_dollars
         if failure_mode == "timeout":
             raise TimeoutError("fictional provider timed out")
         if failure_mode == "missing_usage":
-            return ModelAnswer(name=name, model_id=model_id, answer="unmetered fixture answer")
+            return ModelAnswer(
+                name=name,
+                model_id=model_id,
+                answer=(
+                    _valid_verdict_extraction_text()
+                    if kwargs.get("output_contract") is not None
+                    else "unmetered fixture answer"
+                ),
+            )
         if failure_mode == "provider_error":
             return ModelAnswer(name=name, model_id=model_id, error="fictional provider error")
         return ModelAnswer(

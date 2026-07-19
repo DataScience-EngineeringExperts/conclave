@@ -75,8 +75,43 @@ def _fake_delegate():
         assert headers["Authorization"] == f"Bearer {FAKE_KEY}"
         calls.append((url, body["model"], body["max_tokens"]))
         ordinal = len(calls)
+        content = f"Fictional decision artifact {ordinal:03d}."
+        if any(
+            "verdict extractor" in message.get("content", "")
+            for message in body.get("messages", [])
+        ):
+            content = json.dumps(
+                {
+                    "verdict_applies": True,
+                    "verdict_type": "decision",
+                    "headline": "Choose the fictional safe route.",
+                    "recommendation": "Use Route A with the stated safeguards.",
+                    "positions": [
+                        {
+                            "label": "route-a",
+                            "summary": "Route A is preferred.",
+                            "providers": ["Model A", "Model B", "Model C"],
+                            "evidence_answer_ids": [
+                                "fixture-a",
+                                "fixture-b",
+                                "fixture-c",
+                            ],
+                        }
+                    ],
+                    "provider_votes": [
+                        {"provider": "Model A", "position_label": "route-a"},
+                        {"provider": "Model B", "position_label": "route-a"},
+                        {"provider": "Model C", "position_label": "route-a"},
+                    ],
+                    "conflicts": [],
+                    "minority_reports": [],
+                    "caveats": [],
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            )
         return 200, {
-            "choices": [{"message": {"content": f"Fictional decision artifact {ordinal:03d}."}}],
+            "choices": [{"message": {"content": content}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         }
 
@@ -192,6 +227,7 @@ async def test_live_smoke_replay_executes_all_conditions_with_zero_network_calls
                 planned.condition_id,
                 roster_size=len(roster.members),
             )
+            if stage != "verdict_repair"
         )
     actual_call_order = [
         (receipt.stage, receipt.provider_id, receipt.model_id)

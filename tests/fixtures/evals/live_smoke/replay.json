@@ -1,14 +1,14 @@
 {
   "schema_version": "conclave_replay_v1",
-  "base_manifest_hash": "sha256:456096f88d22398553a1d0cc6024c8ed469f9115a28731f30ce4d1d960155442",
+  "base_manifest_hash": "sha256:72472cd0faa0c9de49a195ae70a797a4c763e6e20c96ad982a89bb4bfc55a076",
   "records": [
     {
-      "request_hash": "sha256:8e116cb7c77c18cbe04219e375cd95923cb30625aec753fbc4a4a3ca2907dea3",
+      "request_hash": "sha256:cc57d8d8ed8963f3537727956243f353427936b20d5365ebb8438e91a93340e1",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 786,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -36,12 +36,12 @@
       }
     },
     {
-      "request_hash": "sha256:f97d7447f59a3a1923b83ecdbd2a256e788aa0306b80e34487c82f33195cc1c8",
+      "request_hash": "sha256:2e653c544f6ead81a481fad8280b49024ade5526a96780e6af5a76f9cf41c3d3",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 786,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -69,12 +69,12 @@
       }
     },
     {
-      "request_hash": "sha256:9a6ce2607e0eb30c7477f008399efde19c5aeed1b7fa1c061620db31b2946fa9",
+      "request_hash": "sha256:7fe02d317cbc5fd6bc862df80f6418ba7d1cdbd0aac145add051fcd20c6ad575",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 786,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -102,12 +102,12 @@
       }
     },
     {
-      "request_hash": "sha256:971312b5299013bf65b12468532d0cf1a21dcbfd6f5813b465b5d1e4ed3780f8",
+      "request_hash": "sha256:7a55e1ca1bc4fd291414e0cf89e360235bb902b1b16d8d38913ad7915c2b39f9",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 914,
           "messages": [
             {
               "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer:\nFictional decision artifact 001.\n\nAnonymized peer panel:\n\n### Model A peer answer\nFictional decision artifact 001.\n\n### Model B peer answer\nFictional decision artifact 002.\n\n### Model C peer answer\nFictional decision artifact 003.\n\nProduce one complete revised answer to the original prompt.",
@@ -135,12 +135,12 @@
       }
     },
     {
-      "request_hash": "sha256:9e438ed4b52535986e2e1e9353d84315ed6390a1af4cba5d49f56ac13c8c8bf8",
+      "request_hash": "sha256:588214dba5cab890058699ad3aaa3154651feb222b108c1515144f443ad3002a",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 914,
           "messages": [
             {
               "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer:\nFictional decision artifact 002.\n\nAnonymized peer panel:\n\n### Model A peer answer\nFictional decision artifact 001.\n\n### Model B peer answer\nFictional decision artifact 002.\n\n### Model C peer answer\nFictional decision artifact 003.\n\nProduce one complete revised answer to the original prompt.",
@@ -168,12 +168,12 @@
       }
     },
     {
-      "request_hash": "sha256:7da3f22b52b7040fe3329c7b54d8c9ee33c64d5f129d9f2457d32422d69bb284",
+      "request_hash": "sha256:f06b82738ea98cca45d7f979b4091aa8bc5133875063d7bf3b18d8aa0aad35b3",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 914,
           "messages": [
             {
               "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer:\nFictional decision artifact 003.\n\nAnonymized peer panel:\n\n### Model A peer answer\nFictional decision artifact 001.\n\n### Model B peer answer\nFictional decision artifact 002.\n\n### Model C peer answer\nFictional decision artifact 003.\n\nProduce one complete revised answer to the original prompt.",
@@ -201,12 +201,12 @@
       }
     },
     {
-      "request_hash": "sha256:006fcd47eb736ca44e176c41ec3f123db8fc74f74474ff0d859c7ff21e4bf493",
+      "request_hash": "sha256:d508a5497c969942dcf7bffa205bd1a77000cdb442d535b76516e185b5db6436",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 10,
+          "max_tokens": 1044,
           "messages": [
             {
               "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
@@ -238,12 +238,12 @@
       }
     },
     {
-      "request_hash": "sha256:c06913d309bff2c3b15ee8978b1776b0f9bfa776d681d8491e394f0fffa0d41c",
+      "request_hash": "sha256:e1ba0136778f7688e5aa74728c7e05aeca18860110e12717b4b5d62892c9ee8a",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 373,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -271,12 +271,12 @@
       }
     },
     {
-      "request_hash": "sha256:84517758489cf8ff0b17c73e5067d71fcc01244d338af04f4ad5bdca2c016df3",
+      "request_hash": "sha256:7a4b57d6c3ba105284afee582de680337d30a318593f683859f5ca75fb4af59b",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 373,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -304,12 +304,12 @@
       }
     },
     {
-      "request_hash": "sha256:3fdbe8d950bdeec566d42580d4f3f09f99a160cdd3ce6b1c4c07386489d2d8cc",
+      "request_hash": "sha256:f505a9749b9369d62d22e46166b8f5fe6ddbeb6ca51e7bb33768136ef4a4fbab",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 373,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -337,12 +337,12 @@
       }
     },
     {
-      "request_hash": "sha256:50912c3ad490b25f600bfe77424145b215768f2ef862cadf0caffca899e812d2",
+      "request_hash": "sha256:e50f2b0ea8373f8beac8118bd2c820dafbc569f622fa9367bd219cd20d04529c",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 373,
           "messages": [
             {
               "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
@@ -374,12 +374,12 @@
       }
     },
     {
-      "request_hash": "sha256:89a1c6f02c94f203c449bae2c49321df5738cf3e999cc3f1ab2394990655fabf",
+      "request_hash": "sha256:77cb17fe1404da194cb09e6db9ae44629f1c1dd1d318ddafa619ffc15ab4c0aa",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 373,
           "messages": [
             {
               "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
@@ -411,12 +411,12 @@
       }
     },
     {
-      "request_hash": "sha256:f31454bbd91ab0005217e1c9a12369ea7009cf6d79c9901c904897816c2616c7",
+      "request_hash": "sha256:abdced28c27045858bac32c56adac3ff7e5373a44beb2f3a5c38e358a2f36c3e",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 373,
           "messages": [
             {
               "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
@@ -448,12 +448,12 @@
       }
     },
     {
-      "request_hash": "sha256:1d7cc1836d4d58b9be1f8fc3db663f862f2aa72012e2a3cebed3d5a801c46224",
+      "request_hash": "sha256:2754e419e2382fd7535aa1f4d50d3bd73adc659a1b208b565849e2000d3823e8",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 501,
           "messages": [
             {
               "content": "You are revising your independent answer after a claim audit by an elite decision council. Use the anonymized initial panel and critiques to correct unsupported claims, resolve conflicts where the supplied material permits, and clearly mark externally unverified claims. Do not invent citations, sources, quotations, measurements, or facts. Produce a complete standalone answer to the original prompt, not a description of your edits.",
@@ -485,12 +485,12 @@
       }
     },
     {
-      "request_hash": "sha256:316eb69ec8c0cc581685f457d5b52403220660c5246bff6bd1c0e190023544c6",
+      "request_hash": "sha256:0db5d3ad3682b36e7e52f3a4d3cf7ec05d46aa9647881d19f11a8b82b11a30cc",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 501,
           "messages": [
             {
               "content": "You are revising your independent answer after a claim audit by an elite decision council. Use the anonymized initial panel and critiques to correct unsupported claims, resolve conflicts where the supplied material permits, and clearly mark externally unverified claims. Do not invent citations, sources, quotations, measurements, or facts. Produce a complete standalone answer to the original prompt, not a description of your edits.",
@@ -522,12 +522,12 @@
       }
     },
     {
-      "request_hash": "sha256:f1e1a14b5c6911a5da18d3ce1506e26e9d20383780714fc5346da584c9d96884",
+      "request_hash": "sha256:d956686457a298cba78ed4fa28827f50e73a5f69f4ebbdb346406f5edffbab19",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 501,
           "messages": [
             {
               "content": "You are revising your independent answer after a claim audit by an elite decision council. Use the anonymized initial panel and critiques to correct unsupported claims, resolve conflicts where the supplied material permits, and clearly mark externally unverified claims. Do not invent citations, sources, quotations, measurements, or facts. Produce a complete standalone answer to the original prompt, not a description of your edits.",
@@ -559,12 +559,12 @@
       }
     },
     {
-      "request_hash": "sha256:fe72eae35cdb78ab15a438a081f37c978b8852489cd369510aebc26af5f4ed35",
+      "request_hash": "sha256:322e700e4cc5f29ca0bf46953fed2294effc18c8f918d649e0a81d30a5089e6c",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 629,
           "messages": [
             {
               "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
@@ -596,19 +596,19 @@
       }
     },
     {
-      "request_hash": "sha256:85c6a8f75e6d3685ec036be0e01fc80aa0835cf817f57286110971c4987370cd",
+      "request_hash": "sha256:6f76bf698fc495f0e86e9bf221ac30de80c42dfcdece486f3e2ad2f506a0a5e8",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 14,
+          "max_tokens": 889,
           "messages": [
             {
-              "content": "You are the verdict extractor for an auditable multi-model council. You are given the original prompt and each council member's answer, labeled with a stable answer id. These IDs provide within-run answer provenance only; they do not prove claims against external sources. Produce ONE JSON object that conforms exactly to the provided JSON Schema and nothing else.\n\nYour job is to ADJUDICATE, not to re-answer:\n- Set verdict_applies=false when the prompt is open-ended generation (a poem, a brainstorm, free writing) with no decision or review to settle; otherwise true.\n- Set verdict_type to 'decision' (a question with an answer), 'review' (an accept/revise/reject judgment), or 'synthesis' (open-ended consolidation).\n- Cluster the members into positions[]; each position lists the providers in it and the evidence_answer_ids (the compatibility field containing the answer IDs shown) tracing it, so a human can verify every assignment against the raw answer.\n- Record one provider_vote per member that took a stance (position_label must match a positions[].label); omit a member that took no clean stance.\n- Add conflicts[] only when there are two or more positions in tension.\n\nCRITICAL: Do NOT emit any consensus score, percentage, ratio, or agreement number \u2014 the council computes consensus deterministically from your clustering. Emit only the fields in the schema.",
+              "content": "You are the verdict extractor for an auditable multi-model council. You are given the original prompt and each council member's answer, labeled with a stable answer id. These IDs provide within-run answer provenance only; they do not prove claims against external sources. Produce ONE JSON object that conforms exactly to the provided JSON Schema and nothing else.\n\nYour job is to ADJUDICATE, not to re-answer:\n- Set verdict_applies=false when the prompt is open-ended generation (a poem, a brainstorm, free writing) with no decision or review to settle; otherwise true.\n- Set verdict_type to 'decision' (a question with an answer), 'review' (an accept/revise/reject judgment), or 'synthesis' (open-ended consolidation).\n- Cluster the members into positions[]; each position lists the providers in it and the evidence_answer_ids (the compatibility field containing the answer IDs shown) tracing it, so a human can verify every assignment against the raw answer.\n- Record one provider_vote per member that took a stance (position_label must match a positions[].label); omit a member that took no clean stance.\n- Add conflicts[] only when there are two or more positions in tension.\n\nCRITICAL: Do NOT emit any consensus score, percentage, ratio, or agreement number — the council computes consensus deterministically from your clustering. Emit only the fields in the schema.",
               "role": "system"
             },
             {
-              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nCouncil member answers:\n\n### Member answer (answer id: ca_revision_30f27d6d1f3068239a264a92) \u2014 from Model A\nFictional decision artifact 014.\n\n### Member answer (answer id: ca_revision_54bce3f164f68c9ddb3effdf) \u2014 from Model B\nFictional decision artifact 015.\n\n### Member answer (answer id: ca_revision_648c3c5d70c342eaa5812f6e) \u2014 from Model C\nFictional decision artifact 016.\n\nExtract the verdict as a single JSON object conforming exactly to this JSON Schema (emit no prose, no consensus number, only the JSON):\n\n{\n  \"title\": \"VerdictExtraction\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"verdict_type\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"decision\",\n        \"review\",\n        \"synthesis\"\n      ]\n    },\n    \"headline\": {\n      \"type\": \"string\"\n    },\n    \"recommendation\": {\n      \"type\": \"string\"\n    },\n    \"positions\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"label\": {\n            \"type\": \"string\"\n          },\n          \"summary\": {\n            \"type\": \"string\"\n          },\n          \"providers\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"evidence_answer_ids\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          }\n        },\n        \"required\": [\n          \"label\",\n          \"summary\",\n          \"providers\",\n          \"evidence_answer_ids\"\n        ]\n      }\n    },\n    \"conflicts\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"topic\": {\n            \"type\": \"string\"\n          },\n          \"position_labels\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"summary\": {\n            \"type\": \"string\"\n          },\n          \"consensus_score\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          }\n        },\n        \"required\": [\n          \"topic\",\n          \"position_labels\",\n          \"summary\"\n        ]\n      }\n    },\n    \"provider_votes\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"provider\": {\n            \"type\": \"string\"\n          },\n          \"position_label\": {\n            \"type\": \"string\"\n          },\n          \"confidence\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"low\",\n              \"medium\",\n              \"high\"\n            ]\n          }\n        },\n        \"required\": [\n          \"provider\",\n          \"position_label\"\n        ]\n      }\n    },\n    \"minority_reports\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"providers\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"claim\": {\n            \"type\": \"string\"\n          },\n          \"evidence_answer_ids\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"why_it_matters\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"providers\",\n          \"claim\",\n          \"evidence_answer_ids\"\n        ]\n      }\n    },\n    \"caveats\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    },\n    \"dissent_summary\": {\n      \"type\": \"string\"\n    },\n    \"verdict_applies\": {\n      \"type\": \"boolean\"\n    }\n  },\n  \"required\": [\n    \"verdict_type\",\n    \"headline\",\n    \"recommendation\",\n    \"positions\",\n    \"verdict_applies\"\n  ]\n}",
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nCouncil member answers:\n\n### Member answer (answer id: ca_revision_30f27d6d1f3068239a264a92) — from Model A\nFictional decision artifact 014.\n\n### Member answer (answer id: ca_revision_54bce3f164f68c9ddb3effdf) — from Model B\nFictional decision artifact 015.\n\n### Member answer (answer id: ca_revision_648c3c5d70c342eaa5812f6e) — from Model C\nFictional decision artifact 016.\n\nExtract the verdict as a single JSON object conforming exactly to this JSON Schema (emit no prose, no consensus number, only the JSON):\n\n{\n  \"title\": \"VerdictExtraction\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"verdict_type\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"decision\",\n        \"review\",\n        \"synthesis\"\n      ]\n    },\n    \"headline\": {\n      \"type\": \"string\"\n    },\n    \"recommendation\": {\n      \"type\": \"string\"\n    },\n    \"positions\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"label\": {\n            \"type\": \"string\"\n          },\n          \"summary\": {\n            \"type\": \"string\"\n          },\n          \"providers\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"evidence_answer_ids\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          }\n        },\n        \"required\": [\n          \"label\",\n          \"summary\",\n          \"providers\",\n          \"evidence_answer_ids\"\n        ]\n      }\n    },\n    \"conflicts\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"topic\": {\n            \"type\": \"string\"\n          },\n          \"position_labels\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"summary\": {\n            \"type\": \"string\"\n          },\n          \"consensus_score\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          }\n        },\n        \"required\": [\n          \"topic\",\n          \"position_labels\",\n          \"summary\"\n        ]\n      }\n    },\n    \"provider_votes\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"provider\": {\n            \"type\": \"string\"\n          },\n          \"position_label\": {\n            \"type\": \"string\"\n          },\n          \"confidence\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"low\",\n              \"medium\",\n              \"high\"\n            ]\n          }\n        },\n        \"required\": [\n          \"provider\",\n          \"position_label\"\n        ]\n      }\n    },\n    \"minority_reports\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"providers\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"claim\": {\n            \"type\": \"string\"\n          },\n          \"evidence_answer_ids\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"why_it_matters\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"providers\",\n          \"claim\",\n          \"evidence_answer_ids\"\n        ]\n      }\n    },\n    \"caveats\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    },\n    \"dissent_summary\": {\n      \"type\": \"string\"\n    },\n    \"verdict_applies\": {\n      \"type\": \"boolean\"\n    }\n  },\n  \"required\": [\n    \"verdict_type\",\n    \"headline\",\n    \"recommendation\",\n    \"positions\",\n    \"verdict_applies\"\n  ]\n}",
               "role": "user"
             }
           ],
@@ -621,7 +621,7 @@
         "choices": [
           {
             "message": {
-              "content": "Fictional decision artifact 018."
+              "content": "{\"caveats\":[],\"conflicts\":[],\"headline\":\"Choose the fictional safe route.\",\"minority_reports\":[],\"positions\":[{\"evidence_answer_ids\":[\"fixture-a\",\"fixture-b\",\"fixture-c\"],\"label\":\"route-a\",\"providers\":[\"Model A\",\"Model B\",\"Model C\"],\"summary\":\"Route A is preferred.\"}],\"provider_votes\":[{\"position_label\":\"route-a\",\"provider\":\"Model A\"},{\"position_label\":\"route-a\",\"provider\":\"Model B\"},{\"position_label\":\"route-a\",\"provider\":\"Model C\"}],\"recommendation\":\"Use Route A with the stated safeguards.\",\"verdict_applies\":true,\"verdict_type\":\"decision\"}"
             }
           }
         ],
@@ -633,12 +633,12 @@
       }
     },
     {
-      "request_hash": "sha256:66b06f34e69ffb9fa4bfaa79969147bd90b1c424dfd19a950c80c57a953eeb0b",
+      "request_hash": "sha256:2f49af35b10a45083cec38a6929c4f24840fd9ddb9a0e8337e3e1840ad0e120c",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 16,
+          "max_tokens": 1472,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -666,12 +666,12 @@
       }
     },
     {
-      "request_hash": "sha256:cfabe1fcf9f9aa97f5ce3c6f5fd00c0b58e0d19b6328b0858efe8559d145ca8a",
+      "request_hash": "sha256:3e871bdcc4a67bae1bba8dc450a253797ad6d689350c9cc0ae1bfec5b8e79f58",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 16,
+          "max_tokens": 1472,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -699,12 +699,12 @@
       }
     },
     {
-      "request_hash": "sha256:64c25574dc75e5cb8785b3accba9028868bff1e40e1f871b2c7dff341d1958a1",
+      "request_hash": "sha256:1272f0bc2baa43e27e852787219b6b445ff23481fe9d7785e88c63a72dea8a2a",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 16,
+          "max_tokens": 1472,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -732,12 +732,12 @@
       }
     },
     {
-      "request_hash": "sha256:c4806c924f37455be442b090adf8b2137c31e00568c74b22d006a27465541af4",
+      "request_hash": "sha256:d2145371bbde2a6c3a79ce2b89ec7b4aa8e69a738a9566bd0d51766a89799671",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 16,
+          "max_tokens": 1728,
           "messages": [
             {
               "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
@@ -769,12 +769,12 @@
       }
     },
     {
-      "request_hash": "sha256:ad331e55c84a2f6c683a6bae288410db79d8e2a96bb5eaafec8e77a16b6be353",
+      "request_hash": "sha256:b9e89bcfe9000abe09e1a09cc023d3168adf7e6c5dfa45e34eb224ca3862cc7a",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 32,
+          "max_tokens": 3008,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -802,12 +802,12 @@
       }
     },
     {
-      "request_hash": "sha256:af1a0c246e565e9909111e9dc104f3e2c90de91a9009607c3b32e848383e60c6",
+      "request_hash": "sha256:a60349a2d5cfdf86fc62e921951f4eca9182a8c026469e618d05b63ffc11b947",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 32,
+          "max_tokens": 3136,
           "messages": [
             {
               "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour draft:\nFictional decision artifact 023.\n\nProduce one complete, improved final answer.",
@@ -835,12 +835,12 @@
       }
     },
     {
-      "request_hash": "sha256:8e116cb7c77c18cbe04219e375cd95923cb30625aec753fbc4a4a3ca2907dea3",
-      "occurrence_index": 1,
+      "request_hash": "sha256:d948e25d735ca60fa12fa1f58a1a13a3b83756c89a14cb6aec3f0636dd8c1d79",
+      "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 841,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -868,12 +868,12 @@
       }
     },
     {
-      "request_hash": "sha256:f97d7447f59a3a1923b83ecdbd2a256e788aa0306b80e34487c82f33195cc1c8",
-      "occurrence_index": 1,
+      "request_hash": "sha256:85c1e9279d0f7807e5b2e11ee8e5b7598b6c0cd3e6902a62af28977b29770f8f",
+      "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 841,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -901,12 +901,12 @@
       }
     },
     {
-      "request_hash": "sha256:9a6ce2607e0eb30c7477f008399efde19c5aeed1b7fa1c061620db31b2946fa9",
-      "occurrence_index": 1,
+      "request_hash": "sha256:94eb52642fa244a450a865a90d5f84760985a99296505bb7c65d927faeb43f27",
+      "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 841,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -934,12 +934,12 @@
       }
     },
     {
-      "request_hash": "sha256:a1f4e1656f2834e946475854cb1f9ac9088f44faca5f545fd3cf2da08d56432a",
+      "request_hash": "sha256:0e527c0459e3bd7f839e6308337fce1e7b8b1d869901ca1f8b53861c5a282c3f",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 841,
           "messages": [
             {
               "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
@@ -971,12 +971,12 @@
       }
     },
     {
-      "request_hash": "sha256:4a884b70e16a4838b8a7113c53fa069413cf91549de543d3f6acadb2eacf8510",
+      "request_hash": "sha256:5ecd7802617269a8b949485af7d35935b8c528a4961623c7ebabc273e8154060",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 841,
           "messages": [
             {
               "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
@@ -1008,12 +1008,12 @@
       }
     },
     {
-      "request_hash": "sha256:46dcb70a5b05062e46f157a91a70efe730961577dbddbbb5382440e5eaa3f17e",
+      "request_hash": "sha256:929b7a97cc9664a70b2e04343b559da4243e62c08b9993455f6bd4e425dfb1bd",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 841,
           "messages": [
             {
               "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
@@ -1045,12 +1045,12 @@
       }
     },
     {
-      "request_hash": "sha256:a9b39c9034341d9a625f1a1369f341650c55f188a3da89ccaf3ebb62b17eb6f8",
+      "request_hash": "sha256:46a847386e76edb863614a44b87ceb3e684fdd2c87b617cd1aeecb2bdc324e68",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 10,
+          "max_tokens": 1098,
           "messages": [
             {
               "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
@@ -1082,12 +1082,12 @@
       }
     },
     {
-      "request_hash": "sha256:6fad3d158dc6fbf6b5d4ec4ee9206bc152d6e18d4aecde8b6c7b5997db5bf47f",
+      "request_hash": "sha256:430c93c9a1dffaddae7ee9001fc1e2246c3b8cba21818d2e0076d1f5f8ca4f12",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 64,
+          "max_tokens": 6144,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -1115,12 +1115,12 @@
       }
     },
     {
-      "request_hash": "sha256:3fdbe8d950bdeec566d42580d4f3f09f99a160cdd3ce6b1c4c07386489d2d8cc",
+      "request_hash": "sha256:f505a9749b9369d62d22e46166b8f5fe6ddbeb6ca51e7bb33768136ef4a4fbab",
       "occurrence_index": 1,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 373,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -1148,12 +1148,12 @@
       }
     },
     {
-      "request_hash": "sha256:84517758489cf8ff0b17c73e5067d71fcc01244d338af04f4ad5bdca2c016df3",
+      "request_hash": "sha256:7a4b57d6c3ba105284afee582de680337d30a318593f683859f5ca75fb4af59b",
       "occurrence_index": 1,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 373,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -1181,12 +1181,12 @@
       }
     },
     {
-      "request_hash": "sha256:c06913d309bff2c3b15ee8978b1776b0f9bfa776d681d8491e394f0fffa0d41c",
+      "request_hash": "sha256:e1ba0136778f7688e5aa74728c7e05aeca18860110e12717b4b5d62892c9ee8a",
       "occurrence_index": 1,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 373,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -1214,12 +1214,12 @@
       }
     },
     {
-      "request_hash": "sha256:52b77096e212f4eecdbdcb75ff2bca28fb0f8b2c686ffff6fd11dea29da0807d",
+      "request_hash": "sha256:8068ebf0f001d22e6d380dea58d25cc6dc3915e38da091d270e7796bbc743163",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 373,
           "messages": [
             {
               "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
@@ -1251,12 +1251,12 @@
       }
     },
     {
-      "request_hash": "sha256:a835c8acb9a3f1406ba7d7d7ab59cb1db5c4b1c2aae78ecb1388742c5bcef071",
+      "request_hash": "sha256:c779f8767450873543244a7a5c9f54dda6e2d6c8fb2768c73c07fb75db95e188",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 373,
           "messages": [
             {
               "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
@@ -1288,12 +1288,12 @@
       }
     },
     {
-      "request_hash": "sha256:8fe9864ae4f5edff442dcc1056248af7878d4aa676744d94f08d252b49c2b080",
+      "request_hash": "sha256:a9d86a7c438ee7bb6cc42fc76482c67d418fc28dec2d1c380166b81a237040a8",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 373,
           "messages": [
             {
               "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
@@ -1325,12 +1325,12 @@
       }
     },
     {
-      "request_hash": "sha256:9259e556a6b7ccff0fb00fa19df61c2ceac242d99ac3823083c166e32ca4e2fb",
+      "request_hash": "sha256:9eb9cf379805f0a56de74c478065cb163150a2e615a1e8bcc9473ddeee00445d",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 501,
           "messages": [
             {
               "content": "You are revising your independent answer after a claim audit by an elite decision council. Use the anonymized initial panel and critiques to correct unsupported claims, resolve conflicts where the supplied material permits, and clearly mark externally unverified claims. Do not invent citations, sources, quotations, measurements, or facts. Produce a complete standalone answer to the original prompt, not a description of your edits.",
@@ -1362,12 +1362,12 @@
       }
     },
     {
-      "request_hash": "sha256:94c516d6931c2ed49b1bb6c232b976ba9485c6e2e3affcab7a6f5165bdd01a39",
+      "request_hash": "sha256:75e3638df32734081c0d982188db9f850bd498440810d2926b346c61d58203b9",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 501,
           "messages": [
             {
               "content": "You are revising your independent answer after a claim audit by an elite decision council. Use the anonymized initial panel and critiques to correct unsupported claims, resolve conflicts where the supplied material permits, and clearly mark externally unverified claims. Do not invent citations, sources, quotations, measurements, or facts. Produce a complete standalone answer to the original prompt, not a description of your edits.",
@@ -1399,12 +1399,12 @@
       }
     },
     {
-      "request_hash": "sha256:be1accab0b033bc49fc04b41745d9ba84106bf32c6a9e84bd84dde31ff205427",
+      "request_hash": "sha256:ec6a389e0cec2bbb6da227d889821d67c901a96075f2ac33f7b6bdb24ca8fb9d",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 501,
           "messages": [
             {
               "content": "You are revising your independent answer after a claim audit by an elite decision council. Use the anonymized initial panel and critiques to correct unsupported claims, resolve conflicts where the supplied material permits, and clearly mark externally unverified claims. Do not invent citations, sources, quotations, measurements, or facts. Produce a complete standalone answer to the original prompt, not a description of your edits.",
@@ -1436,12 +1436,12 @@
       }
     },
     {
-      "request_hash": "sha256:02bda1be5907a6e502ad841eafee3ad205b35015ffd1749557f414f6348f74ab",
+      "request_hash": "sha256:eca9f8611504368ff8d080c980410564d9c606f61bcf538983c80e7153308324",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 5,
+          "max_tokens": 629,
           "messages": [
             {
               "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
@@ -1473,19 +1473,19 @@
       }
     },
     {
-      "request_hash": "sha256:5df9018dc5065ede8d143ca207798c7b9213ca24c76e9a0446723912ec0618ff",
+      "request_hash": "sha256:986a343856a9e004b40161d47a0a8adf416114e9aa84cb6f8acada2ea9371286",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 14,
+          "max_tokens": 889,
           "messages": [
             {
-              "content": "You are the verdict extractor for an auditable multi-model council. You are given the original prompt and each council member's answer, labeled with a stable answer id. These IDs provide within-run answer provenance only; they do not prove claims against external sources. Produce ONE JSON object that conforms exactly to the provided JSON Schema and nothing else.\n\nYour job is to ADJUDICATE, not to re-answer:\n- Set verdict_applies=false when the prompt is open-ended generation (a poem, a brainstorm, free writing) with no decision or review to settle; otherwise true.\n- Set verdict_type to 'decision' (a question with an answer), 'review' (an accept/revise/reject judgment), or 'synthesis' (open-ended consolidation).\n- Cluster the members into positions[]; each position lists the providers in it and the evidence_answer_ids (the compatibility field containing the answer IDs shown) tracing it, so a human can verify every assignment against the raw answer.\n- Record one provider_vote per member that took a stance (position_label must match a positions[].label); omit a member that took no clean stance.\n- Add conflicts[] only when there are two or more positions in tension.\n\nCRITICAL: Do NOT emit any consensus score, percentage, ratio, or agreement number \u2014 the council computes consensus deterministically from your clustering. Emit only the fields in the schema.",
+              "content": "You are the verdict extractor for an auditable multi-model council. You are given the original prompt and each council member's answer, labeled with a stable answer id. These IDs provide within-run answer provenance only; they do not prove claims against external sources. Produce ONE JSON object that conforms exactly to the provided JSON Schema and nothing else.\n\nYour job is to ADJUDICATE, not to re-answer:\n- Set verdict_applies=false when the prompt is open-ended generation (a poem, a brainstorm, free writing) with no decision or review to settle; otherwise true.\n- Set verdict_type to 'decision' (a question with an answer), 'review' (an accept/revise/reject judgment), or 'synthesis' (open-ended consolidation).\n- Cluster the members into positions[]; each position lists the providers in it and the evidence_answer_ids (the compatibility field containing the answer IDs shown) tracing it, so a human can verify every assignment against the raw answer.\n- Record one provider_vote per member that took a stance (position_label must match a positions[].label); omit a member that took no clean stance.\n- Add conflicts[] only when there are two or more positions in tension.\n\nCRITICAL: Do NOT emit any consensus score, percentage, ratio, or agreement number — the council computes consensus deterministically from your clustering. Emit only the fields in the schema.",
               "role": "system"
             },
             {
-              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nCouncil member answers:\n\n### Member answer (answer id: ca_revision_52b860f7867fc83421bd3ee9) \u2014 from Model A\nFictional decision artifact 039.\n\n### Member answer (answer id: ca_revision_7b938c9dc355e2347e03ced7) \u2014 from Model B\nFictional decision artifact 040.\n\n### Member answer (answer id: ca_revision_9b8324a46592779e0bad8aa1) \u2014 from Model C\nFictional decision artifact 041.\n\nExtract the verdict as a single JSON object conforming exactly to this JSON Schema (emit no prose, no consensus number, only the JSON):\n\n{\n  \"title\": \"VerdictExtraction\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"verdict_type\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"decision\",\n        \"review\",\n        \"synthesis\"\n      ]\n    },\n    \"headline\": {\n      \"type\": \"string\"\n    },\n    \"recommendation\": {\n      \"type\": \"string\"\n    },\n    \"positions\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"label\": {\n            \"type\": \"string\"\n          },\n          \"summary\": {\n            \"type\": \"string\"\n          },\n          \"providers\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"evidence_answer_ids\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          }\n        },\n        \"required\": [\n          \"label\",\n          \"summary\",\n          \"providers\",\n          \"evidence_answer_ids\"\n        ]\n      }\n    },\n    \"conflicts\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"topic\": {\n            \"type\": \"string\"\n          },\n          \"position_labels\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"summary\": {\n            \"type\": \"string\"\n          },\n          \"consensus_score\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          }\n        },\n        \"required\": [\n          \"topic\",\n          \"position_labels\",\n          \"summary\"\n        ]\n      }\n    },\n    \"provider_votes\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"provider\": {\n            \"type\": \"string\"\n          },\n          \"position_label\": {\n            \"type\": \"string\"\n          },\n          \"confidence\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"low\",\n              \"medium\",\n              \"high\"\n            ]\n          }\n        },\n        \"required\": [\n          \"provider\",\n          \"position_label\"\n        ]\n      }\n    },\n    \"minority_reports\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"providers\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"claim\": {\n            \"type\": \"string\"\n          },\n          \"evidence_answer_ids\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"why_it_matters\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"providers\",\n          \"claim\",\n          \"evidence_answer_ids\"\n        ]\n      }\n    },\n    \"caveats\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    },\n    \"dissent_summary\": {\n      \"type\": \"string\"\n    },\n    \"verdict_applies\": {\n      \"type\": \"boolean\"\n    }\n  },\n  \"required\": [\n    \"verdict_type\",\n    \"headline\",\n    \"recommendation\",\n    \"positions\",\n    \"verdict_applies\"\n  ]\n}",
+              "content": "Original prompt:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nCouncil member answers:\n\n### Member answer (answer id: ca_revision_52b860f7867fc83421bd3ee9) — from Model A\nFictional decision artifact 039.\n\n### Member answer (answer id: ca_revision_7b938c9dc355e2347e03ced7) — from Model B\nFictional decision artifact 040.\n\n### Member answer (answer id: ca_revision_9b8324a46592779e0bad8aa1) — from Model C\nFictional decision artifact 041.\n\nExtract the verdict as a single JSON object conforming exactly to this JSON Schema (emit no prose, no consensus number, only the JSON):\n\n{\n  \"title\": \"VerdictExtraction\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"verdict_type\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"decision\",\n        \"review\",\n        \"synthesis\"\n      ]\n    },\n    \"headline\": {\n      \"type\": \"string\"\n    },\n    \"recommendation\": {\n      \"type\": \"string\"\n    },\n    \"positions\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"label\": {\n            \"type\": \"string\"\n          },\n          \"summary\": {\n            \"type\": \"string\"\n          },\n          \"providers\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"evidence_answer_ids\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          }\n        },\n        \"required\": [\n          \"label\",\n          \"summary\",\n          \"providers\",\n          \"evidence_answer_ids\"\n        ]\n      }\n    },\n    \"conflicts\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"topic\": {\n            \"type\": \"string\"\n          },\n          \"position_labels\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"summary\": {\n            \"type\": \"string\"\n          },\n          \"consensus_score\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          }\n        },\n        \"required\": [\n          \"topic\",\n          \"position_labels\",\n          \"summary\"\n        ]\n      }\n    },\n    \"provider_votes\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"provider\": {\n            \"type\": \"string\"\n          },\n          \"position_label\": {\n            \"type\": \"string\"\n          },\n          \"confidence\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"low\",\n              \"medium\",\n              \"high\"\n            ]\n          }\n        },\n        \"required\": [\n          \"provider\",\n          \"position_label\"\n        ]\n      }\n    },\n    \"minority_reports\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"providers\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"claim\": {\n            \"type\": \"string\"\n          },\n          \"evidence_answer_ids\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"why_it_matters\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"providers\",\n          \"claim\",\n          \"evidence_answer_ids\"\n        ]\n      }\n    },\n    \"caveats\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    },\n    \"dissent_summary\": {\n      \"type\": \"string\"\n    },\n    \"verdict_applies\": {\n      \"type\": \"boolean\"\n    }\n  },\n  \"required\": [\n    \"verdict_type\",\n    \"headline\",\n    \"recommendation\",\n    \"positions\",\n    \"verdict_applies\"\n  ]\n}",
               "role": "user"
             }
           ],
@@ -1498,7 +1498,7 @@
         "choices": [
           {
             "message": {
-              "content": "Fictional decision artifact 043."
+              "content": "{\"caveats\":[],\"conflicts\":[],\"headline\":\"Choose the fictional safe route.\",\"minority_reports\":[],\"positions\":[{\"evidence_answer_ids\":[\"fixture-a\",\"fixture-b\",\"fixture-c\"],\"label\":\"route-a\",\"providers\":[\"Model A\",\"Model B\",\"Model C\"],\"summary\":\"Route A is preferred.\"}],\"provider_votes\":[{\"position_label\":\"route-a\",\"provider\":\"Model A\"},{\"position_label\":\"route-a\",\"provider\":\"Model B\"},{\"position_label\":\"route-a\",\"provider\":\"Model C\"}],\"recommendation\":\"Use Route A with the stated safeguards.\",\"verdict_applies\":true,\"verdict_type\":\"decision\"}"
             }
           }
         ],
@@ -1510,12 +1510,12 @@
       }
     },
     {
-      "request_hash": "sha256:4e9493f40db3dbe48b57ec3df9f941b2444101d9775166b4d353c6d4b9a1c9bc",
+      "request_hash": "sha256:8a1487cb180ea93400d8353a325c98ea61865d319cace2bd9849e4eaf9347683",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 32,
+          "max_tokens": 3008,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -1543,12 +1543,12 @@
       }
     },
     {
-      "request_hash": "sha256:263812a7f4a8a162ead8f9ea5b142a99b1f931b6beb14c988e0519aa1eab5ae0",
+      "request_hash": "sha256:55ed4f3ae8cb471849dc7464c677a2eb795e2d94305b625d2b5c8f60f869fe3e",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 32,
+          "max_tokens": 3136,
           "messages": [
             {
               "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour draft:\nFictional decision artifact 044.\n\nProduce one complete, improved final answer.",
@@ -1576,12 +1576,12 @@
       }
     },
     {
-      "request_hash": "sha256:9a6ce2607e0eb30c7477f008399efde19c5aeed1b7fa1c061620db31b2946fa9",
-      "occurrence_index": 2,
+      "request_hash": "sha256:7fe02d317cbc5fd6bc862df80f6418ba7d1cdbd0aac145add051fcd20c6ad575",
+      "occurrence_index": 1,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 786,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -1609,12 +1609,12 @@
       }
     },
     {
-      "request_hash": "sha256:f97d7447f59a3a1923b83ecdbd2a256e788aa0306b80e34487c82f33195cc1c8",
-      "occurrence_index": 2,
+      "request_hash": "sha256:2e653c544f6ead81a481fad8280b49024ade5526a96780e6af5a76f9cf41c3d3",
+      "occurrence_index": 1,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 786,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -1642,12 +1642,12 @@
       }
     },
     {
-      "request_hash": "sha256:8e116cb7c77c18cbe04219e375cd95923cb30625aec753fbc4a4a3ca2907dea3",
-      "occurrence_index": 2,
+      "request_hash": "sha256:cc57d8d8ed8963f3537727956243f353427936b20d5365ebb8438e91a93340e1",
+      "occurrence_index": 1,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 786,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -1675,12 +1675,12 @@
       }
     },
     {
-      "request_hash": "sha256:5891ce106d20b45e9e85dbe28bfee81eb758e095ea0f9a627e572cf8da21a79f",
+      "request_hash": "sha256:06f25e59c1322ff7fe6c9c2b228ec2a3301c067441269b7ac01af40b802a0b99",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 914,
           "messages": [
             {
               "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer:\nFictional decision artifact 046.\n\nAnonymized peer panel:\n\n### Model A peer answer\nFictional decision artifact 046.\n\n### Model B peer answer\nFictional decision artifact 047.\n\n### Model C peer answer\nFictional decision artifact 048.\n\nProduce one complete revised answer to the original prompt.",
@@ -1708,12 +1708,12 @@
       }
     },
     {
-      "request_hash": "sha256:0d7115e520e1bce4daa06cc0a8cf9b25dc5002ee2d60df2dfa00d38ee9cd58c4",
+      "request_hash": "sha256:040bd4574ded659e69dac9a53f11a59e72a9b79327e3ccc42a494732f0e3ccb8",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 914,
           "messages": [
             {
               "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer:\nFictional decision artifact 047.\n\nAnonymized peer panel:\n\n### Model A peer answer\nFictional decision artifact 046.\n\n### Model B peer answer\nFictional decision artifact 047.\n\n### Model C peer answer\nFictional decision artifact 048.\n\nProduce one complete revised answer to the original prompt.",
@@ -1741,12 +1741,12 @@
       }
     },
     {
-      "request_hash": "sha256:3fa9111eb2e505f72e5b2b80494e9098f47aab7e444d228f956a54834b76e93f",
+      "request_hash": "sha256:3fab1afdadb0de5be2874990c6add5e0551b7cbbd12043f3ae2de3d613233996",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 914,
           "messages": [
             {
               "content": "Original prompt and public material:\nSelect the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.\n\nYour original answer:\nFictional decision artifact 048.\n\nAnonymized peer panel:\n\n### Model A peer answer\nFictional decision artifact 046.\n\n### Model B peer answer\nFictional decision artifact 047.\n\n### Model C peer answer\nFictional decision artifact 048.\n\nProduce one complete revised answer to the original prompt.",
@@ -1774,12 +1774,12 @@
       }
     },
     {
-      "request_hash": "sha256:4a109d156624f266581a7549ea1fc7661a473c4a0db9fabc2614754a2ac6020f",
+      "request_hash": "sha256:4c8bb8faba7e3e7bd16446aba2ada2034585c3923da91570f5e599f8c79e4a2b",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 10,
+          "max_tokens": 1044,
           "messages": [
             {
               "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
@@ -1811,12 +1811,12 @@
       }
     },
     {
-      "request_hash": "sha256:9a6ce2607e0eb30c7477f008399efde19c5aeed1b7fa1c061620db31b2946fa9",
-      "occurrence_index": 3,
+      "request_hash": "sha256:94eb52642fa244a450a865a90d5f84760985a99296505bb7c65d927faeb43f27",
+      "occurrence_index": 1,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 841,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -1844,12 +1844,12 @@
       }
     },
     {
-      "request_hash": "sha256:f97d7447f59a3a1923b83ecdbd2a256e788aa0306b80e34487c82f33195cc1c8",
-      "occurrence_index": 3,
+      "request_hash": "sha256:85c1e9279d0f7807e5b2e11ee8e5b7598b6c0cd3e6902a62af28977b29770f8f",
+      "occurrence_index": 1,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 841,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -1877,12 +1877,12 @@
       }
     },
     {
-      "request_hash": "sha256:8e116cb7c77c18cbe04219e375cd95923cb30625aec753fbc4a4a3ca2907dea3",
-      "occurrence_index": 3,
+      "request_hash": "sha256:d948e25d735ca60fa12fa1f58a1a13a3b83756c89a14cb6aec3f0636dd8c1d79",
+      "occurrence_index": 1,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 841,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -1910,12 +1910,12 @@
       }
     },
     {
-      "request_hash": "sha256:75b5a421db80038334f7a5b7e022dac2bc798942ae5fbb5d4f06133aa0c7d82b",
+      "request_hash": "sha256:4c6ebb9f273a36d41ad3ef449a2651cf6ddf019bec6b78aa216f1e0aa39172cf",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 841,
           "messages": [
             {
               "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
@@ -1947,12 +1947,12 @@
       }
     },
     {
-      "request_hash": "sha256:c9f3331e3a16ca7c13b4a7cab3aceceb523f21b2489c71832187a29c96a6e071",
+      "request_hash": "sha256:0b2b098a01da3535b62416171121f02fd789679b734ed30a75871e89811d9196",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 841,
           "messages": [
             {
               "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
@@ -1984,12 +1984,12 @@
       }
     },
     {
-      "request_hash": "sha256:d5f31c59028e4f637aff0c1339a5798b39dd5749b87ed5417f68a10a18380e26",
+      "request_hash": "sha256:f4f04f7567a2f45c8b82f6075e7783cc587f7c421a3c585f1f72e4d4feedd622",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 9,
+          "max_tokens": 841,
           "messages": [
             {
               "content": "You are a claim auditor in an elite decision council. Independently stress-test the anonymized answers against the original prompt. Organize your audit into three explicit categories: SUPPORTED claims, CONFLICTING claims, and EXTERNALLY UNVERIFIED claims. Distinguish evidence supplied in the answers from assumptions that would require outside verification. Do not invent citations, sources, quotations, measurements, or facts. The displayed answer IDs provide within-run answer provenance only; they do not prove any claim against external sources. Cite those IDs when identifying a claim. Preserve meaningful minority positions and be precise about uncertainty.",
@@ -2021,12 +2021,12 @@
       }
     },
     {
-      "request_hash": "sha256:90717487011b129011d0b7db7fe50382d9967055a302cd0e5324ca0d593e490b",
+      "request_hash": "sha256:eb274049333444ff45eeb78704ac8ade85da973fc8d5f854e024d053a6ecb4bc",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 10,
+          "max_tokens": 1098,
           "messages": [
             {
               "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
@@ -2058,12 +2058,12 @@
       }
     },
     {
-      "request_hash": "sha256:64c25574dc75e5cb8785b3accba9028868bff1e40e1f871b2c7dff341d1958a1",
+      "request_hash": "sha256:1272f0bc2baa43e27e852787219b6b445ff23481fe9d7785e88c63a72dea8a2a",
       "occurrence_index": 1,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 16,
+          "max_tokens": 1472,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -2091,12 +2091,12 @@
       }
     },
     {
-      "request_hash": "sha256:cfabe1fcf9f9aa97f5ce3c6f5fd00c0b58e0d19b6328b0858efe8559d145ca8a",
+      "request_hash": "sha256:3e871bdcc4a67bae1bba8dc450a253797ad6d689350c9cc0ae1bfec5b8e79f58",
       "occurrence_index": 1,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 16,
+          "max_tokens": 1472,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -2124,12 +2124,12 @@
       }
     },
     {
-      "request_hash": "sha256:66b06f34e69ffb9fa4bfaa79969147bd90b1c424dfd19a950c80c57a953eeb0b",
+      "request_hash": "sha256:2f49af35b10a45083cec38a6929c4f24840fd9ddb9a0e8337e3e1840ad0e120c",
       "occurrence_index": 1,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 16,
+          "max_tokens": 1472,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",
@@ -2157,12 +2157,12 @@
       }
     },
     {
-      "request_hash": "sha256:368231f59475acad0fc1c41811ff527bbbe2a94f4acde23932c8d21f178f9c3c",
+      "request_hash": "sha256:3fab8223b5f796252713e1e765b6b8413b6a612e4655625e09e68a4c29d00cc1",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 16,
+          "max_tokens": 1728,
           "messages": [
             {
               "content": "You are the synthesizer of a council of AI models. You are given the same user prompt that was posed to several models, plus each model's answer. Produce one consolidated, accurate answer. Reconcile agreements, surface and adjudicate disagreements, and note any answer that is clearly wrong. Do not invent a model's position; rely only on the answers provided.",
@@ -2194,12 +2194,12 @@
       }
     },
     {
-      "request_hash": "sha256:123070814d2b1c5283590f1d4ee4cd72d3cde87a88ac3d5e6cee374f810c612e",
+      "request_hash": "sha256:9097f135936dad4b6b6b32a146dce9a8bf225304e952fe95d11c0fa5de2a7ce8",
       "occurrence_index": 0,
       "request": {
         "url": "https://fictional.invalid/v1/chat/completions",
         "body": {
-          "max_tokens": 64,
+          "max_tokens": 6144,
           "messages": [
             {
               "content": "Select the safest route for a fictional lunar archive migration.\n\nPublic reference packets:\n\n### Reference packet 1\nFictional archive route A has a tested rollback procedure.\n\n### Reference packet 2\nAll systems, organizations, risks, and costs in this task are fictional.",

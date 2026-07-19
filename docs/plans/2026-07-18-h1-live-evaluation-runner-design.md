@@ -89,11 +89,17 @@ per roster so `elite_full` exercises its implemented three-responder contract.
    Elite prompt builders; the first member then produces the same synthesis and structured
    verdict stages required by the current Elite protocol.
 
-A frozen allocation table divides each cell ceiling across its stages; integer remainder is
-assigned to the final graded-output stage. The allocator rejects a cell ceiling too small to
-give every call the minimum useful stage cap. Failed responder gates stop later stages and
-produce a failure-inclusive cell record. The graded output is the condition's final decision
-artifact, never an internal critique.
+A frozen allocation table divides each cell ceiling across its maximum call graph, including
+Elite's optional verdict repair. Version `live_stage_minimum_caps_v1` reserves 256 output tokens
+for `initial`, `draft`, and `critique`; 384 for `self_revision` and `revision`; 512 for
+`synthesis`; and 768 for each of `verdict` and `verdict_repair`. These conservative floors give
+short reasoning stages useful space, give integration stages more room, and fit the current
+multi-position structured verdict on either attempt. A three-member Elite cell therefore
+requires at least 4,736 output tokens before any call. Extra tokens are distributed
+deterministically and exactly; integer remainder goes to the normal graded-output stage while
+the optional repair retains its full floor. Failed responder gates stop later stages and produce
+a failure-inclusive cell record. The graded output is the condition's canonical final decision
+artifact, never an internal critique or unvalidated extractor text.
 
 ## Data flow
 

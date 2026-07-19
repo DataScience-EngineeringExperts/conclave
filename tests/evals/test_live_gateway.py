@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 import conclave.evals.live as live_module
+from conclave.adapters.base import OutputContract
 from conclave.evals.live import (
     BudgetExceededError,
     GatewayStoppedError,
@@ -40,7 +41,12 @@ def _price_book(
     )
 
 
-def _stage_call(*, cap: int = 5, content: str = "x") -> StageCall:
+def _stage_call(
+    *,
+    cap: int = 5,
+    content: str = "x",
+    output_contract: OutputContract | None = None,
+) -> StageCall:
     return StageCall(
         stage="initial",
         provider_id="fictional-provider",
@@ -48,6 +54,7 @@ def _stage_call(*, cap: int = 5, content: str = "x") -> StageCall:
         model_revision="fixture-r1",
         messages=(ChatMessage(role="user", content=content),),
         max_output_tokens=cap,
+        output_contract=output_contract,
     )
 
 
@@ -87,6 +94,38 @@ async def test_gateway_persists_reservation_before_calling_provider() -> None:
     assert checkpoints[0][0] is not None
     assert checkpoints[-1][0] is None
     assert len(checkpoints[-1][1]) == 1
+
+
+@pytest.mark.asyncio
+async def test_gateway_passes_stage_output_contract_to_provider() -> None:
+    contract = OutputContract(
+        schema={"type": "object", "properties": {}, "additionalProperties": False},
+        schema_name="FixtureContract",
+        strict=True,
+    )
+    observed: list[OutputContract | None] = []
+
+    async def fake_call_model(name, model_id, messages, **kwargs):
+        del messages
+        observed.append(kwargs.get("output_contract"))
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            answer="{}",
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+
+    client = LiveProviderClient(
+        price_book=_price_book(input_rate="1", output_rate="1"),
+        hard_cap_usd=Decimal("1"),
+        call_model_func=fake_call_model,
+        checkpoint=lambda pending, receipts: None,
+    )
+    call = _stage_call(output_contract=contract)
+
+    await client.call(call)
+
+    assert observed == [contract]
 
 
 @pytest.mark.asyncio
