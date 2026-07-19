@@ -16,7 +16,7 @@
 
 ## Phase 3 — Confirmatory estimands and refusal gates
 
-1. Add tests for task-level roster averaging, task-clustered paired bootstrap, one-sided severe-error and effort/latency noninferiority boundaries, symmetric task exclusions, deviations, cost/latency distributions, and report refusal on freeze drift or exploratory evidence.
+1. Add tests for task-level roster averaging, task-clustered paired bootstrap, one-sided severe-error and effort/latency noninferiority boundaries, symmetric task exclusions, deviations, complete cost/latency receipts and summaries, and report refusal on freeze drift or exploratory evidence.
 2. Extend `scoring.py`, `reporting.py`, and CLI artifact validation. Archive every gate input and seed.
 3. Re-run focused tests and commit.
 

@@ -912,7 +912,19 @@ def score_study(
     if len({item.adjudication_id for item in adjudications}) != len(adjudications):
         raise ValueError("adjudication_id values must be unique")
 
+    paid_study = manifest.evidence_classification != "synthetic_exploratory"
+    if paid_study:
+        if blind_map is None or blind_map.blind_map_hash is None:
+            raise ValueError("paid scoring requires a hashed blind map")
+        if any(item.planned_run_id is not None for item in (*raw_judgments, *adjudications)):
+            raise ValueError("paid judgments and adjudications require opaque output IDs")
     mapping = _target_map(blind_map)
+    if paid_study:
+        successful_run_ids = {
+            record.planned_run_id for record in study_run.records if record.outcome == "success"
+        }
+        if set(mapping.values()) != successful_run_ids or len(mapping) != len(successful_run_ids):
+            raise ValueError("paid blind map must cover exactly the successful output set")
     judgments_by_run: dict[str, list[GraderJudgment]] = defaultdict(list)
     judgment_ids = {item.judgment_id for item in raw_judgments}
     seen_grader_targets: set[tuple[str, str]] = set()

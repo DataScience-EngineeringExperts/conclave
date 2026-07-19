@@ -14,7 +14,7 @@ from conclave.evals.scoring import (
     recompute_simultaneous_upper_bounds,
     score_study,
 )
-from tests.evals.test_method_grading import _judgment
+from tests.evals.test_method_grading import _blind_targets, _judgment
 from tests.evals.test_study_design import _design, _tasks
 
 
@@ -74,9 +74,14 @@ def _confirmatory_report(*, minimum_tasks: int = 2):
         frozen_design=design,
     )
     study_run = _confirmatory_report_run(manifest)
+    blind_map, opaque_by_run = _blind_targets(study_run)
     records = study_run.records
     judgments = tuple(
-        _judgment(record.planned_run_id, grader, value=planned.condition_id != "self_refine")
+        _judgment(
+            opaque_by_run[record.planned_run_id],
+            grader,
+            value=planned.condition_id != "self_refine",
+        )
         for planned, record in zip(manifest.planned_runs, records, strict=True)
         for grader in ("grader-a", "grader-b")
     )
@@ -84,6 +89,7 @@ def _confirmatory_report(*, minimum_tasks: int = 2):
         manifest=manifest,
         study_run=study_run,
         raw_judgments=judgments,
+        blind_map=blind_map,
         bootstrap_seed=design.bootstrap.seed,
         bootstrap_samples=design.bootstrap.samples,
     )
@@ -115,11 +121,14 @@ def _confirmatory_report_run(manifest):
 
 
 def _gate(manifest, report):
+    study_run = _confirmatory_report_run(manifest)
+    blind_map, _ = _blind_targets(study_run)
     return evaluate_confirmatory_gates(
         manifest=manifest,
-        study_run=_confirmatory_report_run(manifest),
+        study_run=study_run,
         raw_judgments=report.raw_judgments,
         report=report,
+        blind_map=blind_map,
     )
 
 
@@ -253,8 +262,11 @@ def test_confirmatory_gate_recomputes_secondary_bounds_from_task_inputs(
 
 def test_caller_cannot_substitute_optimistic_bounds_to_turn_redesign_into_go() -> None:
     manifest, report = _confirmatory_report()
-    condition_by_run = {
-        planned.planned_run_id: planned.condition_id for planned in manifest.planned_runs
+    study_run = _confirmatory_report_run(manifest)
+    blind_map, opaque_by_run = _blind_targets(study_run)
+    condition_by_output = {
+        opaque_by_run[planned.planned_run_id]: planned.condition_id
+        for planned in manifest.planned_runs
     }
     severe = AtomicError(
         rubric_item="safety",
@@ -270,15 +282,15 @@ def test_caller_cannot_substitute_optimistic_bounds_to_turn_redesign_into_go() -
                 "severe_error": True,
             }
         )
-        if condition_by_run[judgment.planned_run_id] == "elite_full"
+        if condition_by_output[judgment.opaque_output_id] == "elite_full"
         else judgment
         for judgment in report.raw_judgments
     )
-    study_run = _confirmatory_report_run(manifest)
     redesign_report = score_study(
         manifest=manifest,
         study_run=study_run,
         raw_judgments=bad_judgments,
+        blind_map=blind_map,
         bootstrap_seed=manifest.frozen_design.bootstrap.seed,
         bootstrap_samples=manifest.frozen_design.bootstrap.samples,
     )
@@ -288,6 +300,7 @@ def test_caller_cannot_substitute_optimistic_bounds_to_turn_redesign_into_go() -
             study_run=study_run,
             raw_judgments=bad_judgments,
             report=redesign_report,
+            blind_map=blind_map,
         ).status
         == "REDESIGN"
     )
@@ -322,6 +335,7 @@ def test_caller_cannot_substitute_optimistic_bounds_to_turn_redesign_into_go() -
             study_run=study_run,
             raw_judgments=bad_judgments,
             report=substituted,
+            blind_map=blind_map,
         )
 
 
@@ -405,6 +419,8 @@ def test_confirmatory_gate_uses_single_model_latency_baseline_and_reliability() 
 
 def test_rotating_grader_pairs_still_produce_complete_reliability() -> None:
     manifest, report = _confirmatory_report()
+    study_run = _confirmatory_report_run(manifest)
+    blind_map, _ = _blind_targets(study_run)
     raw = []
     for index, judgment in enumerate(report.raw_judgments):
         pair = index // 2
@@ -418,8 +434,9 @@ def test_rotating_grader_pairs_still_produce_complete_reliability() -> None:
         )
     rescored = score_study(
         manifest=manifest,
-        study_run=_confirmatory_report_run(manifest),
+        study_run=study_run,
         raw_judgments=tuple(raw),
+        blind_map=blind_map,
         bootstrap_seed=manifest.frozen_design.bootstrap.seed,
         bootstrap_samples=manifest.frozen_design.bootstrap.samples,
     )

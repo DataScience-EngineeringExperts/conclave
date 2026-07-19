@@ -1,7 +1,7 @@
 # H1 Method Hardening Design
 
-**Linear:** DSE-708  
-**Dependency:** PR #52 at `4365c28`  
+**Linear:** DSE-708
+**Dependency:** PR #52 at `4365c28`
 **Gate:** Required before any paid study call
 
 ## Decision
@@ -19,17 +19,17 @@ Confirmatory reports fail closed if any frozen field is missing or its observed 
 
 ## Experimental unit and randomization
 
-The unit of analysis is the task. Roster and replicate are repeated measurements averaged within task. Create every task x roster x condition x replicate cell before execution. Derive an independent condition permutation from the master seed plus task and roster IDs; interleave blocks so time or provider order cannot align with one condition. All failed, timed-out, malformed, over-budget, abstained, incomplete, ungraded, and unresolved cells remain failures.
+The unit of analysis is the task. Roster and replicate are repeated measurements averaged within task. Create every task x roster x condition x replicate cell before execution. Derive an independent condition permutation from the master seed plus task and roster IDs so condition order varies across blocks. All failed, timed-out, malformed, over-budget, abstained, incomplete, ungraded, and unresolved cells remain failures.
 
 ## Grading contract
 
 Two independent graders score every successful output. Atomic records include rubric item, error category and severity, severe-error flag, holistic dimensions, reviewer seconds, confidence or abstention, rubric version/hash, grader batch/order, and condition/provider guess. Adjudication sees only genuine disagreements, cites every source record, and never overwrites raw judgments.
 
-Non-success records bypass the human queue and are automatic failures. Successful grader views strip provider, model, condition, mode, and formatting fingerprints; normalize presentation deterministically; run a leakage scan; and retain a separate hashed/access-controlled blind map.
+Non-success records bypass the human queue and are automatic failures. Successful grader views expose only normalized presentation text, scan it for predeclared provider/model/condition labels, and retain a separate hashed/access-controlled blind map. Paid and confirmatory scoring rejects direct planned-run targets, unhashed maps, and maps that do not cover exactly the successful output set.
 
 ## Analysis and gates
 
-Study reporting uses failure-inclusive Wilson rates, task-clustered paired bootstrap differences with roster/replicate averaging, raw agreement, prevalence, kappa, adjudication rate, severe errors, reviewer effort, token/cost distributions, latency distributions, deviations, and leakage guesses.
+Study reporting uses failure-inclusive Wilson rates, task-clustered paired bootstrap differences with roster/replicate averaging, raw agreement, prevalence, kappa, adjudication rate, severe errors, reviewer effort, total and analysis-set cost, p95 latency, deviations, and retained leakage guesses. A paid workflow must preregister and apply its material-leakage rule before claiming method readiness.
 
 Reliability is undefined—not perfect—when expected agreement is one. A future paid pilot is
 method-ready only with at least 95% double grading, raw agreement at least 80%, kappa at least

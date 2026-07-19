@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from conclave.evals.blinding import BlindMap, BlindMapEntry, build_grader_queue, hash_blind_map
 from conclave.evals.models import (
     AnalysisGateConfig,
     BootstrapConfig,
@@ -107,10 +108,15 @@ def _paid_study():
     return manifest, study_run
 
 
-def _judgment(run_id: str, grader: str, *, value: bool = True) -> GraderJudgment:
+def _judgment(target_id: str, grader: str, *, value: bool = True) -> GraderJudgment:
+    target = (
+        {"planned_run_id": target_id}
+        if target_id.startswith("run_")
+        else {"opaque_output_id": target_id}
+    )
     return GraderJudgment(
-        judgment_id=f"{run_id}-{grader}",
-        planned_run_id=run_id,
+        judgment_id=f"{target_id}-{grader}",
+        **target,
         grader_id=grader,
         critical_error_free=value,
         atomic_errors=(),
@@ -134,6 +140,11 @@ def _judgment(run_id: str, grader: str, *, value: bool = True) -> GraderJudgment
         provider_guess="unknown",
         readiness_correct=True,
     )
+
+
+def _blind_targets(study_run: StudyRun) -> tuple[BlindMap, dict[str, str]]:
+    _, blind_map = build_grader_queue(study_run.records, seed=31, forbidden_labels=())
+    return blind_map, {entry.planned_run_id: entry.opaque_output_id for entry in blind_map.entries}
 
 
 @pytest.mark.parametrize(
@@ -198,8 +209,9 @@ def test_atomic_errors_and_judgment_status_are_typed_and_consistent() -> None:
 def test_paid_scoring_requires_two_complete_independent_judgments_per_success() -> None:
     manifest, study_run = _paid_study()
     successful = [record for record in study_run.records if record.outcome == "success"]
+    blind_map, opaque_by_run = _blind_targets(study_run)
     complete = tuple(
-        _judgment(record.planned_run_id, grader)
+        _judgment(opaque_by_run[record.planned_run_id], grader)
         for record in successful
         for grader in ("grader-a", "grader-b")
     )
@@ -209,6 +221,7 @@ def test_paid_scoring_requires_two_complete_independent_judgments_per_success() 
             manifest=manifest,
             study_run=study_run,
             raw_judgments=complete[:-1],
+            blind_map=blind_map,
             bootstrap_seed=19,
             bootstrap_samples=100,
         )
@@ -218,14 +231,86 @@ def test_paid_scoring_requires_two_complete_independent_judgments_per_success() 
             manifest=manifest,
             study_run=study_run,
             raw_judgments=(incomplete, *complete[1:]),
+            blind_map=blind_map,
             bootstrap_seed=19,
             bootstrap_samples=100,
         )
-    with pytest.raises(ValueError, match="non-success"):
+    with pytest.raises(ValueError, match="missing from the blind map"):
         score_study(
             manifest=manifest,
             study_run=study_run,
-            raw_judgments=(*complete, _judgment(study_run.records[0].planned_run_id, "grader-a")),
+            raw_judgments=(*complete, _judgment("output_" + "f" * 24, "grader-a")),
+            blind_map=blind_map,
+            bootstrap_seed=19,
+            bootstrap_samples=100,
+        )
+
+
+def test_paid_scoring_requires_a_hashed_blind_map() -> None:
+    manifest, study_run = _paid_study()
+    successful = [record for record in study_run.records if record.outcome == "success"]
+    judgments = tuple(
+        _judgment(record.planned_run_id, grader)
+        for record in successful
+        for grader in ("grader-a", "grader-b")
+    )
+
+    with pytest.raises(ValueError, match="hashed blind map"):
+        score_study(
+            manifest=manifest,
+            study_run=study_run,
+            raw_judgments=judgments,
+            bootstrap_seed=19,
+            bootstrap_samples=100,
+        )
+
+
+def test_paid_scoring_requires_opaque_judgment_targets() -> None:
+    manifest, study_run = _paid_study()
+    successful = [record for record in study_run.records if record.outcome == "success"]
+    judgments = tuple(
+        _judgment(record.planned_run_id, grader)
+        for record in successful
+        for grader in ("grader-a", "grader-b")
+    )
+    _, blind_map = build_grader_queue(study_run.records, seed=31, forbidden_labels=())
+
+    with pytest.raises(ValueError, match="opaque output IDs"):
+        score_study(
+            manifest=manifest,
+            study_run=study_run,
+            raw_judgments=judgments,
+            blind_map=blind_map,
+            bootstrap_seed=19,
+            bootstrap_samples=100,
+        )
+
+
+def test_paid_scoring_rejects_blind_maps_outside_the_successful_output_set() -> None:
+    manifest, study_run = _paid_study()
+    _, blind_map = build_grader_queue(study_run.records, seed=31, forbidden_labels=())
+    opaque_by_run = {entry.planned_run_id: entry.opaque_output_id for entry in blind_map.entries}
+    judgments = tuple(
+        _judgment(opaque_by_run[record.planned_run_id], grader)
+        for record in study_run.records
+        if record.outcome == "success"
+        for grader in ("grader-a", "grader-b")
+    )
+    entries = (
+        *blind_map.entries,
+        BlindMapEntry(
+            opaque_output_id="output_" + "f" * 24,
+            planned_run_id=study_run.records[0].planned_run_id,
+        ),
+    )
+    expanded_map = BlindMap(entries=entries, blind_map_hash=hash_blind_map(entries))
+
+    with pytest.raises(ValueError, match="successful output set"):
+        score_study(
+            manifest=manifest,
+            study_run=study_run,
+            raw_judgments=judgments,
+            blind_map=expanded_map,
             bootstrap_seed=19,
             bootstrap_samples=100,
         )
@@ -234,8 +319,9 @@ def test_paid_scoring_requires_two_complete_independent_judgments_per_success() 
 def test_paid_scoring_requires_complete_cost_and_latency_receipts() -> None:
     manifest, study_run = _paid_study()
     successful = [record for record in study_run.records if record.outcome == "success"]
+    blind_map, opaque_by_run = _blind_targets(study_run)
     judgments = tuple(
-        _judgment(record.planned_run_id, grader)
+        _judgment(opaque_by_run[record.planned_run_id], grader)
         for record in successful
         for grader in ("grader-a", "grader-b")
     )
@@ -252,6 +338,7 @@ def test_paid_scoring_requires_complete_cost_and_latency_receipts() -> None:
             manifest=manifest,
             study_run=missing_latency,
             raw_judgments=judgments,
+            blind_map=blind_map,
             bootstrap_seed=19,
             bootstrap_samples=100,
         )
@@ -268,6 +355,7 @@ def test_paid_scoring_requires_complete_cost_and_latency_receipts() -> None:
             manifest=manifest,
             study_run=missing_cost,
             raw_judgments=judgments,
+            blind_map=blind_map,
             bootstrap_seed=19,
             bootstrap_samples=100,
         )
@@ -276,8 +364,9 @@ def test_paid_scoring_requires_complete_cost_and_latency_receipts() -> None:
 def test_paid_scoring_uses_frozen_bootstrap_and_reports_effort_interval_and_cost_sets() -> None:
     manifest, study_run = _paid_study()
     successful = [record for record in study_run.records if record.outcome == "success"]
+    blind_map, opaque_by_run = _blind_targets(study_run)
     judgments = tuple(
-        _judgment(record.planned_run_id, grader)
+        _judgment(opaque_by_run[record.planned_run_id], grader)
         for record in successful
         for grader in ("grader-a", "grader-b")
     )
@@ -286,6 +375,7 @@ def test_paid_scoring_uses_frozen_bootstrap_and_reports_effort_interval_and_cost
             manifest=manifest,
             study_run=study_run,
             raw_judgments=judgments,
+            blind_map=blind_map,
             bootstrap_seed=7,
             bootstrap_samples=20,
         )
@@ -293,6 +383,7 @@ def test_paid_scoring_uses_frozen_bootstrap_and_reports_effort_interval_and_cost
         manifest=manifest,
         study_run=study_run,
         raw_judgments=judgments,
+        blind_map=blind_map,
         bootstrap_seed=19,
         bootstrap_samples=100,
     )
@@ -305,15 +396,18 @@ def test_paid_scoring_uses_frozen_bootstrap_and_reports_effort_interval_and_cost
 def test_paid_reliability_reports_raw_agreement_prevalence_and_strata() -> None:
     manifest, study_run = _paid_study()
     successful = [record for record in study_run.records if record.outcome == "success"]
+    blind_map, opaque_by_run = _blind_targets(study_run)
     judgments = []
     for index, record in enumerate(successful):
-        judgments.append(_judgment(record.planned_run_id, "grader-a"))
-        judgments.append(_judgment(record.planned_run_id, "grader-b", value=index != 0))
+        target_id = opaque_by_run[record.planned_run_id]
+        judgments.append(_judgment(target_id, "grader-a"))
+        judgments.append(_judgment(target_id, "grader-b", value=index != 0))
 
     report = score_study(
         manifest=manifest,
         study_run=study_run,
         raw_judgments=tuple(judgments),
+        blind_map=blind_map,
         bootstrap_seed=19,
         bootstrap_samples=100,
     )
@@ -342,6 +436,7 @@ def test_constant_prevalence_kappa_is_undefined_not_perfect() -> None:
 def test_rotating_grader_kappa_is_label_invariant_and_stratified() -> None:
     manifest, study_run = _paid_study()
     successful = [record for record in study_run.records if record.outcome == "success"]
+    blind_map, opaque_by_run = _blind_targets(study_run)
     pairs = (("A", "B"), ("B", "C"), ("A", "C"), ("A", "B"))
     ratings = ((False, False), (False, True), (False, False), (False, True))
 
@@ -352,13 +447,16 @@ def test_rotating_grader_kappa_is_label_invariant_and_stratified() -> None:
             outcomes = ratings[index % len(ratings)]
             for grader, outcome in zip(pair, outcomes, strict=True):
                 grader_id = "Z" if rename_b and grader == "B" else grader
-                values.append(_judgment(record.planned_run_id, grader_id, value=outcome))
+                values.append(
+                    _judgment(opaque_by_run[record.planned_run_id], grader_id, value=outcome)
+                )
         return tuple(values)
 
     original = score_study(
         manifest=manifest,
         study_run=study_run,
         raw_judgments=judgments(False),
+        blind_map=blind_map,
         bootstrap_seed=19,
         bootstrap_samples=100,
     )
@@ -366,6 +464,7 @@ def test_rotating_grader_kappa_is_label_invariant_and_stratified() -> None:
         manifest=manifest,
         study_run=study_run,
         raw_judgments=judgments(True),
+        blind_map=blind_map,
         bootstrap_seed=19,
         bootstrap_samples=100,
     )
