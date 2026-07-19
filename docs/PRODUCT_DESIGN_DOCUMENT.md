@@ -1,10 +1,11 @@
 # conclave — Product Design Document
 
-> **Status:** v1.1 stable (the BYO-keys multi-model council: synthesize/raw/debate/
-> adversarial/vote, 9 providers, owned httpx provider highway, key-leak hardening, streaming,
+> **Status:** v1.2 stable (the BYO-keys multi-model council: synthesize/raw/debate/
+> adversarial/vote/elite, 9 providers, owned httpx provider highway, key-leak hardening, streaming,
 > cache). **v1.1 — the auditable council — SHIPPED:** every run now yields a structured,
 > agreement-scored, execution-traceable **verdict** plus a redacted execution **manifest** (see
-> §4a). The quality-first **Elite Decision Protocol is implemented but unreleased**.
+> §4a). **v1.2 ships the quality-first Elite Decision Protocol** and the guarded paid-exploratory
+> evaluation runner; no decision-quality or efficiency claim is made from the smoke.
 > This is the **canonical authority document** for conclave's product scope, design,
 > and roadmap. When this document and any other doc disagree, this document wins. Code is the
 > source of truth for *current behavior*; this document marks anything not yet in code as
@@ -13,7 +14,7 @@
 - **Repo:** `/Users/ernestprovo/dev/conclave/`
 - **License:** MIT
 - **Author:** Data Science & Engineering Experts, Inc. (DSE)
-- **Last updated:** 2026-07-17
+- **Last updated:** 2026-07-18
 
 ---
 
@@ -48,12 +49,12 @@ structured, scored for agreement, and execution-traceable.** Every run yields a 
 exposing agreement, disagreement (`conflicts`), minority views (`minority_reports`), and
 per-provider votes (`provider_votes`); a deterministic `consensus_score` (arithmetic over the
 model's clustering, *never* an LLM-emitted number); and a redacted `ModelHarnessManifest` (how
-the run executed + which model produced the analysis) riding on **every** released-mode result;
-source-only Elite results carry it too (one chokepoint, §4a). A constrained-choice **`vote`
+the run executed + which model produced the analysis) riding on **every** mode result,
+including Elite (one chokepoint, §4a). A constrained-choice **`vote`
 mode** also **shipped** (CAC-09 / #3,
 `--mode vote --choices "A,B,C"` → plurality winner/split) — distinct from `provider_votes`.
 
-The next product-quality step is **Elite** (implemented, unreleased): independent answers → council-wide answer/claim audits → member revisions → the existing synthesis and execution-traceable verdict. Elite requires three successful responders at every member phase and intentionally spends more calls and time to improve consequential decisions.
+v1.2 adds **Elite**: independent answers → council-wide answer/claim audits → member revisions → the existing synthesis and execution-traceable verdict. Elite requires three successful responders at every member phase and intentionally spends more calls and time for consequential decisions. Whether it improves decision quality remains an empirical question for H1.
 
 conclave's first real use was an **adversarial design review**: a council of Grok, Gemini,
 Perplexity, and Claude critiquing a security-tool strategy and catching flaws a single
@@ -129,8 +130,8 @@ output. The v1.1 verdict layer (§4a) sits on top of whichever mode produced the
 | **raw** | **BUILT (v0.1)** | Fan out and return every member's raw answer with no synthesis. Not a deliberation mode — it is "synthesize off." Exposed as `--mode raw` / `ask(..., synthesize=False)`. |
 | **debate** | **BUILT (v0.2)** | N rounds (`--rounds`, default 2). Round 1 is an independent fan-out; rounds 2..N show each member its peers' **anonymized** prior-round answers (`Model A/B/C`) and ask it to revise or defend. A member that errors in a round drops out of later rounds; the debate continues with survivors. The synthesizer consolidates the final round. Exposed as `--mode debate` / `Council.debate()` / `debate_sync()`. |
 | **adversarial** | **BUILT (v0.2)** | Structured propose → refute → verdict. A `--proposer` (default: first member) answers; the remaining members are CRITICS explicitly prompted to refute it; the synthesizer acts as JUDGE, weighing proposal vs. critiques and issuing a verdict + strengthened answer. This is the mode conclave's origin story (the security design review) exercised by hand. Exposed as `--mode adversarial` / `Council.adversarial()` / `adversarial_sync()`. |
-| **vote** | **BUILT (v1.1, CAC-09 / #3)** | Constrained-choice ballot: each member sees a fixed labelled option set (`A, B, C, …`) and answers with one letter; responses are tallied to a plurality `winner` (or `split` on a tie) on `result.vote` (`VoteResult`). Exposed as `--mode vote --choices "A,B,C"` / `Council.vote()` / `vote_sync()`. Distinct from the verdict's `provider_votes`, which cluster free-form stances with evidence (§4a); `vote` tallies a fixed ballot. |
-| **elite** | **IMPLEMENTED, UNRELEASED** | Quality-first decision protocol: independent fan-out → concurrent council-wide claim audits → concurrent member revisions → existing synthesis and canonical verdict. Every member phase has a fixed three-success gate. Exposed in source as `--mode elite` / `Council.elite()` / `elite_sync()`; buffered only, no streaming. |
+| **vote** | **BUILT (v1.2, CAC-09 / #3)** | Constrained-choice ballot: each member sees a fixed labelled option set (`A, B, C, …`) and answers with one letter; responses are tallied to a plurality `winner` (or `split` on a tie) on `result.vote` (`VoteResult`). Exposed as `--mode vote --choices "A,B,C"` / `Council.vote()` / `vote_sync()`. Distinct from the verdict's `provider_votes`, which cluster free-form stances with evidence (§4a); `vote` tallies a fixed ballot. |
+| **elite** | **BUILT (v1.2)** | Quality-first decision protocol: independent fan-out → concurrent council-wide claim audits → concurrent member revisions → existing synthesis and canonical verdict. Every member phase has a fixed three-success gate. Exposed as `--mode elite` / `Council.elite()` / `elite_sync()`; buffered only, no streaming. |
 
 **Mode algorithms (as built).** The step-by-step "as built" prose for synthesize / raw /
 debate / adversarial / vote (fan-out + partial-results, peer anonymization + drop-out, proposer →
@@ -254,11 +255,11 @@ verdict appears identically in the buffered result and the streaming `done` even
 `secret_safety` stamp is re-run over the final content. **Cost:** default-on adds one initial
 synthesizer call and at most one schema-repair retry; the opt-out exists for cost-sensitive callers.
 
-**Verdict scope across modes (deliberate).** Posture: *manifest everywhere, clustering verdict only where unambiguously additive.* The manifest rides on all five released modes and on source-only Elite. The clustering verdict runs on `synthesize`/`ask` and on **completed Elite runs after synthesis of the revised answers**; it is deferred on `debate`/`vote` and intentionally not layered onto `adversarial`, which already emits a judge verdict. An incomplete Elite run has no synthesis or verdict.
+**Verdict scope across modes (deliberate).** Posture: *manifest everywhere, clustering verdict only where unambiguously additive.* The manifest rides on all six modes. The clustering verdict runs on `synthesize`/`ask` and on **completed Elite runs after synthesis of the revised answers**; it is deferred on `debate`/`vote` and intentionally not layered onto `adversarial`, which already emits a judge verdict. An incomplete Elite run has no synthesis or verdict.
 
 ### ModelHarnessManifest — first-class, secret-free
 The `ModelHarnessManifest` (`manifest.py`) rides on every `CouncilResult` — *not* behind a debug
-flag, and now a **true invariant** enforced at one chokepoint: all five released modes plus source-only Elite funnel through
+flag, and now a **true invariant** enforced at one chokepoint: all six modes funnel through
 `Council._cached_run` → `_ensure_manifest`, which attaches the manifest on every returned result
 — including `debate`/`adversarial`/`vote` (built in `modes.py`), the zero-members early return,
 and cache hits (synthesize/raw builds its own richer one earlier). Pinned by
@@ -327,12 +328,12 @@ consumers. The end-to-end flow — `CLI/Library → Council → call_model → a
 
 | Module | Responsibility |
 |--------|----------------|
-| `council.py` | `Council` — primary importable entry point. Resolves names, partitions members, and exposes two reusable primitives: `fan_out` (the single concurrent + partial-failure call loop) and `synthesize_blocks` (the single synthesizer/judge call path). Hosts the async/sync APIs for five released modes plus unreleased `elite`/`elite_sync`. Every source mode funnels through `_cached_run`; completed Elite runs synthesize revisions and then use `_apply_verdict`. |
+| `council.py` | `Council` — primary importable entry point. Resolves names, partitions members, and exposes two reusable primitives: `fan_out` (the single concurrent + partial-failure call loop) and `synthesize_blocks` (the single synthesizer/judge call path). Hosts the async/sync APIs for all six modes. Every mode funnels through `_cached_run`; completed Elite runs synthesize revisions and then use `_apply_verdict`. |
 | `verdict.py` | Public verdict/member Pydantic types (`CouncilVerdict`, `CouncilPosition`, `CouncilConflict`, `ProviderVote`, `MinorityReport`) + the LCD JSON Schemas (`verdict_json_schema`/`member_answer_json_schema`/`verdict_extraction_json_schema`) usable across all three native structured-output surfaces; `VERDICT_SCHEMA_VERSION`. |
 | `agreement.py` | Deterministic consensus: `consensus_score` (`position_cluster_ratio_v1` — largest cluster / positioned members; `None` for N<2) + `consensus_label` buckets. Pure arithmetic, no `difflib`, never LLM-emitted. |
 | `verdict_synthesis.py` | `extract_verdict` engine: one initial extraction call and at most one repair (clusters stances, never emits a number), native `output_contract` enforcement + prompt-level fallback, validate → repair-once → graceful `verdict=None`; the three verdict-absent reasons; provenance on every return path. |
 | `manifest.py` | `ModelHarnessManifest` (first-class on every result), phased `ProviderExecutionReceipt`/`ProviderSkip`/`VerdictExtraction`, and `scan_for_secret_material()` → `secret_safety` stamp. No key values; unknown `estimated_cost` remains `None`. |
-| `modes.py` | Deliberation orchestration: `run_debate`, `run_adversarial`, `run_vote`, and unreleased `run_elite` (three gated member phases). Built on `Council.fan_out` + `synthesize_blocks`. |
+| `modes.py` | Deliberation orchestration: `run_debate`, `run_adversarial`, `run_vote`, and `run_elite` (three gated member phases). Built on `Council.fan_out` + `synthesize_blocks`. |
 | `prompts.py` | Role/template strings for debate, adversarial, vote, and Elite claim-audit/revision prompts. Elite panel text uses stable Model A/B/C aliases and answer ids, never provider identities. |
 | `providers.py` | `call_model` (+ `call_model_stream`) — the single async call path: resolve adapter, read key *by name at call time*, call adapter+transport (with an optional `output_contract`), parse, capture latency/usage/redacted-error into a `ModelAnswer`; never raises for provider-side failures. |
 | `transport.py` | The single async network boundary: `post_json` (buffered) + `stream_sse` (issue #7) — the only two httpx call sites in the highway. |
@@ -382,10 +383,13 @@ Condensed history (v0.x mode-detail archived per §4, per-release changelog in `
   `conflicts`/`provider_votes`/`minority_reports` + first-class `manifest`; deterministic
   `position_cluster_ratio_v1` consensus; native + fallback structured output across
   OpenAI/Anthropic/Gemini; the verdict-optional rule; verdict default-on with
-  `Council(extract_verdict=False)` opt-out; the auditable `manifest` made a true
-  every-mode invariant (one chokepoint). A constrained-choice **`vote` mode** shipped
-  (CAC-09 / #3) — `--mode vote --choices` — distinct from the verdict's `provider_votes`.
-  Full detail in §4a.
+  `Council(extract_verdict=False)` opt-out. Full detail in §4a.
+- **v1.2 (quality-first protocol + evaluation guard):** released Elite with three-success
+  phase gates, execution receipts, and readiness tri-state; shipped constrained-choice `vote`;
+  made the auditable manifest a true every-mode invariant at one chokepoint; and added the
+  sequential paid-exploratory evaluation runner with dry-run default, exact USD 10 cap,
+  authenticated checkpoints, bounded price estimates, and replay. The live smoke establishes
+  operational correctness only.
 
 ---
 
@@ -410,8 +414,8 @@ council shipped in v1.1** (§4a — the wedge).
 
 The revised thesis is a **source-grounded, execution-traceable decision record with
 empirically proven quality**. Current answer IDs identify model outputs, not external evidence;
-source-auditable language is therefore too broad until source grounding ships. Elite remains
-implemented but unreleased in source.
+source-auditable language is therefore too broad until source grounding ships. Elite shipped in
+v1.2, but its decision-quality advantage remains unproven pending H1 evidence.
 
 H1 also includes an opt-in live runner that is **paid exploratory only**. Dry-run is the default;
 paid execution requires `--execute`, exact `--approve-spend-usd 10.00`, and an owner-only
@@ -486,7 +490,7 @@ the execution-traceable verdict, the owned provider layer, the no-aggregator pos
 
 **Open:** none currently.
 
-2. ~~**`vote` answer schema.**~~ **RESOLVED in v1.1** by *two* complementary deliveries: (a) a
+2. ~~**`vote` answer schema.**~~ **RESOLVED in v1.2** by *two* complementary deliveries: (a) a
    real constrained-choice **`vote` mode** (CAC-09 / #3) — fixed labelled ballot, plurality
    winner/split on `result.vote`; and (b) the verdict's structured `provider_votes`, which
    cluster free-form stances with evidence (LCD JSON Schemas + native structured output, §4a).

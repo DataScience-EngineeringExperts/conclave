@@ -1,17 +1,17 @@
 # =============================================================================
-# Release & publish workflow (conclave v1.0 — distribution + release-eng)
+# Release & publish workflow (conclave — distribution + release engineering)
 #
-# !!! INERT UNTIL CONFIGURED — SAFE TO MERGE !!!
+# !!! RELEASE-TRIGGERED; FAILS CLOSED ON PUBLISHER MISMATCH !!!
 #
 # This workflow does NOTHING until BOTH of the following are true:
 #   (a) a GitHub *Release* is published (a pushed git tag ALONE does not trigger
 #       it — the trigger is `release: published`, the explicit human gesture), AND
-#   (b) the `conclave-cli` PyPI project + its OIDC Trusted Publisher are configured
-#       by the owner (see RELEASING.md "One-time PyPI setup").
+#   (b) the `conclave-cli` PyPI project trusts this organization repository and
+#       workflow through OIDC (see RELEASING.md "Trusted Publisher prerequisite").
 #
 # Until (a) AND (b) hold, merging this file changes nothing at runtime: no tag is
-# cut here, no version is bumped here, nothing is published here. Cutting v1.0.0 is
-# then a single tag + GitHub Release away (the full runbook is in RELEASING.md).
+# cut here, no version is bumped here, and nothing is published here. The full
+# operator runbook is in RELEASING.md.
 #
 # What it does WHEN a Release is published:
 #   build         — builds sdist + wheel with `python -m build`, uploads them as
@@ -89,7 +89,8 @@ jobs:
   # No API token, no stored secret: pypa/gh-action-pypi-publish mints a short-lived
   # OIDC token from this job's `id-token: write` and exchanges it for a PyPI upload
   # token. PyPI must have a Trusted Publisher (pending or active) for `conclave-cli`
-  # pointing at owner=ernestprovo23, repo=conclave, workflow=release.yml — see
+  # pointing at owner=DataScience-EngineeringExperts, repo=conclave,
+  # workflow=release.yml — see
   # RELEASING.md. Until that exists, this job fails CLOSED (publish denied); it
   # never falls back to anything insecure.
   #
@@ -154,7 +155,7 @@ jobs:
           # Self-check: verify what we just signed against THIS workflow's own
           # identity so a broken run never publishes a bad bundle.
           verify: true
-          verify-cert-identity: "https://github.com/ernestprovo23/conclave/.github/workflows/release.yml@${{ github.ref }}"
+          verify-cert-identity: "https://github.com/DataScience-EngineeringExperts/conclave/.github/workflows/release.yml@${{ github.ref }}"
           verify-oidc-issuer: "https://token.actions.githubusercontent.com"
           # release-signing-artifacts defaults to true: on a release event the
           # .sigstore bundles are attached to the Release assets automatically.

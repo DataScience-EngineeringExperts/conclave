@@ -1,12 +1,14 @@
 """conclave command-line interface.
 
-Two commands:
+Three commands:
 
 * ``conclave ask "<prompt>" --council grok,gemini,claude --mode synthesize``
   Modes: ``synthesize`` (default), ``raw``, ``debate`` (``--rounds N``),
   ``adversarial`` (``--proposer NAME``), ``vote``, and ``elite``.
 * ``conclave providers`` -- show which providers currently have a key (without
   ever printing key values).
+* ``conclave eval`` -- plan or replay offline studies and run the separately gated
+  paid-exploratory live lane.
 """
 
 from __future__ import annotations
@@ -510,7 +512,7 @@ def ask(
         ),
     ),
 ) -> None:
-    """Fan PROMPT out to a council and synthesize, debate, or adversarially review.
+    """Run one of six council modes over PROMPT: synthesize, raw, debate, adversarial, vote, or elite.
 
     Exit codes:
 

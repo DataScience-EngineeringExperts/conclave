@@ -298,6 +298,13 @@ def test_ask_help_lists_elite_mode():
     assert "elite" in result.output
 
 
+def test_ask_help_describes_all_six_modes():
+    """The command summary must not describe only the original mode subset."""
+    result = runner.invoke(cli.app, ["ask", "--help"])
+    assert result.exit_code == 0
+    assert "Run one of six council modes" in result.output
+
+
 def test_unresolved_council_exits_two(patch_cli_config):
     """Usage error (empty council selector resolves to zero members) -> exit 2."""
     result = runner.invoke(cli.app, ["ask", "hello", "--council", " , "])

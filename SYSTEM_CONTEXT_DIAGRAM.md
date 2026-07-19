@@ -6,7 +6,7 @@ environment-variable keys feed in, how requests reach the nine first-class provi
 conclave's own **provider highway** (an httpx transport + per-provider adapter registry — no
 LLM-SDK dependency), how the v1.1 **verdict pipeline** turns the member answers into a
 structured, agreement-scored, **execution-traceable** verdict plus a redacted execution manifest, and
-how the implemented-but-unreleased **Elite Decision Protocol** adds gated claim audit and
+how the v1.2 **Elite Decision Protocol** adds gated claim audit and
 revision before that verdict. It also shows where **mcp-warden** sits as a dev-time consumer.
 The DSE-708 edge includes offline replay plus an opt-in, capped paid exploratory path.
 
@@ -32,7 +32,7 @@ flowchart TB
         lib["Library API · from conclave import Council (__init__.py)"]
         council["Council orchestrator<br/>fan_out · synthesize_blocks · skip-no-key (council.py)"]
         modes["Deliberation modes<br/>debate · adversarial · vote (modes.py + prompts.py)"]
-        elite["Elite (UNRELEASED)<br/>initial → claim audit → revision<br/>fixed 3-success gate each phase"]
+        elite["Elite (v1.2)<br/>initial → claim audit → revision<br/>fixed 3-success gate each phase"]
         evalcli["Experimental eval CLI (DSE-708)<br/>offline replay · live dry-run<br/>gated paid exploratory execute"]
         evalartifacts["Versioned eval artifacts<br/>manifest · run · grader set + separate map<br/>exploratory report"]
         liveguard["Live guard<br/>exact USD 10.00 approval · owner-only seal key<br/>HMAC checkpoint · one in flight · no-repeat resume"]
@@ -168,14 +168,14 @@ flowchart TB
   (`manifest.py`) rides on **every** result — first-class, not a debug flag — recording which
   model + prompt version produced the clustering (provenance) and stamping `secret_safety`
   only after the serialized manifest is scanned clean. This is enforced as a true invariant at
-  the single chokepoint `Council._cached_run` → `_ensure_manifest`: all five released modes
-  (`synthesize`, `raw`, `debate`, `adversarial`, `vote`) plus source-only `elite` funnel through
+  the single chokepoint `Council._cached_run` → `_ensure_manifest`: all six modes
+  (`synthesize`, `raw`, `debate`, `adversarial`, `vote`, `elite`) funnel through
   it, so a result can
   never escape without a manifest — including the zero-members early return and cache hits.
   A verdict is *optional*: open-ended
   prompts, fewer than two responding members, or extraction failure leave `verdict = None`
   with the synthesis and member answers intact and the reason recorded on the manifest.
-- **Elite is quality-first and unreleased.** Its three concurrent member phases are independent
+- **Elite is quality-first and released in v1.2.** Its three concurrent member phases are independent
   answers, council-wide anonymized claim audits, and member revisions. Answer IDs trace outputs
   within the run; they are not external citations. Each phase requires
   three successful responders. Larger councils may lose members and continue while three remain;

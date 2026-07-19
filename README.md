@@ -12,10 +12,10 @@ It is **library-first** (the CLI is a thin shell over the same `Council` you imp
 returns **structured results** (per-model latency, token usage, and error capture), and is
 **partial-failure resilient** — one provider erroring never aborts the run. Keys are
 **bring-your-own**, referenced by environment-variable *name* only — never stored or
-logged. Published v1.1 ships five modes: **synthesize** (merge answers into one), **raw** (no merge),
+logged. Published v1.2 ships six modes: **synthesize** (merge answers into one), **raw** (no merge),
 **debate** (multi-round, members revise after seeing peers' anonymized answers), and
-**adversarial** (propose → refute → verdict), and **vote** (fixed-choice tally). This source
-branch also implements the unreleased **elite** quality-first claim-audit and revision mode.
+**adversarial** (propose → refute → verdict), **vote** (fixed-choice tally), and **elite**
+(quality-first independent answers → claim audits → revisions → verdict).
 conclave is intentionally lightweight — a small council primitive, not an agent framework.
 
 **The v1.1 wedge — the execution-traceable council.** Decision/review synthesis runs can yield
@@ -25,8 +25,8 @@ execution-traceable**: a
 a deterministic `consensus_score` (arithmetic over the model's clustering, *never* an
 LLM-emitted number); and a redacted `ModelHarnessManifest` recording how the run executed and
 which model produced the disagreement analysis. The verdict is **default-on**, and the manifest
-rides on **every** released-mode result; source-only Elite results carry it too. A constrained-choice **`vote` mode** (`--mode vote --choices ...`) also
-shipped in v1.1 (CAC-09 / #3) — distinct from the verdict's `provider_votes`, which score
+rides on **every** mode result, including Elite. A constrained-choice **`vote` mode** (`--mode vote --choices ...`) also
+shipped in v1.2 (CAC-09 / #3) — distinct from the verdict's `provider_votes`, which score
 free-form agreement rather than tally a fixed ballot.
 
 See the canonical spec and design docs:
@@ -126,7 +126,7 @@ conclave ask "Defend event sourcing for this ledger." \
 conclave ask "Which datastore for this workload?" \
   -c grok,gemini,claude --mode vote --choices "Postgres,DynamoDB,MongoDB"
 
-# Elite (unreleased): independent answers -> claim audits -> revisions -> verdict
+# Elite: independent answers -> claim audits -> revisions -> verdict
 conclave ask "Should we adopt a service mesh for 8 services?" \
   -c grok,gemini,claude --mode elite
 
@@ -134,17 +134,14 @@ conclave ask "Should we adopt a service mesh for 8 services?" \
 conclave ask "..." -c grok,perplexity --mode debate --json
 ```
 
-Published v1.1 mode flags are `--mode synthesize|raw|debate|adversarial|vote`; this source
-branch additionally exposes `--mode elite`. `--rounds N`
+Published v1.2 mode flags are `--mode synthesize|raw|debate|adversarial|vote|elite`. `--rounds N`
 (default 2) is the *maximum* round count for `debate`; `--converge-threshold FLOAT`
 (or `--converge`/`--no-converge`) optionally stops a debate early once answers
 stabilize round-over-round (off by default — `--rounds` runs in full). `--proposer
 NAME` (default: first member) applies to `adversarial`. `--choices "A,B,C"` (two or
 more) is required for `vote`. `--synthesizer/-s` overrides the synthesizer *and* the
-adversarial judge and, on this source branch, Elite's final synthesizer. Every released mode's
-result carries the auditable `ModelHarnessManifest`; source-only Elite results do too. Elite is
-currently **unreleased**; use it from this source branch until
-a future release explicitly includes it.
+adversarial judge and Elite's final synthesizer. Every mode's result carries the auditable
+`ModelHarnessManifest`.
 
 `--council` accepts either a comma-separated list of friendly names or the name
 of a council defined in your config (see below). The built-in `default` council
@@ -200,7 +197,7 @@ for answer in result.answers:
 print("SYNTHESIS:\n", result.synthesis)
 ```
 
-### Elite Decision Protocol (unreleased)
+### Elite Decision Protocol
 
 Elite is the quality-first path for consequential decisions. It trades latency and provider
 spend for a stronger answer: three concurrent member phases, followed by conclave's existing

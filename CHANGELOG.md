@@ -7,13 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-18
+
 ### Added
 
-- **Elite Decision Protocol (unreleased).** A quality-first `elite` mode for consequential
+- **Elite Decision Protocol.** A quality-first `elite` mode for consequential
   decisions: independent member answers → concurrent council-wide claim audits → concurrent
   member revisions → the existing synthesis and canonical execution-traceable verdict. It is available
-  through `--mode elite`, `Council.elite()`, and `elite_sync()` in source; no version, tag, or
-  package publication is claimed here.
+  through `--mode elite`, `Council.elite()`, and `elite_sync()`.
+- **Constrained-choice vote mode.** `--mode vote --choices "A,B,C"`, `Council.vote()`,
+  and `vote_sync()` collect a fixed labelled ballot and return a plurality winner or split.
+  This is complementary to verdict `provider_votes`, which cluster free-form stances.
 - **Fixed three-success phase gate.** Each of Elite's `initial`, `critique`, and `revision`
   phases requires three successful responders. Larger councils may survive partial failures
   while three remain. A failed gate stops later calls and returns an incomplete result with a
@@ -43,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **OpenAI strict verdict extraction.** The extraction schema now requires every declared
+  object property, excludes engine-computed per-conflict consensus and optional vote confidence,
+  and represents semantic optionals with honest empty values. Frozen replay fixtures recursively
+  validate recorded verdict payloads against the exact extraction contract.
+
 - **`ModelHarnessManifest` now rides on *every* mode's result — a true invariant.**
   The auditable manifest was documented as first-class on every `CouncilResult`, but
   `debate`, `adversarial`, and `vote` built their result directly in `modes.py` and
@@ -58,10 +67,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `synthesize`/`ask` only and is intentionally not layered onto `adversarial` (which
   already emits a judge verdict) — see PDD §4a.
 
+### Changed
+
+- **Organization release identity.** Package project URLs, release signing identity, security
+  advisory link, and operator runbook now target
+  `DataScience-EngineeringExperts/conclave`. PyPI Trusted Publishing must trust that exact
+  organization repository and `release.yml`; publishing continues to fail closed on mismatch.
+- **Complete CLI mode help.** `conclave ask --help` now describes all six published modes,
+  and the module overview includes the `eval` command.
+
 ### Documentation
 
 - Added Elite CLI/library examples and reconciled the PDD, system diagram, README, and index
-  around its unreleased status, fixed gate, partial-failure behavior, phased receipts, and
+  around its release status, fixed gate, partial-failure behavior, phased receipts, and
   latency/cost tradeoff.
 - Reconciled `README.md`, `SYSTEM_CONTEXT_DIAGRAM.md`, and the PDD so the
   manifest-on-every-result claim is now accurate, and documented the constrained-choice
@@ -124,7 +142,7 @@ reproducible arithmetic over the model's clustering — never an LLM-emitted fig
 
 - **`vote` (council issue #3):** at 1.1.0 the verdict's `provider_votes` +
   `consensus_label`/`consensus_score` were considered to subsume it. **Superseded post-1.1.0**
-  — a real constrained-choice `vote` mode later shipped (CAC-09 / #3; see `[Unreleased]`),
+  — a real constrained-choice `vote` mode later shipped (CAC-09 / #3; see `[1.2.0]`),
   complementary to `provider_votes`: a fixed ballot vs. clustered free-form stances.
 
 ## [1.0.0] - 2026-06-14
@@ -199,6 +217,8 @@ on top of v0.3.0.
   exit-code contract and httpx client lifecycle hardening; transport/CLI/logging
   test backfill; first public release with community files.
 
-[1.1.0]: https://github.com/ernestprovo23/conclave/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/ernestprovo23/conclave/compare/v0.3.0...v1.0.0
-[0.3.0]: https://github.com/ernestprovo23/conclave/releases/tag/v0.3.0
+[Unreleased]: https://github.com/DataScience-EngineeringExperts/conclave/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/DataScience-EngineeringExperts/conclave/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/DataScience-EngineeringExperts/conclave/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/DataScience-EngineeringExperts/conclave/compare/v0.3.0...v1.0.0
+[0.3.0]: https://github.com/DataScience-EngineeringExperts/conclave/releases/tag/v0.3.0

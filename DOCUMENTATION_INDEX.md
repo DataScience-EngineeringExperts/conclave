@@ -6,7 +6,7 @@ context diagram, and this index linking everything together. The Product Design 
 the canonical authority spec on top of those.
 
 - **Repo:** `/Users/ernestprovo/dev/conclave/`
-- **Version:** 1.1.0 · **License:** MIT
+- **Version:** 1.2.0 · **License:** MIT
 - **Last updated:** 2026-07-18
 
 ---
@@ -15,7 +15,7 @@ the canonical authority spec on top of those.
 
 | # | Doc | Path | Purpose |
 |---|-----|------|---------|
-| 1 | **README** (project overview) | [`README.md`](README.md) | Install, BYO-keys, five released-mode CLI/library quickstart, source-only Elite, and the gated paid exploratory eval lane. |
+| 1 | **README** (project overview) | [`README.md`](README.md) | Install, BYO-keys, six-mode CLI/library quickstart including Elite, and the gated paid exploratory eval lane. |
 | 2 | **System Context Diagram** | [`SYSTEM_CONTEXT_DIAGRAM.md`](SYSTEM_CONTEXT_DIAGRAM.md) | Mermaid context for the provider highway, released/source modes, verdict pipeline, eval live guard, manifest receipts, and mcp-warden boundary. |
 | 3 | **Documentation Index** | [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md) | This file. Master map of all docs + source layout. |
 
@@ -23,7 +23,7 @@ the canonical authority spec on top of those.
 
 | Doc | Path | Purpose |
 |-----|------|---------|
-| **Product Design Document** | [`docs/PRODUCT_DESIGN_DOCUMENT.md`](docs/PRODUCT_DESIGN_DOCUMENT.md) | **Canonical** product spec: released/source modes, the v1.1 execution-traceable verdict, manifest, paid exploratory evaluation boundary, architecture, and roadmap. **When docs disagree, the PDD wins.** |
+| **Product Design Document** | [`docs/PRODUCT_DESIGN_DOCUMENT.md`](docs/PRODUCT_DESIGN_DOCUMENT.md) | **Canonical** product spec: six released modes, the v1.1 execution-traceable verdict, v1.2 Elite and evaluation guard, manifest, architecture, and roadmap. **When docs disagree, the PDD wins.** |
 
 ## Product plans
 
@@ -46,9 +46,9 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 
 | Module | Path | Responsibility |
 |--------|------|----------------|
-| Package API | [`src/conclave/__init__.py`](src/conclave/__init__.py) | Public exports include `Council`, result types, verdict/manifest surface, and unreleased `EliteResult` plus Elite protocol constants. |
-| Council | [`src/conclave/council.py`](src/conclave/council.py) | Five released async/sync modes plus source-only Elite; Elite keeps protocol completion separate from `ready`/`not_ready`/`indeterminate` decision readiness. |
-| Modes | [`src/conclave/modes.py`](src/conclave/modes.py) | Debate, adversarial, vote, and unreleased Elite orchestration; Elite gates initial/claim-audit/revision at three successes. |
+| Package API | [`src/conclave/__init__.py`](src/conclave/__init__.py) | Public exports include `Council`, result types, verdict/manifest surface, `EliteResult`, and Elite protocol constants. |
+| Council | [`src/conclave/council.py`](src/conclave/council.py) | Six released async/sync modes; Elite keeps protocol completion separate from `ready`/`not_ready`/`indeterminate` decision readiness. |
+| Modes | [`src/conclave/modes.py`](src/conclave/modes.py) | Debate, adversarial, vote, and Elite orchestration; Elite gates initial/claim-audit/revision at three successes. |
 | Verdict types | [`src/conclave/verdict.py`](src/conclave/verdict.py) | Public verdict/member Pydantic types (`CouncilVerdict`, `CouncilPosition`, `CouncilConflict`, `ProviderVote`, `MinorityReport`) + the LCD JSON Schemas (`verdict_json_schema`/`member_answer_json_schema`/`verdict_extraction_json_schema`) usable across all three native structured-output surfaces; `VERDICT_SCHEMA_VERSION`/`VERDICT_EXTRACTION_PROMPT_VERSION`. |
 | Agreement | [`src/conclave/agreement.py`](src/conclave/agreement.py) | Deterministic consensus: `consensus_score` (`position_cluster_ratio_v1` — largest cluster / positioned members; `None` for N<2) + `consensus_label` buckets. Pure arithmetic, no `difflib`, never LLM-emitted. |
 | Verdict synthesis | [`src/conclave/verdict_synthesis.py`](src/conclave/verdict_synthesis.py) | `extract_verdict` engine: one initial extraction call and at most one repair, native `output_contract` enforcement + prompt-level fallback, validate → repair-once → graceful `verdict=None`; the three verdict-absent reasons; provenance on every return path. |
@@ -65,7 +65,7 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 | Registry | [`src/conclave/registry.py`](src/conclave/registry.py) | Friendly-name → model-id defaults; provider → env-var mapping; key **presence** logic (never values). |
 | Config | [`src/conclave/config.py`](src/conclave/config.py) | Loads/merges `~/.conclave/config.yml` over defaults; resolves model ids and named/CSV councils; parses the `endpoints:` section (custom OpenAI-compatible providers). |
 | Models | [`src/conclave/models.py`](src/conclave/models.py) | Stable Pydantic contract, including `EliteResult` phase artifacts and backward-compatible `CouncilResult.elite`. |
-| CLI | [`src/conclave/cli.py`](src/conclave/cli.py) | Five released `conclave ask` modes plus source-only Elite and `providers`; Elite exits 1 unless decision readiness is `ready`, emits full JSON before failure, and rejects streaming. |
+| CLI | [`src/conclave/cli.py`](src/conclave/cli.py) | Six released `conclave ask` modes plus `providers`; Elite exits 1 unless decision readiness is `ready`, emits full JSON before failure, and rejects streaming. |
 | Experimental evals | [`src/conclave/evals/`](src/conclave/evals/) | Versioned DSE-708 planning, strict replay, failure-inclusive running, blinding, scoring, and exploratory reports; no product-quality claim. |
 | Eval CLI | [`src/conclave/eval_cli.py`](src/conclave/eval_cli.py) | Offline `plan/run/blind/report` plus `eval live`; paid execution requires `--execute`, exact USD 10.00 approval, and an owner-only `--checkpoint-seal-key-file`. |
 | Logging | [`src/conclave/logging.py`](src/conclave/logging.py) | Logger factory; stderr; verbosity via `CONCLAVE_LOG_LEVEL` (default `WARNING`). |
@@ -97,7 +97,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 |------|------|---------|
 | Packaging | [`pyproject.toml`](pyproject.toml) | hatchling build, deps (httpx, pydantic, rich, typer, pyyaml — no LLM SDK), dev extras, console script, pytest config. License: MIT. **PyPI distribution name `conclave-cli`** (the name `conclave` is an unrelated project); command + import stay `conclave`. |
 | Release runbook | [`RELEASING.md`](RELEASING.md) | Operator runbook: one-time PyPI OIDC Trusted-Publisher setup for `conclave-cli`, cut-a-release checklist (bump→tag→publish Release), post-release verification (Sigstore bundle, PEP 740 attestations), rollback/yank. |
-| Changelog | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog history. `[Unreleased]` includes Elite and does not claim a version or publication. |
+| Changelog | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog history through v1.2.0. |
 | Dev lockfile | [`requirements-dev.lock`](requirements-dev.lock) | Hash-pinned dev + runtime tree for reproducible installs/CI. Regenerate via `uv pip compile --universal --generate-hashes --python-version 3.11 --extra dev pyproject.toml -o requirements-dev.lock`. |
 | License | [`LICENSE`](LICENSE) | MIT License. Copyright (c) 2026 Ernest Provo. Matches the `pyproject.toml` license field. |
 | Security policy | [`SECURITY.md`](SECURITY.md) | BYO-keys vulnerability reporting policy: how to report, scope, and the key-handling guarantees consumers can rely on. |
@@ -116,6 +116,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 
 | Date | Change |
 |------|--------|
+| 2026-07-18 | Released v1.2.0: Elite, constrained-choice vote, every-mode manifest hardening, the capped paid-exploratory evaluation runner, strict OpenAI-compatible verdict extraction, and org-repository release identities. The live lane remains correctness-only; no quality or efficiency claim. |
 | 2026-07-18 | Implemented the sequential paid exploratory runner: default dry-run, exact USD 10.00 execute approval, reservation-before-call, one in-flight call, and no-repeat resume. The 24-task fixture remains offline/open-book and is not the paid smoke corpus; the smoke is correctness-only and not decision eligible. |
 | 2026-07-17 | Added the experimental DSE-708 offline evaluation substrate and `conclave eval` artifact workflow; no live study or quality claim. |
 | 2026-07-17 | Reframed the product roadmap around empirically proven decision quality: narrowed current claims to execution traceability, identified answer IDs as internal provenance rather than external evidence, gated Elite merge on H0 correctness, and added H1-H4 evidence, buyer, and outcome gates. |
