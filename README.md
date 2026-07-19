@@ -150,21 +150,22 @@ a future release explicitly includes it.
 of a council defined in your config (see below). The built-in `default` council
 is all known providers.
 
-### Experimental offline evaluation (DSE-708)
+### Experimental evaluation (DSE-708)
 
-The source branch also exposes an H1 evidence harness. It makes no decision-quality claim and
-never calls providers: `run` only validates an existing replay artifact against its frozen
-manifest. Grader output and the restricted blind map must remain separate.
-The open-book 24-task synthetic QA pack and its no-promotion boundary are documented in
-[`studies/elite_qa_v1/README.md`](studies/elite_qa_v1/README.md). Its committed answer keys
-are test fixtures, not access-controlled grader material, so this pack cannot be used for a
-paid or confirmatory study.
+Offline `conclave eval run` validates only a frozen replay artifact and never calls a provider.
+The live lane is **paid exploratory only**. Dry-run is the default; execution requires both `--execute` and exact
+`--approve-spend-usd 10.00`. During execution, one provider call is in flight, a reservation
+is persisted before each call, and resume never repeats an interrupted cell. Outputs stay
+labelled paid exploratory and not decision eligible. The 24-task fixture remains
+offline/open-book and is not the paid smoke corpus. Smoke checks correctness only, not
+efficiency or decision quality; no result supports a product-quality or confirmatory claim.
 
 ```bash
-conclave eval plan tasks.json manifest.json --study-id qa --replicates 2 --seed 19 --max-output-tokens 1200
-conclave eval run manifest.json validated-run.json --replay-artifact recorded-run.json
-conclave eval blind validated-run.json grader.json restricted-map.json --seed 23
-conclave eval report manifest.json validated-run.json judgments.json report.json report.md --bootstrap-seed 29
+conclave eval plan path/tasks.json path/manifest.json --study-id qa --replicates 2 --seed 19 --max-output-tokens 1200
+conclave eval run path/manifest.json path/run.json --replay-artifact path/replay.json
+conclave eval live path/manifest.json path/tasks.json path/prices.json path/run.json path/checkpoint.json path/receipts.json
+conclave eval live path/manifest.json path/tasks.json path/prices.json path/run.json path/checkpoint.json path/receipts.json \
+  --execute --approve-spend-usd 10.00
 ```
 
 Add `--stream` to render member (and synthesizer) tokens live as they arrive

@@ -410,7 +410,13 @@ council shipped in v1.1** (§4a — the wedge).
 The revised thesis is a **source-grounded, execution-traceable decision record with
 empirically proven quality**. Current answer IDs identify model outputs, not external evidence;
 source-auditable language is therefore too broad until source grounding ships. Elite remains
-implemented but unreleased on open PR #51, pending final review and merge.
+implemented but unreleased in source.
+
+H1 also includes an opt-in live runner that is **paid exploratory only**. Dry-run is the default;
+paid execution requires `--execute` and exact `--approve-spend-usd 10.00`. One provider call is
+in flight, its reservation is persisted before each call, and resume never repeats an interrupted
+cell. The 24-task fixture remains offline/open-book and is not the paid smoke corpus.
+The smoke establishes correctness only, not efficiency or decision quality; its artifacts remain not decision eligible and cannot change a confirmatory gate.
 
 The canonical roadmap is
 [`docs/plans/2026-07-17-decision-quality-roadmap.md`](plans/2026-07-17-decision-quality-roadmap.md):

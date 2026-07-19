@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Version-aware cache identity.** Cache keys cover the resolved roster, generation and mode
   settings, extraction behavior, sanitized endpoint routing, optional source-bundle digest, and
   cache/protocol/prompt/schema versions. Old incompatible envelopes are safe misses.
+- **Capped live evaluation runner.** The H1 lane is paid exploratory only and dry-run is the
+  default. Paid execution requires `--execute` plus exact USD 10.00 approval, persists each
+  reservation before allowing one in-flight provider call, and never repeats an interrupted
+  cell on resume. Its outputs are not decision eligible: the smoke verifies correctness only,
+  not efficiency or decision quality; the offline/open-book 24-task fixture remains separate.
 
 ### Fixed
 

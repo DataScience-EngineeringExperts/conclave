@@ -105,3 +105,17 @@ def test_qa_protocol_freezes_open_book_boundary_and_holdout_controls() -> None:
     assert "eight-token" in preregistration.lower()
     assert "freeze" in preregistration.lower()
     assert "unsealing" in preregistration.lower()
+
+    product_docs = " ".join(
+        " ".join((ROOT / path).read_text(encoding="utf-8").lower().split())
+        for path in (
+            "README.md",
+            "SYSTEM_CONTEXT_DIAGRAM.md",
+            "DOCUMENTATION_INDEX.md",
+            "docs/PRODUCT_DESIGN_DOCUMENT.md",
+            "CHANGELOG.md",
+        )
+    )
+    assert (
+        "24-task fixture remains offline/open-book and is not the paid smoke corpus" in product_docs
+    )

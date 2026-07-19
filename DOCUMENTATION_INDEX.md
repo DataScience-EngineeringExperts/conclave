@@ -15,15 +15,15 @@ the canonical authority spec on top of those.
 
 | # | Doc | Path | Purpose |
 |---|-----|------|---------|
-| 1 | **README** (project overview) | [`README.md`](README.md) | Install, BYO-keys, five released-mode CLI/library quickstart, and the source-only unreleased Elite protocol. |
-| 2 | **System Context Diagram** | [`SYSTEM_CONTEXT_DIAGRAM.md`](SYSTEM_CONTEXT_DIAGRAM.md) | Mermaid context for the provider highway, five released modes, source-only Elite gated phases, verdict pipeline, phased manifest receipts, and mcp-warden boundary. |
+| 1 | **README** (project overview) | [`README.md`](README.md) | Install, BYO-keys, five released-mode CLI/library quickstart, source-only Elite, and the gated paid exploratory eval lane. |
+| 2 | **System Context Diagram** | [`SYSTEM_CONTEXT_DIAGRAM.md`](SYSTEM_CONTEXT_DIAGRAM.md) | Mermaid context for the provider highway, released/source modes, verdict pipeline, eval live guard, manifest receipts, and mcp-warden boundary. |
 | 3 | **Documentation Index** | [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md) | This file. Master map of all docs + source layout. |
 
 ## Authority spec
 
 | Doc | Path | Purpose |
 |-----|------|---------|
-| **Product Design Document** | [`docs/PRODUCT_DESIGN_DOCUMENT.md`](docs/PRODUCT_DESIGN_DOCUMENT.md) | **Canonical** product spec: five released modes plus implemented-but-unreleased Elite, its fixed three-success phase gate and cost/latency tradeoff, the v1.1 execution-traceable verdict, manifest, architecture, boundaries, and roadmap. **When docs disagree, the PDD wins.** |
+| **Product Design Document** | [`docs/PRODUCT_DESIGN_DOCUMENT.md`](docs/PRODUCT_DESIGN_DOCUMENT.md) | **Canonical** product spec: released/source modes, the v1.1 execution-traceable verdict, manifest, paid exploratory evaluation boundary, architecture, and roadmap. **When docs disagree, the PDD wins.** |
 
 ## Product plans
 
@@ -67,7 +67,7 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 | Models | [`src/conclave/models.py`](src/conclave/models.py) | Stable Pydantic contract, including `EliteResult` phase artifacts and backward-compatible `CouncilResult.elite`. |
 | CLI | [`src/conclave/cli.py`](src/conclave/cli.py) | Five released `conclave ask` modes plus source-only Elite and `providers`; Elite exits 1 unless decision readiness is `ready`, emits full JSON before failure, and rejects streaming. |
 | Experimental evals | [`src/conclave/evals/`](src/conclave/evals/) | Versioned DSE-708 planning, strict replay, failure-inclusive running, blinding, scoring, and exploratory reports; no product-quality claim. |
-| Eval CLI | [`src/conclave/eval_cli.py`](src/conclave/eval_cli.py) | Offline-only `conclave eval plan/run/blind/report`; `run` validates replay artifacts and cannot call providers. |
+| Eval CLI | [`src/conclave/eval_cli.py`](src/conclave/eval_cli.py) | Offline `plan/run/blind/report` plus `eval live`; live defaults to dry-run and paid execution requires `--execute` with exact USD 10.00 approval. |
 | Logging | [`src/conclave/logging.py`](src/conclave/logging.py) | Logger factory; stderr; verbosity via `CONCLAVE_LOG_LEVEL` (default `WARNING`). |
 
 ## Tests
@@ -82,7 +82,7 @@ Package root: `src/conclave/` (installed as the `conclave` package; console scri
 | Provider highway tests | [`tests/test_providers.py`](tests/test_providers.py) | `resolve_adapter` (built-in prefixes, per-provider URLs, custom endpoints, unknown-prefix raise), end-to-end `call_model`, and `redact()` (bearer/`sk-`/env-var-value/`x-api-key` scrubbing; pre-redacted provider errors). |
 | Registry/config tests | [`tests/test_registry_config.py`](tests/test_registry_config.py) | Name resolution, key-presence logic, config merge. |
 | CLI tests | [`tests/test_cli.py`](tests/test_cli.py) | Typer `CliRunner`: exit-code contract (0 usable result and ready Elite / 1 zero-usable or non-ready Elite / 2 usage error), `--json` payload + exit code, human renderers per mode, `providers` table never prints secrets, aclose lifecycle. |
-| Eval tests | [`tests/evals/`](tests/evals/) | Frozen matrix, replay fail-closed behavior, runner denominators, blinding, scoring, reporting, and offline CLI. |
+| Eval tests | [`tests/evals/`](tests/evals/) | Frozen matrix, offline replay, live reservation/checkpoint/resume gates, blinding, scoring, reporting, and CLI assertions. |
 | Transport tests | [`tests/test_transport.py`](tests/test_transport.py) | `post_json` via httpx `MockTransport`: success/error-status/non-JSON fallback, timeout & connect/HTTP errors → `TransportError` (key never leaks), client reuse/pooling, aclose idempotency. |
 | Streaming tests | [`tests/test_streaming.py`](tests/test_streaming.py) | Per-adapter SSE via `MockTransport` (openai-compat/anthropic/gemini): incremental chunks + assembled answer == concatenation == buffered result; mid-stream malformed-frame/connection-drop/non-2xx → error set with partial text preserved (never raises); key redaction in stream errors; buffered `ask()` never opens a stream; `Council.ask_stream` interleaving + terminal `done` shape; CLI `--stream` smoke + exit-code contract + debate rejection; `--stream` + cache one-shot replay. |
 | Logging tests | [`tests/test_logging.py`](tests/test_logging.py) | `CONCLAVE_LOG_LEVEL` resolution (default `WARNING`, case-insensitive, unknown → `WARNING`), factory contract, one-shot configuration. |
@@ -116,7 +116,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 
 | Date | Change |
 |------|--------|
-| 2026-07-18 | Added the validated design and TDD plan for a sequential, checkpointed H1 paid-exploratory runner with frozen pricing and a USD 10 hard cap; implementation and provider calls remain pending. |
+| 2026-07-18 | Implemented the sequential paid exploratory runner: default dry-run, exact USD 10.00 execute approval, reservation-before-call, one in-flight call, and no-repeat resume. The 24-task fixture remains offline/open-book and is not the paid smoke corpus; the smoke is correctness-only and not decision eligible. |
 | 2026-07-17 | Added the experimental DSE-708 offline evaluation substrate and `conclave eval` artifact workflow; no live study or quality claim. |
 | 2026-07-17 | Reframed the product roadmap around empirically proven decision quality: narrowed current claims to execution traceability, identified answer IDs as internal provenance rather than external evidence, gated Elite merge on H0 correctness, and added H1-H4 evidence, buyer, and outcome gates. |
 | 2026-07-17 | Documented the implemented-but-unreleased Elite Decision Protocol: fixed three-success gates, initial/claim-audit/revision artifacts, existing final verdict, phased receipts, failure semantics, cost/latency tradeoff, and no streaming. |

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -22,6 +23,7 @@ from conclave.models import ModelAnswer, TokenUsage
 from tests.evals.test_live_runner import _live_inputs
 
 runner = CliRunner()
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _write_json(path, payload) -> None:
@@ -208,6 +210,32 @@ def test_eval_live_requires_execute_and_exact_frozen_spend_approval(
     )
     assert dry_run.exit_code == 0, dry_run.output
     assert provider_calls == 0
+
+
+def test_live_evaluation_docs_preserve_operator_and_claim_boundaries() -> None:
+    docs = {
+        path: " ".join((ROOT / path).read_text(encoding="utf-8").lower().split())
+        for path in (
+            "README.md",
+            "SYSTEM_CONTEXT_DIAGRAM.md",
+            "DOCUMENTATION_INDEX.md",
+            "docs/PRODUCT_DESIGN_DOCUMENT.md",
+            "CHANGELOG.md",
+        )
+    }
+    corpus = " ".join(docs.values())
+
+    assert all("paid exploratory" in text for text in docs.values())
+    assert "paid exploratory only" in corpus
+    assert "dry-run is the default" in corpus
+    assert "--execute" in corpus
+    assert "--approve-spend-usd 10.00" in corpus
+    assert "one provider call is in flight" in corpus
+    assert "reservation is persisted before each call" in corpus
+    assert "resume never repeats an interrupted cell" in corpus
+    assert "correctness only" in corpus
+    assert "not efficiency or decision quality" in corpus
+    assert "not decision eligible" in corpus
 
 
 def test_eval_live_rejects_confirmatory_legacy_or_snapshot_drift(
