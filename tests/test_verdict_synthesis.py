@@ -173,6 +173,26 @@ def test_extraction_schema_is_lcd_compliant():
     assert "allOf" not in serialized
 
 
+def test_extraction_schema_requires_every_declared_object_property() -> None:
+    schema = verdict_extraction_json_schema()
+
+    def assert_strict_objects(node: object) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                assert set(node.get("required", ())) == set(node.get("properties", ()))
+            for value in node.values():
+                assert_strict_objects(value)
+        elif isinstance(node, list):
+            for value in node:
+                assert_strict_objects(value)
+
+    assert_strict_objects(schema)
+    conflict = schema["properties"]["conflicts"]["items"]
+    assert "consensus_score" not in conflict["properties"]
+    vote = schema["properties"]["provider_votes"]["items"]
+    assert "confidence" not in vote["properties"]
+
+
 # --------------------------------------------------------------------------- #
 # Happy path: verdict assembled; consensus recomputed from clustering.
 # --------------------------------------------------------------------------- #

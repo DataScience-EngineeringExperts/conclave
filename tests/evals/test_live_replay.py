@@ -29,6 +29,7 @@ from conclave.evals.replay import (
 )
 from conclave.evals.runner import LIVE_HARD_CAP_USD, run_live_study
 from conclave.providers import call_model
+from conclave.verdict import verdict_extraction_json_schema
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures/evals/live_smoke"
 FAKE_KEY_ENV = "CONCLAVE_FAKE_TEST_KEY"
@@ -40,6 +41,34 @@ def _canonical_bytes(value: object) -> bytes:
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+
+
+def _assert_strict_schema_instance(value: object, schema: dict, path: str = "$") -> None:
+    schema_type = schema.get("type")
+    if schema_type == "object":
+        assert isinstance(value, dict), f"{path} must be an object"
+        properties = schema["properties"]
+        assert set(schema["required"]) <= set(value), f"{path} is missing required fields"
+        if schema.get("additionalProperties") is False:
+            assert set(value) <= set(properties), f"{path} has undeclared fields"
+        for name, item in value.items():
+            _assert_strict_schema_instance(item, properties[name], f"{path}.{name}")
+    elif schema_type == "array":
+        assert isinstance(value, list), f"{path} must be an array"
+        for index, item in enumerate(value):
+            _assert_strict_schema_instance(item, schema["items"], f"{path}[{index}]")
+    elif schema_type == "string":
+        assert isinstance(value, str), f"{path} must be a string"
+    elif schema_type == "boolean":
+        assert isinstance(value, bool), f"{path} must be a boolean"
+    elif schema_type == "number":
+        assert isinstance(value, (int, float)) and not isinstance(value, bool), (
+            f"{path} must be a number"
+        )
+    else:
+        raise AssertionError(f"unsupported fixture schema type at {path}: {schema_type!r}")
+    if "enum" in schema:
+        assert value in schema["enum"], f"{path} is outside its enum"
 
 
 def _deterministic_clock():
@@ -107,6 +136,7 @@ def _fake_delegate():
                     "conflicts": [],
                     "minority_reports": [],
                     "caveats": [],
+                    "dissent_summary": "",
                 },
                 separators=(",", ":"),
                 sort_keys=True,
@@ -177,6 +207,16 @@ async def test_live_smoke_replay_executes_all_conditions_with_zero_network_calls
     )
     base_manifest_hash = hash_study_manifest(manifest)
     assert artifact.base_manifest_hash == base_manifest_hash
+
+    verdict_records = 0
+    for record in artifact.records:
+        messages = record.request["body"].get("messages", ())
+        if not any("verdict extractor" in message.get("content", "") for message in messages):
+            continue
+        verdict_records += 1
+        content = record.response["choices"][0]["message"]["content"]
+        _assert_strict_schema_instance(json.loads(content), verdict_extraction_json_schema())
+    assert verdict_records == len(manifest.frozen_design.rosters)
 
     delegate, delegate_calls = _fake_delegate()
     recorder = RecordingPostJson(delegate, base_manifest_hash=base_manifest_hash)
