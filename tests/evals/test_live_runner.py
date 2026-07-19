@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import multiprocessing
 from collections import Counter
 from decimal import Decimal
 
 import pytest
 
 import conclave.evals.dataset as dataset_module
+import conclave.evals.runner as runner_module
 from conclave.evals.live import (
     CheckpointValidationError,
     build_checkpoint_bindings,
@@ -149,6 +152,54 @@ async def _successful_provider(name, model_id, messages, **kwargs):
     )
 
 
+def _run_live_study_process(
+    manifest,
+    tasks,
+    price_book,
+    checkpoint_path,
+    start_event,
+    lease_held_event,
+    release_event,
+    results,
+) -> None:
+    calls = 0
+
+    async def provider(name, model_id, messages, **kwargs):
+        nonlocal calls
+        del messages, kwargs
+        calls += 1
+        if calls == 1:
+            lease_held_event.set()
+            if not release_event.wait(timeout=10):
+                raise RuntimeError("fixture lease release timed out")
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            answer=f"fixture answer from {name}",
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+
+    if not start_event.wait(timeout=10):
+        results.put(("start_timeout", calls))
+        return
+    try:
+        asyncio.run(
+            run_live_study(
+                manifest=manifest,
+                tasks=tasks,
+                price_book=price_book,
+                checkpoint_path=checkpoint_path,
+                call_model_func=provider,
+            )
+        )
+    except CheckpointValidationError:
+        results.put(("lease_rejected", calls))
+    except BaseException as exc:  # noqa: BLE001 - child reports bounded test status
+        results.put((f"unexpected:{type(exc).__name__}", calls))
+    else:
+        results.put(("completed", calls))
+
+
 @pytest.mark.asyncio
 async def test_live_runner_requires_paid_exploratory_frozen_manifest(tmp_path) -> None:
     provider_calls = 0
@@ -271,6 +322,72 @@ async def test_live_runner_executes_manifest_order_and_builds_complete_study_run
         ).active_cell
         is None
     )
+
+
+def test_live_runner_allows_only_one_process_per_checkpoint(tmp_path) -> None:
+    context = multiprocessing.get_context("fork")
+    tasks, manifest, price_book = _live_inputs()
+    checkpoint_path = tmp_path / "leased-checkpoint.json"
+    start_event = context.Event()
+    lease_held_event = context.Event()
+    release_event = context.Event()
+    results = context.Queue()
+    args = (
+        manifest,
+        tasks,
+        price_book,
+        checkpoint_path,
+        start_event,
+        lease_held_event,
+        release_event,
+        results,
+    )
+    processes = [context.Process(target=_run_live_study_process, args=args) for _ in range(2)]
+    for process in processes:
+        process.start()
+
+    try:
+        start_event.set()
+        assert lease_held_event.wait(timeout=10)
+        rejected = results.get(timeout=10)
+        assert rejected == ("lease_rejected", 0)
+        release_event.set()
+        completed = results.get(timeout=20)
+        assert completed[0] == "completed"
+        assert completed[1] > 0
+    finally:
+        release_event.set()
+        for process in processes:
+            process.join(timeout=10)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+    assert all(process.exitcode == 0 for process in processes)
+
+
+@pytest.mark.asyncio
+async def test_live_runner_fails_closed_when_filesystem_leases_are_unsupported(
+    tmp_path, monkeypatch
+) -> None:
+    tasks, manifest, price_book = _live_inputs()
+    provider_calls = 0
+
+    async def forbidden_provider(*args, **kwargs):
+        nonlocal provider_calls
+        del args, kwargs
+        provider_calls += 1
+        raise AssertionError("unsupported lease platform must fail before provider access")
+
+    monkeypatch.setattr(runner_module, "_fcntl", None, raising=False)
+    with pytest.raises(CheckpointValidationError, match="unsupported"):
+        await run_live_study(
+            manifest=manifest,
+            tasks=tasks,
+            price_book=price_book,
+            checkpoint_path=tmp_path / "unsupported-lease.json",
+            call_model_func=forbidden_provider,
+        )
+    assert provider_calls == 0
 
 
 @pytest.mark.asyncio

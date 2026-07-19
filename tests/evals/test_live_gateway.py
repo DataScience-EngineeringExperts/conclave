@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+import conclave.evals.live as live_module
 from conclave.evals.live import (
     BudgetExceededError,
     GatewayStoppedError,
@@ -218,6 +219,119 @@ async def test_gateway_stops_on_reservation_breach() -> None:
     with pytest.raises(GatewayStoppedError, match="stopped"):
         await client.call(_stage_call(cap=5))
     assert provider_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_gateway_records_actual_cost_when_breach_exceeds_hard_cap() -> None:
+    hard_cap = Decimal("0.000086")
+
+    async def fake_call_model(name, model_id, messages, **kwargs):
+        del messages, kwargs
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            answer="provider exceeded the reservation and hard cap",
+            usage=TokenUsage(prompt_tokens=100, completion_tokens=6, total_tokens=106),
+        )
+
+    client = LiveProviderClient(
+        price_book=_price_book(input_rate="1", output_rate="1"),
+        hard_cap_usd=hard_cap,
+        call_model_func=fake_call_model,
+        checkpoint=lambda pending, receipts: None,
+    )
+
+    with pytest.raises(ReservationBreachError, match="reservation"):
+        await client.call(_stage_call(cap=5))
+
+    receipt = client.receipts[-1]
+    assert receipt.reserved_cost_usd == hard_cap
+    assert receipt.charged_cost_usd == Decimal("0.000106")
+    assert receipt.charged_cost_usd > receipt.reserved_cost_usd
+    assert receipt.charged_cost_usd > hard_cap
+    assert receipt.cost_basis.source == "reported_usage"
+    assert receipt.error_category == "reservation_breach"
+    assert receipt.hard_cap_breached is True
+    assert client.committed_cost_usd == receipt.charged_cost_usd
+
+
+def test_token_usage_rejects_negative_counts() -> None:
+    with pytest.raises(ValidationError):
+        TokenUsage(prompt_tokens=-1, completion_tokens=0, total_tokens=0)
+
+
+@pytest.mark.parametrize(
+    "usage",
+    (
+        TokenUsage.model_construct(prompt_tokens=-1, completion_tokens=1, total_tokens=0),
+        TokenUsage.model_construct(prompt_tokens="malformed", completion_tokens=1, total_tokens=1),
+    ),
+)
+@pytest.mark.asyncio
+async def test_gateway_persists_reconciliation_error_for_malformed_usage(usage) -> None:
+    checkpoints: list[tuple[object | None, tuple[ProviderCallReceipt, ...]]] = []
+
+    async def fake_call_model(name, model_id, messages, **kwargs):
+        del messages, kwargs
+        return ModelAnswer.model_construct(
+            name=name,
+            model_id=model_id,
+            answer="malformed usage fixture",
+            usage=usage,
+            error=None,
+        )
+
+    client = LiveProviderClient(
+        price_book=_price_book(input_rate="1", output_rate="1"),
+        hard_cap_usd=Decimal("1"),
+        call_model_func=fake_call_model,
+        checkpoint=lambda pending, receipts: checkpoints.append((pending, receipts)),
+    )
+
+    with pytest.raises(GatewayStoppedError, match="reconciliation"):
+        await client.call(_stage_call())
+
+    receipt = client.receipts[-1]
+    assert receipt.error_category == "reconciliation_error"
+    assert receipt.outcome == "failed"
+    assert receipt.usage is None
+    assert receipt.charged_cost_usd == receipt.reserved_cost_usd
+    assert receipt.cost_basis.source == "full_reservation"
+    assert client.pending_call is None
+    assert client.stopped is True
+    assert checkpoints[-1] == (None, client.receipts)
+
+
+@pytest.mark.asyncio
+async def test_gateway_persists_reconciliation_error_when_costing_raises(monkeypatch) -> None:
+    async def fake_call_model(name, model_id, messages, **kwargs):
+        del messages, kwargs
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            answer="valid provider response",
+            usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+
+    def broken_costing(price, usage):
+        del price, usage
+        raise ArithmeticError("unbounded internal fixture detail")
+
+    monkeypatch.setattr(live_module, "_reported_usage_cost", broken_costing)
+    client = LiveProviderClient(
+        price_book=_price_book(input_rate="1", output_rate="1"),
+        hard_cap_usd=Decimal("1"),
+        call_model_func=fake_call_model,
+        checkpoint=lambda pending, receipts: None,
+    )
+
+    with pytest.raises(GatewayStoppedError, match="reconciliation"):
+        await client.call(_stage_call())
+
+    receipt = client.receipts[-1]
+    assert receipt.error_category == "reconciliation_error"
+    assert receipt.charged_cost_usd == receipt.reserved_cost_usd
+    assert "unbounded internal fixture detail" not in receipt.model_dump_json()
 
 
 @pytest.mark.asyncio

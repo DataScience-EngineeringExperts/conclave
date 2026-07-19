@@ -18,7 +18,9 @@ from conclave.evals.live import (
     PendingCall,
     ProviderCallCostBasis,
     ProviderCallReceipt,
+    ReservationBreachError,
     create_live_checkpoint,
+    finish_active_cell,
     load_live_checkpoint,
     recover_interrupted_checkpoint,
     start_active_cell,
@@ -286,6 +288,43 @@ async def test_resume_charges_pending_reservation_and_never_repeats_interrupted_
     assert resumed.receipts[-1].cost_basis.source == "full_reservation"
 
 
+@pytest.mark.asyncio
+async def test_checkpoint_persists_honest_hard_cap_breach_evidence(tmp_path) -> None:
+    hard_cap = Decimal("0.000104")
+    bindings = _bindings(hard_cap_usd=hard_cap)
+    path = tmp_path / "hard-cap-breach.json"
+    state = start_active_cell(create_live_checkpoint(bindings=bindings), planned_run_id=RUN_A)
+
+    def persist(pending, receipts) -> None:
+        nonlocal state
+        state = update_live_checkpoint(state, pending_call=pending, receipts=receipts)
+        write_live_checkpoint(path, state)
+
+    async def provider(name, model_id, messages, **kwargs):
+        del messages, kwargs
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            answer="over-cap fixture",
+            usage=TokenUsage(prompt_tokens=200, completion_tokens=6, total_tokens=206),
+        )
+
+    client = LiveProviderClient(
+        price_book=_price_book(),
+        hard_cap_usd=hard_cap,
+        checkpoint=persist,
+        call_model_func=provider,
+    )
+    with pytest.raises(ReservationBreachError):
+        await client.call(_stage_call())
+
+    persisted = load_live_checkpoint(path, expected_bindings=bindings)
+    assert persisted.committed_cost_usd == Decimal("0.000206")
+    assert persisted.committed_cost_usd > hard_cap
+    assert persisted.hard_cap_breached is True
+    assert persisted.receipts[-1].hard_cap_breached is True
+
+
 def test_resume_preserves_completed_records_and_call_receipts() -> None:
     completed_record = RunRecord(
         planned_run_id=RUN_A,
@@ -319,6 +358,27 @@ def test_resume_preserves_completed_records_and_call_receipts() -> None:
     assert recovered.committed_cost_usd == (
         completed_receipt.charged_cost_usd + pending.reservation.reserved_cost_usd
     )
+
+
+def test_finish_active_cell_refuses_to_clear_pending_paid_call() -> None:
+    pending = _pending_call()
+    checkpoint = create_live_checkpoint(
+        bindings=_bindings(),
+        active_cell=ActiveCell(
+            planned_run_id=RUN_A,
+            receipt_start_index=0,
+            pending_call=pending,
+        ),
+    )
+    record = RunRecord(
+        planned_run_id=RUN_A,
+        outcome="failed",
+        error_category="protocol_error",
+        cost_receipt_complete=True,
+    )
+
+    with pytest.raises(CheckpointValidationError, match="pending"):
+        finish_active_cell(checkpoint, record=record)
 
 
 def test_corrupt_or_tampered_checkpoint_fails_closed(tmp_path) -> None:

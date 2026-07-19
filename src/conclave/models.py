@@ -110,9 +110,9 @@ def _default_prompt_version() -> str:
 class TokenUsage(BaseModel):
     """Token accounting for a single model call."""
 
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
 
 
 class ModelAnswer(BaseModel):

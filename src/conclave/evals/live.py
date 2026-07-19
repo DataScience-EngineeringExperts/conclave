@@ -47,6 +47,7 @@ ProviderCallErrorCategory = Literal[
     "timeout",
     "transport",
     "provider_error",
+    "reconciliation_error",
     "reservation_breach",
     "interrupted",
 ]
@@ -114,6 +115,7 @@ class ProviderCallReceipt(EvalModel):
     usage: TokenUsage | None = None
     reserved_cost_usd: Decimal = Field(gt=0)
     charged_cost_usd: Decimal = Field(ge=0)
+    hard_cap_breached: bool = False
     cost_basis: ProviderCallCostBasis
 
 
@@ -176,6 +178,7 @@ class LiveCheckpoint(EvalModel):
 
     bindings: CheckpointBindings
     committed_cost_usd: Decimal = Field(ge=0)
+    hard_cap_breached: bool = False
     records: tuple[RunRecord, ...] = ()
     receipts: tuple[ProviderCallReceipt, ...] = ()
     active_cell: ActiveCell | None = None
@@ -196,8 +199,8 @@ class LiveCheckpoint(EvalModel):
         receipt_cost = sum((receipt.charged_cost_usd for receipt in self.receipts), Decimal("0"))
         if self.committed_cost_usd != receipt_cost:
             raise ValueError("checkpoint committed cost must equal receipt charges")
-        if self.committed_cost_usd > self.bindings.hard_cap_usd:
-            raise ValueError("checkpoint committed cost exceeds the hard cap")
+        if self.hard_cap_breached != (self.committed_cost_usd > self.bindings.hard_cap_usd):
+            raise ValueError("checkpoint hard-cap-breached evidence is inconsistent")
         return self
 
     def should_execute(self, planned_run_id: str) -> bool:
@@ -252,6 +255,7 @@ def create_live_checkpoint(
         schema_version=EVAL_SCHEMA_VERSION,
         bindings=bindings,
         committed_cost_usd=committed_cost_usd,
+        hard_cap_breached=committed_cost_usd > bindings.hard_cap_usd,
         records=tuple(records),
         receipts=tuple(receipts),
         active_cell=active_cell,
@@ -454,6 +458,8 @@ def finish_active_cell(checkpoint: LiveCheckpoint, *, record: RunRecord) -> Live
         raise CheckpointValidationError("a final record requires an active checkpoint cell")
     if active.planned_run_id != record.planned_run_id:
         raise CheckpointValidationError("final record does not match the active checkpoint cell")
+    if active.pending_call is not None:
+        raise CheckpointValidationError("cannot finalize a cell with a pending provider call")
     return create_live_checkpoint(
         bindings=checkpoint.bindings,
         records=(*checkpoint.records, record),
@@ -525,6 +531,14 @@ def _bounded_error_category(error: str) -> ProviderCallErrorCategory:
     if error in _BOUNDED_PROVIDER_ERROR_CATEGORIES:
         return error  # type: ignore[return-value]
     return _receipt_error_category(error)
+
+
+def _full_reservation_cost_basis(reservation: CallReservation) -> ProviderCallCostBasis:
+    return ProviderCallCostBasis(
+        source="full_reservation",
+        input_ceiling_usd_per_million_tokens=(reservation.input_ceiling_usd_per_million_tokens),
+        output_ceiling_usd_per_million_tokens=(reservation.output_ceiling_usd_per_million_tokens),
+    )
 
 
 class LiveProviderClient:
@@ -647,75 +661,95 @@ class LiveProviderClient:
                     error=category,
                 )
 
-            category: ProviderCallErrorCategory | None = None
-            if answer.error is not None:
-                category = _bounded_error_category(answer.error)
-                answer = answer.model_copy(update={"error": category})
+            reconciliation_failed = False
+            breached = False
+            try:
+                category: ProviderCallErrorCategory | None = None
+                if answer.error is not None:
+                    category = _bounded_error_category(answer.error)
+                    answer = answer.model_copy(update={"error": category})
 
-            usage = answer.usage
-            if usage is None:
+                usage = answer.usage
+                if usage is None:
+                    charged_cost = reservation.reserved_cost_usd
+                    cost_basis = _full_reservation_cost_basis(reservation)
+                else:
+                    usage = TokenUsage.model_validate(
+                        {
+                            "prompt_tokens": usage.prompt_tokens,
+                            "completion_tokens": usage.completion_tokens,
+                            "total_tokens": usage.total_tokens,
+                        }
+                    )
+                    charged_cost = _reported_usage_cost(price, usage)
+                    cost_basis = ProviderCallCostBasis(
+                        source="reported_usage",
+                        prompt_tokens=usage.prompt_tokens,
+                        completion_tokens=usage.completion_tokens,
+                        input_ceiling_usd_per_million_tokens=(
+                            reservation.input_ceiling_usd_per_million_tokens
+                        ),
+                        output_ceiling_usd_per_million_tokens=(
+                            reservation.output_ceiling_usd_per_million_tokens
+                        ),
+                    )
+                    breached = self._usage_breaches(usage, reservation)
+
+                if breached:
+                    category = "reservation_breach"
+                    answer = answer.model_copy(update={"answer": None, "error": category})
+
+                receipt = ProviderCallReceipt(
+                    stage=call.stage,
+                    provider_id=call.provider_id,
+                    model_id=call.model_id,
+                    model_revision=call.model_revision,
+                    max_output_tokens=call.max_output_tokens,
+                    outcome="failed" if category is not None else "success",
+                    error_category=category,
+                    usage=usage,
+                    reserved_cost_usd=reservation.reserved_cost_usd,
+                    charged_cost_usd=charged_cost,
+                    hard_cap_breached=(
+                        self._committed_cost_usd + charged_cost > self._hard_cap_usd
+                    ),
+                    cost_basis=cost_basis,
+                )
+            except Exception:  # noqa: BLE001 -- fail closed with a bounded paid-call receipt
+                reconciliation_failed = True
+                category = "reconciliation_error"
+                answer = ModelAnswer(
+                    name=call.provider_id,
+                    model_id=call.model_id,
+                    error=category,
+                )
                 charged_cost = reservation.reserved_cost_usd
-                cost_basis = ProviderCallCostBasis(
-                    source="full_reservation",
-                    input_ceiling_usd_per_million_tokens=(
-                        reservation.input_ceiling_usd_per_million_tokens
+                receipt = ProviderCallReceipt(
+                    stage=call.stage,
+                    provider_id=call.provider_id,
+                    model_id=call.model_id,
+                    model_revision=call.model_revision,
+                    max_output_tokens=call.max_output_tokens,
+                    outcome="failed",
+                    error_category=category,
+                    reserved_cost_usd=reservation.reserved_cost_usd,
+                    charged_cost_usd=charged_cost,
+                    hard_cap_breached=(
+                        self._committed_cost_usd + charged_cost > self._hard_cap_usd
                     ),
-                    output_ceiling_usd_per_million_tokens=(
-                        reservation.output_ceiling_usd_per_million_tokens
-                    ),
+                    cost_basis=_full_reservation_cost_basis(reservation),
                 )
-                breached = False
-            else:
-                charged_cost = _reported_usage_cost(price, usage)
-                cost_basis = ProviderCallCostBasis(
-                    source="reported_usage",
-                    prompt_tokens=usage.prompt_tokens,
-                    completion_tokens=usage.completion_tokens,
-                    input_ceiling_usd_per_million_tokens=(
-                        reservation.input_ceiling_usd_per_million_tokens
-                    ),
-                    output_ceiling_usd_per_million_tokens=(
-                        reservation.output_ceiling_usd_per_million_tokens
-                    ),
-                )
-                breached = self._usage_breaches(usage, reservation)
-
-            if breached:
-                category = "reservation_breach"
-                answer = answer.model_copy(update={"answer": None, "error": category})
-                charged_cost = reservation.reserved_cost_usd
-                cost_basis = ProviderCallCostBasis(
-                    source="full_reservation",
-                    input_ceiling_usd_per_million_tokens=(
-                        reservation.input_ceiling_usd_per_million_tokens
-                    ),
-                    output_ceiling_usd_per_million_tokens=(
-                        reservation.output_ceiling_usd_per_million_tokens
-                    ),
-                )
-
-            receipt = ProviderCallReceipt(
-                stage=call.stage,
-                provider_id=call.provider_id,
-                model_id=call.model_id,
-                model_revision=call.model_revision,
-                max_output_tokens=call.max_output_tokens,
-                outcome="failed" if category is not None else "success",
-                error_category=category,
-                usage=usage,
-                reserved_cost_usd=reservation.reserved_cost_usd,
-                charged_cost_usd=charged_cost,
-                cost_basis=cost_basis,
-            )
             self._committed_cost_usd += charged_cost
             self._receipts.append(receipt)
             self._pending_call = None
-            if breached:
+            if breached or reconciliation_failed:
                 self._stopped = True
             await self._persist()
 
             if breached:
                 raise ReservationBreachError("provider usage breached the call reservation")
+            if reconciliation_failed:
+                raise GatewayStoppedError("provider response reconciliation failed")
             return answer
 
 

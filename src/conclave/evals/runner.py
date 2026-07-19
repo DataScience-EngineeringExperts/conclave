@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
 
@@ -47,6 +49,11 @@ from .models import (
 )
 from .pricing import PriceBook, validate_price_book
 
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - exercised by the fail-closed seam
+    _fcntl = None
+
 LIVE_HARD_CAP_USD = Decimal("10.00")
 
 ProtocolExecutor = Callable[
@@ -57,6 +64,43 @@ ProtocolExecutor = Callable[
 
 class RunValidationError(ValueError):
     """Execution inputs or outputs do not exactly match the frozen manifest."""
+
+
+@contextmanager
+def _checkpoint_lifecycle_lease(checkpoint_path: Path) -> Iterator[None]:
+    """Hold one nonblocking process lease for the checkpoint's full lifecycle."""
+
+    if _fcntl is None:
+        raise CheckpointValidationError(
+            "checkpoint filesystem leases are unsupported on this platform"
+        )
+
+    lock_path = checkpoint_path.with_name(f"{checkpoint_path.name}.lock")
+    descriptor: int | None = None
+    acquired = False
+    try:
+        flags = os.O_CREAT | os.O_RDWR
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        descriptor = os.open(lock_path, flags, 0o600)
+        _fcntl.flock(descriptor, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        acquired = True
+    except (AttributeError, OSError):
+        if descriptor is not None:
+            os.close(descriptor)
+        raise CheckpointValidationError(
+            "checkpoint filesystem lease is unavailable or unsupported"
+        ) from None
+
+    try:
+        yield
+    finally:
+        if descriptor is not None:
+            try:
+                if acquired:
+                    _fcntl.flock(descriptor, _fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
 
 
 def validate_run_records(
@@ -415,6 +459,28 @@ async def run_live_study(
 
     task_by_id, roster_by_id = _validate_live_inputs(manifest, tasks, price_book)
     path = Path(checkpoint_path)
+    with _checkpoint_lifecycle_lease(path):
+        return await _run_live_study_with_lease(
+            manifest=manifest,
+            price_book=price_book,
+            path=path,
+            task_by_id=task_by_id,
+            roster_by_id=roster_by_id,
+            call_model_func=call_model_func,
+        )
+
+
+async def _run_live_study_with_lease(
+    *,
+    manifest: StudyManifest,
+    price_book: PriceBook,
+    path: Path,
+    task_by_id: Mapping[str, PublicTask],
+    roster_by_id: Mapping[str, tuple],
+    call_model_func: CallModel,
+) -> StudyRun:
+    """Run one validated live study while its process lease is held."""
+
     checkpoint = _load_or_create_live_checkpoint(
         path,
         manifest=manifest,
@@ -486,13 +552,15 @@ async def run_live_study(
             write_live_checkpoint(path, checkpoint)
             break
         except (ReservationBreachError, GatewayStoppedError) as exc:
-            category = (
-                "reservation_breach"
-                if isinstance(exc, ReservationBreachError)
-                else "gateway_stopped"
-            )
+            receipts = _cell_receipts(checkpoint, receipt_start_index=receipt_start_index)
+            if isinstance(exc, ReservationBreachError):
+                category = "reservation_breach"
+            elif receipts and receipts[-1].error_category == "reconciliation_error":
+                category = "reconciliation_error"
+            else:
+                category = "gateway_stopped"
             execution = _aggregate_live_execution(
-                _cell_receipts(checkpoint, receipt_start_index=receipt_start_index),
+                receipts,
                 latency_ms=(time.perf_counter() - started) * 1000,
                 error_category=category,
                 deviation_codes=(category,),
