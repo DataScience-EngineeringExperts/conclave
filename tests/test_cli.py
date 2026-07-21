@@ -1,13 +1,16 @@
-"""Tests for the CLI exit-code contract and HTTP-client lifecycle wiring.
+"""Tests for CLI exit codes, durable output, and HTTP-client lifecycle wiring.
 
 These exercise ``conclave.cli.ask`` through Typer's ``CliRunner`` (no real keys,
-no network). Two concerns are pinned here:
+no network). Three concerns are pinned here:
 
 * **Exit-code contract (#17).** A run that produces zero *usable* member answers,
   or an Elite run whose ``decision_readiness`` is not ``ready``, exits non-zero
   (code 1) on both the human and ``--json`` paths. Under ``--json`` the full JSON
   payload is still emitted to stdout so a script can parse the result *and*
   detect the failure via the exit code. Other runs with a usable answer exit 0.
+* **Durable result output (#58).** Buffered runs can atomically persist the same
+  complete JSON payload with user-private permissions, including before a failure exit.
+  Invalid destinations and streaming combinations fail before council construction.
 * **Pooled-client lifecycle (#20).** The synchronous council wrappers close the
   shared httpx client when the run completes, so ``transport.aclose()`` is
   actually invoked and no client leaks past the CLI command.
@@ -16,6 +19,7 @@ no network). Two concerns are pinned here:
 from __future__ import annotations
 
 import json
+import stat
 
 import pytest
 from typer.testing import CliRunner
@@ -96,6 +100,183 @@ def test_successful_run_exits_zero(monkeypatch, patch_cli_config, patch_call_mod
     payload = json.loads(result.stdout)
     assert len(payload["answers"]) == 2
     assert all(a["answer"].startswith("answer from") for a in payload["answers"])
+
+
+def test_json_output_persists_same_payload_owner_only(
+    monkeypatch, patch_cli_config, patch_call_model, tmp_path
+):
+    """A detached caller can recover the complete JSON from an owner-only file."""
+    for var in ("XAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "PERPLEXITY_API_KEY"):
+        monkeypatch.setenv(var, "dummy-key")
+
+    def handler(model, messages, **kwargs):
+        from tests.conftest import make_response
+
+        return make_response(f"answer from {model}")
+
+    patch_call_model(handler)
+    output_path = tmp_path / "result.json"
+    result = runner.invoke(
+        cli.app,
+        [
+            "ask",
+            "hello",
+            "--council",
+            "grok,gemini",
+            "--mode",
+            "raw",
+            "--json",
+            "--json-output",
+            str(output_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(output_path.read_text(encoding="utf-8")) == json.loads(result.stdout)
+    assert stat.S_IMODE(output_path.stat().st_mode) == 0o600
+
+
+def test_json_output_with_stream_is_rejected_before_council_creation(
+    monkeypatch, patch_cli_config, tmp_path
+):
+    """Durable buffered output cannot silently take the streaming branch."""
+    created = False
+
+    class ForbiddenCouncil:
+        def __init__(self, **kwargs):
+            nonlocal created
+            created = True
+
+    monkeypatch.setattr(cli, "Council", ForbiddenCouncil)
+    result = runner.invoke(
+        cli.app,
+        ["ask", "hello", "--stream", "--json-output", str(tmp_path / "result.json")],
+    )
+
+    assert result.exit_code == 2
+    assert created is False
+    assert "--json-output" in result.output
+    assert "--stream" in result.output
+
+
+def test_json_output_persists_failure_payload_before_exit(clear_keys, patch_cli_config, tmp_path):
+    """The durable payload is complete even when the existing exit contract returns 1."""
+    output_path = tmp_path / "result.json"
+    result = runner.invoke(
+        cli.app,
+        ["ask", "hello", "--json", "--json-output", str(output_path)],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(output_path.read_text(encoding="utf-8")) == json.loads(result.stdout)
+    assert json.loads(result.stdout)["answers"] == []
+
+
+def test_json_output_rejects_missing_parent_before_council_creation(
+    monkeypatch, patch_cli_config, tmp_path
+):
+    """A bad destination fails before any provider-capable Council is created."""
+    created = False
+
+    class ForbiddenCouncil:
+        def __init__(self, **kwargs):
+            nonlocal created
+            created = True
+
+    monkeypatch.setattr(cli, "Council", ForbiddenCouncil)
+    output_path = tmp_path / "missing" / "result.json"
+    result = runner.invoke(
+        cli.app,
+        ["ask", "hello", "--json-output", str(output_path)],
+    )
+
+    assert result.exit_code == 2
+    assert created is False
+    assert "existing parent directory" in result.output
+
+
+def test_json_output_write_failure_preserves_stdout(
+    monkeypatch, patch_cli_config, patch_call_model, tmp_path
+):
+    """Persistence failure changes the exit code, not the completed stdout payload."""
+    for var in ("XAI_API_KEY", "GEMINI_API_KEY"):
+        monkeypatch.setenv(var, "dummy-key")
+
+    def handler(model, messages, **kwargs):
+        from tests.conftest import make_response
+
+        return make_response(f"answer from {model}")
+
+    def fail_write(path, payload):
+        raise OSError("simulated disk failure")
+
+    patch_call_model(handler)
+    monkeypatch.setattr(cli, "_write_json_output", fail_write)
+    result = runner.invoke(
+        cli.app,
+        [
+            "ask",
+            "hello",
+            "--council",
+            "grok,gemini",
+            "--mode",
+            "raw",
+            "--json",
+            "--json-output",
+            str(tmp_path / "result.json"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert len(json.loads(result.stdout)["answers"]) == 2
+    assert "Could not write --json-output" in result.output
+
+
+def test_json_output_does_not_require_posix_fchmod(
+    monkeypatch, patch_cli_config, patch_call_model, tmp_path
+):
+    """Secure temporary-file persistence works when POSIX-only fchmod is unavailable."""
+    for var in ("XAI_API_KEY", "GEMINI_API_KEY"):
+        monkeypatch.setenv(var, "dummy-key")
+
+    def handler(model, messages, **kwargs):
+        from tests.conftest import make_response
+
+        return make_response(f"answer from {model}")
+
+    patch_call_model(handler)
+    monkeypatch.delattr(cli.os, "fchmod")
+    output_path = tmp_path / "result.json"
+    result = runner.invoke(
+        cli.app,
+        [
+            "ask",
+            "hello",
+            "--council",
+            "grok,gemini",
+            "--mode",
+            "raw",
+            "--json-output",
+            str(output_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(output_path.read_text(encoding="utf-8"))["prompt"] == "hello"
+
+
+def test_json_output_cleans_partial_temp_on_serialization_failure(monkeypatch, tmp_path):
+    """Sensitive partial JSON is removed when serialization fails mid-write."""
+
+    def fail_dump(payload, handle):
+        handle.write('{"partial":')
+        raise ValueError("simulated serialization failure")
+
+    monkeypatch.setattr(cli.json, "dump", fail_dump)
+    with pytest.raises(ValueError, match="simulated serialization failure"):
+        cli._write_json_output(tmp_path / "result.json", {"prompt": "sensitive"})
+
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_unknown_mode_exits_two(patch_cli_config):

@@ -14,6 +14,9 @@ Three commands:
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -39,6 +42,34 @@ err_console = Console(stderr=True)
 def _result_to_dict(result: CouncilResult) -> dict:
     """Serialize a CouncilResult to a JSON-safe dict (no secrets included)."""
     return result.model_dump(mode="json")
+
+
+def _write_json_output(path: Path, payload: dict) -> None:
+    """Atomically persist a complete JSON payload with user-private permissions."""
+    # mkstemp avoids name races and creates a user-private file on supported
+    # platforms; replacing the destination preserves those permissions.
+    fd, temp_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _answer_panel(ans, *, border: str = "cyan") -> Panel:
@@ -493,6 +524,14 @@ def ask(
     as_json: bool = typer.Option(
         False, "--json", help="Emit the full result as JSON instead of panels."
     ),
+    json_output: Path | None = typer.Option(  # noqa: B008
+        None,
+        "--json-output",
+        help=(
+            "Persist the complete result JSON to PATH with user-private permissions. "
+            "Buffered modes only; stdout rendering is unchanged."
+        ),
+    ),
     cache: bool | None = typer.Option(
         None,
         "--cache/--no-cache",
@@ -536,6 +575,14 @@ def ask(
         err_console.print(
             f"[red]--stream is only supported for synthesize/raw modes, not '{mode_lower}'.[/red]"
         )
+        raise typer.Exit(code=2)
+
+    if stream and json_output is not None:
+        err_console.print("[red]--json-output cannot be combined with --stream.[/red]")
+        raise typer.Exit(code=2)
+
+    if json_output is not None and (not json_output.parent.is_dir() or json_output.is_dir()):
+        err_console.print("[red]--json-output requires an existing parent directory.[/red]")
         raise typer.Exit(code=2)
 
     if mode_lower == "vote" and not choices:
@@ -587,11 +634,22 @@ def ask(
         result.elite is None or result.elite.decision_readiness != "ready"
     )
 
+    payload = _result_to_dict(result) if as_json or json_output is not None else None
+    json_output_failed = False
+    if json_output is not None:
+        try:
+            _write_json_output(json_output, payload or {})
+        except Exception:
+            # The completed result must remain available on its normal stdout path
+            # even when the optional persistence side effect fails.
+            err_console.print("[red]Could not write --json-output.[/red]")
+            json_output_failed = True
+
     if as_json:
         # Always emit valid JSON to stdout so a consumer can parse the payload,
         # then signal failure via the exit code if nothing usable came back.
-        console.print_json(json.dumps(_result_to_dict(result)))
-        if no_usable_answers or elite_not_ready:
+        console.print_json(json.dumps(payload))
+        if json_output_failed or no_usable_answers or elite_not_ready:
             raise typer.Exit(code=1)
         return
 
@@ -611,6 +669,8 @@ def ask(
                 f"{result.elite.decision_readiness} ({reasons})[/red]"
             )
             raise typer.Exit(code=1)
+        if json_output_failed:
+            raise typer.Exit(code=1)
         return
 
     if no_usable_answers:
@@ -620,6 +680,8 @@ def ask(
         raise typer.Exit(code=1)
 
     _RENDERERS[result.mode](result)
+    if json_output_failed:
+        raise typer.Exit(code=1)
 
 
 @app.command()
