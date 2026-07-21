@@ -36,6 +36,7 @@ the canonical authority spec on top of those.
 | **H1 Synthetic QA Pack** | [`studies/elite_qa_v1/README.md`](studies/elite_qa_v1/README.md) | Balanced 24-task open-book harness fixture, QA protocol, and confirmatory preregistration template. |
 | **H1 Live Runner Design** | [`docs/plans/2026-07-18-h1-live-evaluation-runner-design.md`](docs/plans/2026-07-18-h1-live-evaluation-runner-design.md) | Sequential paid-exploratory execution, hash-bound UTF-8 estimates, USD 10 cap, authenticated checkpoints, and no-repeat resume. |
 | **H1 Live Runner Plan** | [`docs/plans/2026-07-18-h1-live-evaluation-runner.md`](docs/plans/2026-07-18-h1-live-evaluation-runner.md) | Exact TDD tasks for the six live conditions, dry-run estimator, replay fixtures, CLI gate, and correctness-only paid smoke. |
+| **Durable JSON Output Design** | [`docs/plans/2026-07-21-durable-json-output-design.md`](docs/plans/2026-07-21-durable-json-output-design.md) | Opt-in atomic user-private result persistence for long buffered council runs and detached supervisors. |
 
 ---
 

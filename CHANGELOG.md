@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Durable buffered CLI results (#58).** `conclave ask --json-output PATH` atomically
+  persists the complete `CouncilResult` JSON with user-private temporary-file semantics
+  while preserving stdout and exit-code behavior. Persistence remains opt-in and is
+  rejected with streaming; write failures retain normal stdout before exiting 1.
+
 ## [1.2.0] - 2026-07-18
 
 ### Added

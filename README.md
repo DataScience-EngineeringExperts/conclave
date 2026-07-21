@@ -132,7 +132,19 @@ conclave ask "Should we adopt a service mesh for 8 services?" \
 
 # Machine-readable output (works for every mode; carries elite phase artifacts too)
 conclave ask "..." -c grok,perplexity --mode debate --json
+
+# Durable buffered output for supervisors that may detach before a long run finishes
+conclave ask "..." -c grok,gemini,claude --mode adversarial \
+  --json --json-output /secure/local/run-result.json
 ```
+
+`--json-output PATH` is opt-in and available for buffered runs. It atomically
+persists the complete result with user-private temporary-file semantics (`0600` on
+POSIX) while leaving stdout and exit codes unchanged. The parent directory must
+already exist, existing files are replaced atomically, and `--stream` cannot be
+combined with durable output. Result files contain the prompt and model answers, so
+choose a secure local path. A persistence error still renders normal stdout, then
+exits 1.
 
 Published v1.2 mode flags are `--mode synthesize|raw|debate|adversarial|vote|elite`. `--rounds N`
 (default 2) is the *maximum* round count for `debate`; `--converge-threshold FLOAT`

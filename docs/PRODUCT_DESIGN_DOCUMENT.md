@@ -111,6 +111,11 @@ markup, no middleman) and a security property.
    absent is skipped with a warning and recorded in `CouncilResult.skipped`. Unknown
    providers (no static env-var mapping) are *not* pre-emptively skipped — the live call is
    attempted and any auth error is captured as a `ModelAnswer.error`.
+6. **Result persistence is explicit and local.** Buffered CLI runs persist nothing by
+   default. `--json-output PATH` opts into an atomic user-private file (`0600` on POSIX)
+   containing the same secret-free `CouncilResult` JSON; normal stdout remains available
+   even if persistence fails. The file still contains the prompt and answers, so operators
+   must select a secure path.
 
 **Residual considerations:** a provider error could in principle echo a key fragment. Since
 v0.3 every provider/transport error is passed through `redact()` before it reaches
