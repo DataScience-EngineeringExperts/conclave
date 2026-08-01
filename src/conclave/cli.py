@@ -436,6 +436,15 @@ _VALID_MODES = {"synthesize", "raw", "debate", "adversarial", "vote", "elite"}
 # round-over-round, so the default is conservative and rarely fires spuriously.
 _DEFAULT_CONVERGE_THRESHOLD = 0.95
 
+# Distinct exit code for a "degraded" run (DSE-901): at least one member
+# answered, but the judge/synthesizer step failed (``CouncilResult.degraded``).
+# Deliberately NOT 2 -- that code already means "usage/config error" (unknown
+# mode, unresolved council) below, and colliding the two would reintroduce the
+# same ambiguity this change fixes. Kept below the existing 0/1/2 meanings so a
+# caller doing a bare ``echo $?`` can add one new branch without reinterpreting
+# any exit code it already handles.
+_DEGRADED_EXIT_CODE = 3
+
 
 def _resolve_converge_threshold(
     converge: bool | None,
@@ -555,7 +564,8 @@ def ask(
 
     Exit codes:
 
-    * 0 -- the run produced at least one usable member answer and, for Elite,
+    * 0 -- the run produced at least one usable member answer, the
+      judge/synthesizer step (when attempted) succeeded, and for Elite,
       ``decision_readiness`` is ``ready``.
     * 1 -- the run produced zero usable member answers (e.g. no council member
       had an API key, or every member failed), or an Elite result is missing or
@@ -563,6 +573,18 @@ def ask(
       the full JSON result is still emitted to stdout first, so a script can both
       parse the payload and detect the failure via the non-zero exit code.
     * 2 -- a usage/config error (unknown mode, or no members resolved).
+    * 3 -- degraded (DSE-901): at least one member answered, but the
+      judge/synthesizer step failed -- ``CouncilResult.degraded`` is ``True``
+      (``synthesis_error`` or, in ``adversarial`` mode, ``adversarial.verdict_error``
+      is set). Under ``--json`` the full JSON result -- including the top-level
+      ``"degraded": true`` field -- is still emitted to stdout first. Kept
+      distinct from both 0 and 1 so a caller that checks only the exit code (e.g.
+      a verification gate) cannot mistake a partial run for a clean pass: this was
+      exactly the 2026-07-25 incident that produced this code (an Anthropic
+      credit failure took out the judge while 4/5 members still answered, and the
+      run exited 0 with ``adversarial.verdict`` silently ``null``). Not raised for
+      Elite (its own readiness gate above already covers a failed
+      synthesis/verdict step with exit code 1).
     """
     mode_lower = mode.lower()
     if mode_lower not in _VALID_MODES:
@@ -609,6 +631,10 @@ def ask(
                 "[red]No usable council answers. Run 'conclave providers' to check keys.[/red]"
             )
             raise typer.Exit(code=1)
+        if result.degraded:
+            # _stream_to_terminal already printed the "No synthesis: ..." warning
+            # (from synthesis_error) to stderr; only the exit code is new here.
+            raise typer.Exit(code=_DEGRADED_EXIT_CODE)
         return
 
     if mode_lower == "debate":
@@ -628,7 +654,11 @@ def ask(
 
     # A run that produced no usable member answers is a failure for scripting
     # purposes regardless of output format. We compute this once and apply the
-    # same exit-code contract to both the JSON and human paths.
+    # same exit-code contract to both the JSON and human paths. A run that DID
+    # get usable member answers but whose judge/synthesizer step failed is a
+    # distinct, less severe failure (DSE-901): ``result.degraded`` (checked
+    # below, after the hard-failure/usage-error exits) drives exit code
+    # ``_DEGRADED_EXIT_CODE`` instead of silently returning 0.
     no_usable_answers = not result.successful_answers
     elite_not_ready = mode_lower == "elite" and (
         result.elite is None or result.elite.decision_readiness != "ready"
@@ -651,6 +681,8 @@ def ask(
         console.print_json(json.dumps(payload))
         if json_output_failed or no_usable_answers or elite_not_ready:
             raise typer.Exit(code=1)
+        if result.degraded:
+            raise typer.Exit(code=_DEGRADED_EXIT_CODE)
         return
 
     if mode_lower == "elite":
@@ -682,6 +714,11 @@ def ask(
     _RENDERERS[result.mode](result)
     if json_output_failed:
         raise typer.Exit(code=1)
+    if result.degraded:
+        # The mode-specific renderer above already printed the "No synthesis: ..."
+        # / "No verdict: ..." warning (from synthesis_error / verdict_error) to
+        # stderr; only the exit code is new here (DSE-901).
+        raise typer.Exit(code=_DEGRADED_EXIT_CODE)
 
 
 @app.command()
