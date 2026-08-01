@@ -3,11 +3,16 @@
 These exercise ``conclave.cli.ask`` through Typer's ``CliRunner`` (no real keys,
 no network). Three concerns are pinned here:
 
-* **Exit-code contract (#17).** A run that produces zero *usable* member answers,
-  or an Elite run whose ``decision_readiness`` is not ``ready``, exits non-zero
-  (code 1) on both the human and ``--json`` paths. Under ``--json`` the full JSON
-  payload is still emitted to stdout so a script can parse the result *and*
-  detect the failure via the exit code. Other runs with a usable answer exit 0.
+* **Exit-code contract (#17, extended by DSE-901).** A run that produces zero
+  *usable* member answers, or an Elite run whose ``decision_readiness`` is not
+  ``ready``, exits non-zero (code 1) on both the human and ``--json`` paths.
+  Under ``--json`` the full JSON payload is still emitted to stdout so a script
+  can parse the result *and* detect the failure via the exit code. A run with a
+  usable answer whose judge/synthesizer step nonetheless failed
+  (``CouncilResult.degraded``) exits a distinct code 3 rather than 0 -- see
+  ``tests/test_modes.py`` / ``tests/test_synthesizer.py`` for the mode-level
+  ``degraded`` behavior this exit code surfaces. Every other run with a usable
+  answer exits 0.
 * **Durable result output (#58).** Buffered runs can atomically persist the same
   complete JSON payload with user-private permissions, including before a failure exit.
   Invalid destinations and streaming combinations fail before council construction.
@@ -28,6 +33,7 @@ from conclave import cli
 from conclave.config import ConclaveConfig
 from conclave.models import CouncilResult, EliteResult, ModelAnswer
 from conclave.verdict import CouncilVerdict
+from tests.conftest import make_response
 
 runner = CliRunner()
 
@@ -50,6 +56,14 @@ def _config() -> ConclaveConfig:
 def patch_cli_config(monkeypatch):
     """Make ``conclave.cli.load_config`` return the deterministic test config."""
     monkeypatch.setattr(cli, "load_config", _config)
+
+
+def _system_text(messages) -> str:
+    """Return the system-role content of a message list, or '' if none."""
+    for m in messages:
+        if m.get("role") == "system":
+            return m.get("content", "")
+    return ""
 
 
 def test_no_members_human_exits_one(clear_keys, patch_cli_config):
@@ -283,6 +297,125 @@ def test_unknown_mode_exits_two(patch_cli_config):
     """Usage error (bad mode) keeps its distinct exit code 2."""
     result = runner.invoke(cli.app, ["ask", "hello", "--mode", "bogus"])
     assert result.exit_code == 2
+
+
+# --------------------------------------------------------------------------- #
+# Degraded-run exit code (DSE-901): members answered, judge/synthesizer failed.
+# --------------------------------------------------------------------------- #
+
+
+def test_adversarial_judge_failure_json_is_degraded_not_clean(
+    monkeypatch, patch_cli_config, patch_call_model
+):
+    """DSE-901: members answer but the judge/synthesizer call fails -> degraded.
+
+    Reproduces the 2026-07-25 incident that filed this ticket: the Anthropic key
+    had no credit, so the ``claude`` judge's call returned an HTTP 400 while
+    ``grok``/``gemini`` still answered normally, and the CLI exited 0 with
+    ``adversarial.verdict`` silently ``null``. The fix must surface
+    ``degraded: true`` in the JSON payload and exit the new degraded code
+    (``cli._DEGRADED_EXIT_CODE`` == 3), not the clean-pass code 0.
+    """
+    for var in ("XAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.setenv(var, "dummy-key")
+
+    def handler(model, messages, **kwargs):
+        if "judge of an adversarial review" in _system_text(messages):
+            raise RuntimeError("HTTP 400: your credit balance is too low")
+        return make_response(f"answer from {model}")
+
+    patch_call_model(handler)
+    result = runner.invoke(
+        cli.app,
+        ["ask", "hello", "--council", "grok,gemini", "--mode", "adversarial", "--json"],
+    )
+
+    assert result.exit_code == cli._DEGRADED_EXIT_CODE
+    assert result.exit_code not in (0, 1, 2)
+    payload = json.loads(result.stdout)
+    assert payload["degraded"] is True
+    assert payload["adversarial"]["verdict"] is None
+    assert "credit balance" in payload["adversarial"]["verdict_error"]
+    assert payload["synthesis_error"] == payload["adversarial"]["verdict_error"]
+    # This is a PARTIAL run, not the hard "zero usable answers" failure (code 1):
+    # the proposer/critic that didn't hit the judge path still answered.
+    assert len(payload["answers"]) >= 1
+    assert any(a["error"] is None and a["answer"] is not None for a in payload["answers"])
+
+
+def test_adversarial_judge_failure_human_exits_degraded_code(
+    monkeypatch, patch_cli_config, patch_call_model
+):
+    """Same DSE-901 scenario on the human (non-``--json``) render path."""
+    for var in ("XAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.setenv(var, "dummy-key")
+
+    def handler(model, messages, **kwargs):
+        if "judge of an adversarial review" in _system_text(messages):
+            raise RuntimeError("HTTP 400: your credit balance is too low")
+        return make_response(f"answer from {model}")
+
+    patch_call_model(handler)
+    result = runner.invoke(
+        cli.app, ["ask", "hello", "--council", "grok,gemini", "--mode", "adversarial"]
+    )
+
+    assert result.exit_code == cli._DEGRADED_EXIT_CODE
+    assert "No verdict" in result.output
+    assert "credit balance" in result.output
+
+
+def test_adversarial_clean_pass_still_exits_zero(monkeypatch, patch_cli_config, patch_call_model):
+    """Regression: a fully successful adversarial run (proposer/critic/judge all
+    succeed) is NOT degraded and keeps exiting 0 -- the new check must not fire
+    on the existing clean-pass path."""
+    for var in ("XAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.setenv(var, "dummy-key")
+
+    def handler(model, messages, **kwargs):
+        system = _system_text(messages)
+        if "judge of an adversarial review" in system:
+            return make_response("verdict text")
+        if "critic on an adversarial review" in system:
+            return make_response(f"critique from {model}")
+        return make_response(f"proposal from {model}")
+
+    patch_call_model(handler)
+    result = runner.invoke(
+        cli.app,
+        ["ask", "hello", "--council", "grok,gemini", "--mode", "adversarial", "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["degraded"] is False
+    assert payload["adversarial"]["verdict"] == "verdict text"
+
+
+def test_all_members_failed_synthesize_mode_exits_one_not_degraded(
+    monkeypatch, patch_cli_config, patch_call_model
+):
+    """Regression: zero usable answers keeps exit 1, never the new degraded code.
+
+    In default (synthesize) mode, every member erroring also sets
+    ``synthesis_error`` ("no successful member answers to synthesize"), so
+    ``result.degraded`` reads ``True`` here too -- the CLI's priority order must
+    still pick the more severe hard-failure code (1) over the new degraded code.
+    """
+    for var in ("XAI_API_KEY", "GEMINI_API_KEY"):
+        monkeypatch.setenv(var, "dummy-key")
+
+    def handler(model, messages, **kwargs):
+        raise RuntimeError("provider down")
+
+    patch_call_model(handler)
+    result = runner.invoke(cli.app, ["ask", "hello", "--council", "grok,gemini", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["degraded"] is True
+    assert len(payload["answers"]) == 2
+    assert all(a["error"] is not None for a in payload["answers"])
 
 
 def _elite_cli_result(

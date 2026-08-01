@@ -11,7 +11,7 @@ import json
 from collections.abc import Iterable
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from .verdict import (
     CouncilConflict,
@@ -355,6 +355,11 @@ class CouncilResult(BaseModel):
         member_answers: Read-only alias for ``answers`` (the per-member raw
             responses), exposed under the contract-v2 name. Returns the same list
             object as ``answers``; there is one underlying field.
+        degraded: Computed field (DSE-901) -- ``True`` when the run produced at
+            least one usable member answer but the judge/synthesizer step failed,
+            so a caller cannot mistake a partial run for a clean pass. See the
+            property docstring below for the exact rule and the CLI's exit-code
+            contract (:func:`conclave.cli.ask`) that keys off it.
     """
 
     prompt: str
@@ -401,6 +406,46 @@ class CouncilResult(BaseModel):
     def member_answers(self) -> list[ModelAnswer]:
         """Contract-v2 alias for :attr:`answers` (the per-member raw responses)."""
         return self.answers
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def degraded(self) -> bool:
+        """True when members answered but the judge/synthesizer step failed (DSE-901).
+
+        Distinguishes "partial run: judge/synthesis failed" from a clean pass, so
+        a verification gate that only checks ``CouncilResult`` fields (or the
+        CLI's exit code -- see :func:`conclave.cli.ask`) cannot read a degraded
+        run as a full success. This closed a real gap: on 2026-07-25 an
+        Anthropic credit failure meant 4/5 members answered but the ``claude``
+        judge/synthesizer failed, ``adversarial.verdict`` was ``null``, and the
+        CLI still exited 0.
+
+        ``True`` whenever either of the two fields the judge/synthesizer path
+        writes on failure is set:
+
+        * ``synthesis_error`` is non-``None`` (``synthesize``/``debate``/``elite``
+          modes, and mirrored into ``adversarial`` mode's top-level fields too); or
+        * ``adversarial.verdict_error`` is non-``None`` (checked directly as a
+          defense-in-depth fallback in case a future code path sets it without
+          mirroring to ``synthesis_error``).
+
+        Always ``False`` for ``raw``/``vote`` runs, where the judge/synthesizer is
+        never invoked, and for any run where it ran and succeeded. Because
+        ``synthesis_error`` is also set when a run has zero usable member answers
+        (nothing to synthesize), that harder failure is *also* ``degraded=True``
+        here; the CLI's exit-code contract gives that case its own, more severe
+        exit code, so this flag alone does not distinguish "nothing answered"
+        from "some members answered, judge/synthesis failed" -- callers wanting
+        that distinction should also check ``successful_answers``. Included as a
+        top-level key in ``model_dump(mode="json")`` output (a Pydantic
+        ``computed_field``), so a scripted consumer can check it directly instead
+        of reaching into ``synthesis_error``/``adversarial``.
+        """
+        if self.synthesis_error:
+            return True
+        if self.adversarial is not None and self.adversarial.verdict_error:
+            return True
+        return False
 
 
 # Late import (see the note near the top): ``manifest`` imports ``TokenUsage``

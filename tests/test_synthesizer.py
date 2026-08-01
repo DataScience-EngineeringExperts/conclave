@@ -186,6 +186,8 @@ def test_cli_synthesizer_flag_overrides(monkeypatch, patch_call_model):
     assert payload["synthesizer"] == "openai"
     assert payload["synthesizer_model_id"] == "openai/gpt-4.1"
     assert payload["synthesis"] == "CLI OPENAI MERGE"
+    # DSE-901: a clean pass is explicitly NOT degraded (regression guard).
+    assert payload["degraded"] is False
 
 
 # --------------------------------------------------------------------------- #
@@ -242,6 +244,9 @@ async def test_synthesizer_call_failure_is_signaled(monkeypatch, patch_call_mode
     assert result.synthesis is None
     assert result.synthesis_error is not None
     assert "synthesizer 503 from provider" in result.synthesis_error
+    # DSE-901: members answered but synthesis failed -> a distinct "degraded"
+    # run, not a clean pass.
+    assert result.degraded is True
 
 
 async def test_no_usable_answers_is_signaled(monkeypatch, patch_call_model):
@@ -299,6 +304,8 @@ async def test_adversarial_judge_unkeyed_is_signaled(monkeypatch, patch_call_mod
     assert adv.judge == "claude"
     assert adv.judge_model_id == "anthropic/claude-sonnet-4-6"
     assert result.synthesis_error == adv.verdict_error
+    # DSE-901: a usable proposal/critique but no verdict is a degraded run.
+    assert result.degraded is True
 
 
 async def test_adversarial_judge_call_failure_is_signaled(monkeypatch, patch_call_model):
@@ -323,6 +330,10 @@ async def test_adversarial_judge_call_failure_is_signaled(monkeypatch, patch_cal
     assert adv.verdict is None
     assert adv.verdict_error is not None
     assert "judge 500 from provider" in adv.verdict_error
+    # DSE-901 reference scenario: this is exactly the 2026-07-25 incident shape
+    # (members/critics answered, the judge call itself errored) -- must read as
+    # a degraded run so a verification gate can't mistake it for a clean pass.
+    assert result.degraded is True
 
 
 async def test_debate_synthesizer_unkeyed_is_signaled(monkeypatch, patch_call_model, clear_keys):
@@ -422,3 +433,65 @@ def test_prompt_version_stamped_in_every_mode(monkeypatch, patch_call_model, mod
         result = council.adversarial_sync("q")
 
     assert result.prompt_version == SYNTHESIS_PROMPT_VERSION
+
+
+# --------------------------------------------------------------------------- #
+# (f) ``degraded`` computed field (DSE-901): members answered, judge/synthesis
+# failed. Unit-level pins on the ``CouncilResult`` model itself; the CLI's
+# exit-code contract built on top of this field is pinned in ``tests/test_cli.py``
+# (``test_adversarial_judge_failure_*``, ``test_adversarial_clean_pass_still_exits_zero``).
+# --------------------------------------------------------------------------- #
+
+
+def test_degraded_false_by_default():
+    """A bare result (no synthesis attempted at all) is not degraded."""
+    result = CouncilResult(prompt="x")
+    assert result.degraded is False
+
+
+def test_degraded_true_when_synthesis_error_set():
+    """``synthesis_error`` alone (synthesize/debate/elite shape) marks degraded."""
+    result = CouncilResult(prompt="x", synthesis_error="synthesizer 503 from provider")
+    assert result.degraded is True
+
+
+def test_degraded_true_when_only_adversarial_verdict_error_set():
+    """``adversarial.verdict_error`` alone also marks degraded (defense-in-depth).
+
+    In the real adversarial code path ``synthesis_error`` is always mirrored
+    from ``adversarial.verdict_error`` (see ``conclave.modes.run_adversarial``),
+    so this exercises the fallback branch directly in case a future code path
+    ever sets one without the other.
+    """
+    from conclave.models import AdversarialResult, ModelAnswer
+
+    adv = AdversarialResult(
+        proposer="grok",
+        proposal=ModelAnswer(name="grok", model_id="xai/grok-4.3", answer="proposal text"),
+        verdict_error="judge 500 from provider",
+    )
+    result = CouncilResult(prompt="x", adversarial=adv)
+    assert result.synthesis_error is None
+    assert result.degraded is True
+
+
+def test_degraded_false_on_clean_synthesis():
+    """A successful synthesis (no error anywhere) is not degraded."""
+    result = CouncilResult(prompt="x", synthesis="the merged answer")
+    assert result.degraded is False
+
+
+def test_degraded_is_a_top_level_json_key():
+    """The computed field serializes as a top-level ``"degraded"`` JSON key.
+
+    This is the exact shape a verification-gate consumer (e.g. ``/conclave-verify``)
+    reads: no need to reach into ``synthesis_error``/``adversarial`` -- ``degraded``
+    is present and boolean directly on the JSON payload.
+    """
+    clean = CouncilResult(prompt="x", synthesis="ok")
+    dumped = clean.model_dump(mode="json")
+    assert "degraded" in dumped
+    assert dumped["degraded"] is False
+
+    failed = CouncilResult(prompt="x", synthesis_error="synthesizer 503 from provider")
+    assert failed.model_dump(mode="json")["degraded"] is True

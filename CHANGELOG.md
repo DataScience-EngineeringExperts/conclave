@@ -13,6 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   persists the complete `CouncilResult` JSON with user-private temporary-file semantics
   while preserving stdout and exit-code behavior. Persistence remains opt-in and is
   rejected with streaming; write failures retain normal stdout before exiting 1.
+- **Degraded-run exit code (DSE-901).** `CouncilResult.degraded` is a new computed
+  field, `True` whenever `synthesis_error` or `adversarial.verdict_error` is set --
+  i.e. at least one member answered but the judge/synthesizer step failed. The CLI
+  now exits a distinct code `3` in that case (`--json` still emits the full payload,
+  now including `"degraded"`), so a verification gate reading only the exit code can
+  no longer mistake a partial run for a clean pass. This closes the gap found
+  2026-07-25: an Anthropic credit failure took out the `claude` judge while 4/5
+  members still answered, `adversarial.verdict` came back `null`, and the CLI still
+  exited `0`. Judge/synthesizer failover to another provider remains explicitly out
+  of scope for this fix (tracked separately).
+
+### Fixed
+
+- **Adversarial mode's `--json` gate contract (DSE-901).** Previously a judge/
+  synthesizer failure in `adversarial` (or `synthesize`/`debate`) mode was only
+  observable by inspecting `synthesis_error`/`adversarial.verdict_error` in the
+  payload; the exit code stayed `0`. See "Degraded-run exit code" above.
 
 ## [1.2.0] - 2026-07-18
 
