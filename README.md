@@ -294,21 +294,21 @@ The same structure is on the result object:
 ```python
 from conclave import Council
 
-council = Council(models=["grok", "gemini", "claude"])   # verdict is default-on
+council = Council(models=["grok", "gemini", "claude"])  # verdict is default-on
 result = council.ask_sync("Should we adopt a service mesh for 8 services?")
 
 if result.verdict is not None:
-    print(result.verdict.verdict_type)        # "decision"
+    print(result.verdict.verdict_type)  # "decision"
     print(result.verdict.headline)
     print(result.verdict.recommendation)
-    print(result.consensus_label, result.consensus_score)   # e.g. "strong" 0.75
+    print(result.consensus_label, result.consensus_score)  # e.g. "strong" 0.75
 
     for conflict in result.conflicts:
         print("conflict:", conflict.topic, conflict.position_labels)
     for position in result.verdict.positions:
         print(position.label, "backed by answers:", position.evidence_answer_ids)
     for vote in result.provider_votes:
-        print(vote.provider, "->", vote.position_label)     # who voted for what
+        print(vote.provider, "->", vote.position_label)  # who voted for what
     for mr in result.minority_reports:
         print("minority:", mr.providers, mr.claim)
 else:
@@ -317,8 +317,8 @@ else:
     print(result.synthesis)
 
 # the execution manifest rides on every result — first-class, secret-free
-print(result.manifest.verdict_extraction.model_id)   # which model produced the clustering
-print(result.manifest.secret_safety)                 # "verified_no_secrets"
+print(result.manifest.verdict_extraction.model_id)  # which model produced the clustering
+print(result.manifest.secret_safety)  # "verified_no_secrets"
 ```
 
 To opt out (e.g. for cost-sensitive runs — the verdict adds one initial synthesizer call and,
@@ -348,9 +348,9 @@ unaffected:
 ```python
 async for event in council.ask_stream("What is the capital of France?"):
     if event.type in ("member_delta", "synthesis_delta"):
-        print(event.text, end="", flush=True)        # live token
+        print(event.text, end="", flush=True)  # live token
     elif event.type == "done":
-        result = event.result                          # full CouncilResult
+        result = event.result  # full CouncilResult
 ```
 
 Event types: `member_delta` / `member_done` (per member, interleaved),
@@ -366,7 +366,7 @@ never raising (the same never-raises contract as `ask`). Streaming applies to
 council = Council(models=["grok", "gemini", "claude"], synthesizer="claude")
 
 # debate: multi-round, anonymized peers, partial-failure resilient
-debate = council.debate_sync("Is P=NP likely false?", rounds=3)   # or: await council.debate(...)
+debate = council.debate_sync("Is P=NP likely false?", rounds=3)  # or: await council.debate(...)
 for rnd in debate.rounds:
     print("round", rnd.round_number, [a.name for a in rnd.successful_answers])
 print("FINAL:\n", debate.synthesis)
@@ -380,7 +380,7 @@ adv = council.adversarial_sync("Defend CRDTs for offline-first apps.", proposer=
 print("PROPOSAL by", adv.adversarial.proposer, "->", adv.adversarial.proposal.answer)
 for crit in adv.adversarial.critiques:
     print("CRITIQUE", crit.name, ":", crit.error or crit.answer[:80])
-print("VERDICT:\n", adv.adversarial.verdict)   # also mirrored to adv.synthesis
+print("VERDICT:\n", adv.adversarial.verdict)  # also mirrored to adv.synthesis
 ```
 
 `CouncilResult` exposes `mode`, `answers` (per-model `ModelAnswer` with `model_id`,
