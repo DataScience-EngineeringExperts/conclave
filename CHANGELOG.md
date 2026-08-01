@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-01
+
 ### Added
 
 - **Durable buffered CLI results (#58).** `conclave ask --json-output PATH` atomically
