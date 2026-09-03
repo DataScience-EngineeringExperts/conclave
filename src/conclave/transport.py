@@ -113,11 +113,22 @@ class TransportError(Exception):
     chain, or a direct ``err.__context__`` attribute walk. Dropping the chain is
     deliberate -- the message already names the failure kind, so no diagnostic
     value is lost.
+
+    ``http_status`` (DSE-1512) carries the HTTP status when the failure came from
+    a non-2xx response (the streaming path); it stays ``None`` for a network/
+    timeout failure, which never produced a response.
     """
 
-    def __init__(self, message: str, *, category: FailureCategory = "transport") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: FailureCategory = "transport",
+        http_status: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.category: FailureCategory = category
+        self.http_status: int | None = http_status
 
 
 def _raise_transport_error(message: str, category: FailureCategory = "transport") -> NoReturn:
@@ -296,6 +307,7 @@ async def stream_sse(
                     raise TransportError(
                         f"HTTP {response.status_code}: {detail}",
                         category=categorize_http_status(response.status_code),
+                        http_status=response.status_code,
                     )
 
                 event_name = ""

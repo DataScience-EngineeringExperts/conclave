@@ -122,3 +122,9 @@ async def test_post_json_network_is_typed(monkeypatch):
     with pytest.raises(transport.TransportError) as info:
         await transport.post_json("https://x", {}, {}, 1.0)
     assert info.value.category == "transport"
+
+
+def test_transport_error_carries_http_status():
+    err = transport.TransportError("HTTP 503: x", category="unavailable", http_status=503)
+    assert err.http_status == 503
+    assert transport.TransportError("network error: ConnectError").http_status is None
