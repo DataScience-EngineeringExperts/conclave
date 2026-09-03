@@ -52,6 +52,7 @@ Existing seams you will rely on:
 ```python
 # tests/test_failure_category.py
 """Typed failure categories are derived from status codes / exception types (DSE-1512)."""
+
 from __future__ import annotations
 
 import httpx
@@ -69,11 +70,18 @@ from conclave.models import FAILOVER_CATEGORIES, categorize_http_status
 @pytest.mark.parametrize(
     ("status", "expected"),
     [
-        (401, "auth"), (403, "auth"),
-        (402, "quota"), (429, "quota"),
+        (401, "auth"),
+        (403, "auth"),
+        (402, "quota"),
+        (429, "quota"),
         (408, "timeout"),
-        (500, "unavailable"), (502, "unavailable"), (503, "unavailable"), (529, "unavailable"),
-        (400, "bad_request"), (404, "bad_request"), (422, "bad_request"),
+        (500, "unavailable"),
+        (502, "unavailable"),
+        (503, "unavailable"),
+        (529, "unavailable"),
+        (400, "bad_request"),
+        (404, "bad_request"),
+        (422, "bad_request"),
     ],
 )
 def test_categorize_http_status(status, expected):
@@ -104,7 +112,10 @@ def test_provider_error_carries_status_category():
 
 
 def test_transport_error_category():
-    assert transport.TransportError("request timed out after 5s", category="timeout").category == "timeout"
+    assert (
+        transport.TransportError("request timed out after 5s", category="timeout").category
+        == "timeout"
+    )
     assert transport.TransportError("network error: ConnectError").category == "transport"
 
 
@@ -137,8 +148,10 @@ def test_unresolved_provider_is_typed():
 async def test_post_json_timeout_is_typed(monkeypatch):
     class _Client:
         is_closed = False
+
         async def post(self, *a, **k):
             raise httpx.ReadTimeout("slow")
+
     monkeypatch.setattr(transport, "_client", _Client())
     with pytest.raises(transport.TransportError) as info:
         await transport.post_json("https://x", {}, {}, 1.0)
@@ -148,8 +161,10 @@ async def test_post_json_timeout_is_typed(monkeypatch):
 async def test_post_json_network_is_typed(monkeypatch):
     class _Client:
         is_closed = False
+
         async def post(self, *a, **k):
             raise httpx.ConnectError("refused")
+
     monkeypatch.setattr(transport, "_client", _Client())
     with pytest.raises(transport.TransportError) as info:
         await transport.post_json("https://x", {}, {}, 1.0)
@@ -174,16 +189,16 @@ Expected: FAIL — `ImportError: cannot import name 'FAILOVER_CATEGORIES'`
 # FAILOVER_CATEGORIES: infrastructure failures where no model ever produced an
 # answer. A model that answered (even malformed) is terminal for that role.
 FailureCategory = Literal[
-    "unkeyed",            # env var absent -- no call made
-    "unresolved",         # unknown provider prefix -- no call made
-    "auth",               # 401 / 403
-    "quota",              # 402 / 429
-    "unavailable",        # 5xx
-    "timeout",            # 408 or transport deadline
-    "transport",          # DNS / connection / other httpx network error
-    "bad_request",        # other 4xx -- the request was wrong, not the vendor
-    "malformed_response", # 2xx with an unusable payload / empty content
-    "unexpected",         # anything else -- never failed over
+    "unkeyed",  # env var absent -- no call made
+    "unresolved",  # unknown provider prefix -- no call made
+    "auth",  # 401 / 403
+    "quota",  # 402 / 429
+    "unavailable",  # 5xx
+    "timeout",  # 408 or transport deadline
+    "transport",  # DNS / connection / other httpx network error
+    "bad_request",  # other 4xx -- the request was wrong, not the vendor
+    "malformed_response",  # 2xx with an unusable payload / empty content
+    "unexpected",  # anything else -- never failed over
 ]
 
 FAILOVER_CATEGORIES: frozenset[str] = frozenset(
@@ -218,6 +233,7 @@ Add `from typing import Literal` if not already imported. Add two fields to `Mod
 ```python
 from .models import FailureCategory, categorize_http_status  # add import
 
+
 class TransportError(Exception):
     """...(keep docstring)..."""
 
@@ -238,6 +254,7 @@ def _raise_transport_error(message: str, category: FailureCategory = "transport"
 
 ```python
 from ..models import FailureCategory, TokenUsage  # extend the existing import
+
 
 class ProviderError(Exception):
     """...(keep docstring; add:) ``category``/``http_status`` are typed at the raise
@@ -303,25 +320,35 @@ async def test_call_model_types_unkeyed(monkeypatch, clear_keys):
 
 async def test_call_model_types_http_status(monkeypatch, patch_transport):
     patch_transport(status=402, body={"error": {"message": "insufficient credit"}})
-    ans = await call_model("claude", "anthropic/claude-sonnet-4-6", [{"role": "user", "content": "hi"}])
+    ans = await call_model(
+        "claude", "anthropic/claude-sonnet-4-6", [{"role": "user", "content": "hi"}]
+    )
     assert ans.error and ans.failure_category == "quota" and ans.http_status == 402
 
 
 async def test_call_model_types_timeout(monkeypatch, patch_transport_raise):
-    patch_transport_raise(transport.TransportError("request timed out after 1s", category="timeout"))
-    ans = await call_model("claude", "anthropic/claude-sonnet-4-6", [{"role": "user", "content": "hi"}])
+    patch_transport_raise(
+        transport.TransportError("request timed out after 1s", category="timeout")
+    )
+    ans = await call_model(
+        "claude", "anthropic/claude-sonnet-4-6", [{"role": "user", "content": "hi"}]
+    )
     assert ans.failure_category == "timeout"
 
 
 async def test_call_model_error_text_unchanged(monkeypatch, patch_transport):
     """Additive-only guarantee: the error STRING is byte-identical to before."""
     patch_transport(status=401, body={"error": {"message": "bad key"}})
-    ans = await call_model("claude", "anthropic/claude-sonnet-4-6", [{"role": "user", "content": "hi"}])
+    ans = await call_model(
+        "claude", "anthropic/claude-sonnet-4-6", [{"role": "user", "content": "hi"}]
+    )
     assert ans.error == "anthropic: HTTP 401: bad key"
 
 
 async def test_call_model_unresolved_is_typed():
-    ans = await call_model("x", "nope/model", [{"role": "user", "content": "hi"}], config=ConclaveConfig())
+    ans = await call_model(
+        "x", "nope/model", [{"role": "user", "content": "hi"}], config=ConclaveConfig()
+    )
     assert ans.failure_category == "unresolved"
 ```
 
@@ -370,10 +397,12 @@ git commit -m "feat(providers): carry typed failure_category/http_status on Mode
 # tests/test_registry_config.py (append)
 from conclave.config import parse_synthesizer_chain, _load_config_uncached
 
+
 def test_parse_synthesizer_chain_splits_and_dedupes():
     assert parse_synthesizer_chain("claude>grok > gemini>claude") == ["claude", "grok", "gemini"]
     assert parse_synthesizer_chain("claude") == ["claude"]
     assert parse_synthesizer_chain("  ") == []
+
 
 def test_config_synthesizer_chain_from_yaml(tmp_path):
     p = tmp_path / "c.yml"
@@ -382,10 +411,12 @@ def test_config_synthesizer_chain_from_yaml(tmp_path):
     assert cfg.synthesizer == "claude"
     assert cfg.synthesizer_chain == ["claude", "grok"]
 
+
 def test_config_synthesizer_chain_accepts_arrow_string(tmp_path):
     p = tmp_path / "c.yml"
     p.write_text("synthesizer_chain: 'claude>grok'\n")
     assert _load_config_uncached(p).synthesizer_chain == ["claude", "grok"]
+
 
 def test_config_synthesizer_chain_bad_value_is_empty(tmp_path):
     p = tmp_path / "c.yml"
@@ -399,18 +430,22 @@ def test_council_chain_defaults_to_single_synthesizer():
     c = Council(models=["grok"], config=ConclaveConfig(synthesizer="claude"))
     assert c.synthesizer_chain == ["claude"] and c.synthesizer == "claude"
 
+
 def test_council_chain_from_constructor_string():
     c = Council(models=["grok"], synthesizer="claude>grok", config=ConclaveConfig())
     assert c.synthesizer_chain == ["claude", "grok"] and c.synthesizer == "claude"
+
 
 def test_council_chain_from_constructor_list():
     c = Council(models=["grok"], synthesizer=["gemini", "grok"], config=ConclaveConfig())
     assert c.synthesizer_chain == ["gemini", "grok"] and c.synthesizer == "gemini"
 
+
 def test_council_chain_from_config_overrides_scalar():
     cfg = ConclaveConfig(synthesizer="claude", synthesizer_chain=["grok", "gemini"])
     c = Council(models=["claude"], config=cfg)
     assert c.synthesizer_chain == ["grok", "gemini"] and c.synthesizer == "grok"
+
 
 def test_council_constructor_arg_beats_config_chain():
     cfg = ConclaveConfig(synthesizer_chain=["grok", "gemini"])
@@ -483,6 +518,7 @@ Document the ladder in the class docstring `synthesizer:` entry. Add `synthesize
 ```python
 # tests/test_adjudication.py
 """Council.adjudicate walks the synthesizer chain with the infra-only failover rule."""
+
 from __future__ import annotations
 
 import pytest
@@ -497,18 +533,28 @@ CFG = ConclaveConfig(models={"claude": "anthropic/c", "grok": "xai/g", "gemini":
 
 
 def _fail(name, model_id, category, status=None):
-    return ModelAnswer(name=name, model_id=model_id, error=f"{name} failed", failure_category=category, http_status=status)
+    return ModelAnswer(
+        name=name,
+        model_id=model_id,
+        error=f"{name} failed",
+        failure_category=category,
+        http_status=status,
+    )
 
 
 def _ok(name, model_id):
-    return ModelAnswer(name=name, model_id=model_id, answer=f"{name} says yes", answer_id=f"{name}-1")
+    return ModelAnswer(
+        name=name, model_id=model_id, answer=f"{name} says yes", answer_id=f"{name}-1"
+    )
 
 
 def _install(monkeypatch, script: dict[str, ModelAnswer]):
     calls = []
+
     async def fake(name, model_id, messages, **kw):
         calls.append(name)
         return script[name]
+
     monkeypatch.setattr(council_mod, "call_model", fake)
     return calls
 
@@ -528,7 +574,10 @@ async def test_chain_of_one_success(monkeypatch, keys):
 
 
 async def test_auth_failure_advances(monkeypatch, keys):
-    calls = _install(monkeypatch, {"claude": _fail("claude", "anthropic/c", "auth", 401), "grok": _ok("grok", "xai/g")})
+    calls = _install(
+        monkeypatch,
+        {"claude": _fail("claude", "anthropic/c", "auth", 401), "grok": _ok("grok", "xai/g")},
+    )
     c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG)
     out = await c.adjudicate("synthesis", "sys", "user")
     assert out.answer.ok and out.name == "grok" and out.model_id == "xai/g"
@@ -540,16 +589,28 @@ async def test_auth_failure_advances(monkeypatch, keys):
 
 
 async def test_bad_request_is_terminal(monkeypatch, keys):
-    calls = _install(monkeypatch, {"claude": _fail("claude", "anthropic/c", "bad_request", 400), "grok": _ok("grok", "xai/g")})
+    calls = _install(
+        monkeypatch,
+        {
+            "claude": _fail("claude", "anthropic/c", "bad_request", 400),
+            "grok": _ok("grok", "xai/g"),
+        },
+    )
     c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG)
     out = await c.adjudicate("synthesis", "sys", "user")
     assert not out.answer.ok and out.name == "claude"
-    assert calls == ["claude"]                      # grok was never consulted
+    assert calls == ["claude"]  # grok was never consulted
     assert [a.outcome for a in out.attempts] == ["terminal_failure"]
 
 
 async def test_malformed_is_terminal(monkeypatch, keys):
-    calls = _install(monkeypatch, {"claude": _fail("claude", "anthropic/c", "malformed_response"), "grok": _ok("grok", "xai/g")})
+    calls = _install(
+        monkeypatch,
+        {
+            "claude": _fail("claude", "anthropic/c", "malformed_response"),
+            "grok": _ok("grok", "xai/g"),
+        },
+    )
     c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG)
     out = await c.adjudicate("judge", "sys", "user")
     assert calls == ["claude"] and out.attempts[0].outcome == "terminal_failure"
@@ -566,7 +627,13 @@ async def test_unkeyed_candidate_is_skipped_without_call(monkeypatch):
 
 
 async def test_chain_exhausted(monkeypatch, keys):
-    calls = _install(monkeypatch, {"claude": _fail("claude", "anthropic/c", "quota", 429), "grok": _fail("grok", "xai/g", "unavailable", 503)})
+    calls = _install(
+        monkeypatch,
+        {
+            "claude": _fail("claude", "anthropic/c", "quota", 429),
+            "grok": _fail("grok", "xai/g", "unavailable", 503),
+        },
+    )
     c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG)
     out = await c.adjudicate("synthesis", "sys", "user")
     assert calls == ["claude", "grok"]
@@ -586,20 +653,46 @@ async def test_all_unkeyed_returns_no_answer(monkeypatch):
 
 def test_record_adjudication_appends_ledger_and_receipts():
     c = Council(models=["grok"], synthesizer="claude", config=CFG)
-    result = CouncilResult(prompt="p", manifest=ModelHarnessManifest(request_id="r", conclave_version="t", mode="synthesize"))
-    attempts = [AdjudicationAttempt(role="synthesis", candidate="claude", model_id="anthropic/c", attempt_index=1, outcome="failed_over", failure_category="auth", http_status=401),
-                AdjudicationAttempt(role="synthesis", candidate="grok", model_id="xai/g", attempt_index=2, outcome="success")]
+    result = CouncilResult(
+        prompt="p",
+        manifest=ModelHarnessManifest(request_id="r", conclave_version="t", mode="synthesize"),
+    )
+    attempts = [
+        AdjudicationAttempt(
+            role="synthesis",
+            candidate="claude",
+            model_id="anthropic/c",
+            attempt_index=1,
+            outcome="failed_over",
+            failure_category="auth",
+            http_status=401,
+        ),
+        AdjudicationAttempt(
+            role="synthesis", candidate="grok", model_id="xai/g", attempt_index=2, outcome="success"
+        ),
+    ]
     called = [_fail("claude", "anthropic/c", "auth", 401), _ok("grok", "xai/g")]
     c._record_adjudication(result, attempts, called, phase="synthesis")
     m = result.manifest
     assert m.adjudication_succession == attempts
-    assert [(r.phase, r.attempt, r.outcome) for r in m.receipts] == [("synthesis", 1, "failed"), ("synthesis", 2, "success")]
+    assert [(r.phase, r.attempt, r.outcome) for r in m.receipts] == [
+        ("synthesis", 1, "failed"),
+        ("synthesis", 2, "success"),
+    ]
     assert m.secret_safety == "verified_no_secrets"
 
 
 def test_ledger_has_no_free_text_fields():
     fields = set(AdjudicationAttempt.model_fields)
-    assert fields == {"role", "candidate", "model_id", "attempt_index", "outcome", "failure_category", "http_status"}
+    assert fields == {
+        "role",
+        "candidate",
+        "model_id",
+        "attempt_index",
+        "outcome",
+        "failure_category",
+        "http_status",
+    }
 ```
 
 **Step 2: Run** — `$BR '.venv/bin/python -m pytest -q tests/test_adjudication.py'` → FAIL (`ImportError: AdjudicationAttempt`).
@@ -610,10 +703,10 @@ def test_ledger_has_no_free_text_fields():
 ```python
 AdjudicationRole = Literal["synthesis", "debate_final", "judge", "verdict_extraction"]
 AdjudicationAttemptOutcome = Literal[
-    "success",          # this candidate adjudicated
-    "failed_over",      # infra failure; the next candidate was tried
-    "exhausted",        # infra failure on the LAST candidate; nothing left to try
-    "terminal_failure", # the candidate answered unusably; failover refused by rule
+    "success",  # this candidate adjudicated
+    "failed_over",  # infra failure; the next candidate was tried
+    "exhausted",  # infra failure on the LAST candidate; nothing left to try
+    "terminal_failure",  # the candidate answered unusably; failover refused by rule
     "skipped_unkeyed",  # no API key in the environment; no call made
 ]
 
@@ -645,9 +738,11 @@ Add to `ModelHarnessManifest` (after `redacted_errors`, documented in the docstr
 class AdjudicationOutcome:
     """Return value of :meth:`Council.adjudicate`."""
 
-    answer: ModelAnswer | None          # success, or the terminal/exhausted failure; None if no candidate could be called
+    answer: (
+        ModelAnswer | None
+    )  # success, or the terminal/exhausted failure; None if no candidate could be called
     attempts: list[AdjudicationAttempt]
-    called: list[ModelAnswer]           # every real call, in order (for receipts)
+    called: list[ModelAnswer]  # every real call, in order (for receipts)
 
     @property
     def name(self) -> str | None:
@@ -658,81 +753,129 @@ class AdjudicationOutcome:
         return self.answer.model_id if self.answer is not None else None
 ```
 ```python
-    async def adjudicate(
-        self, role: AdjudicationRole, system_prompt: str, user_content: str
-    ) -> AdjudicationOutcome:
-        """Walk ``synthesizer_chain`` for one adjudication role (DSE-1512).
+async def adjudicate(
+    self, role: AdjudicationRole, system_prompt: str, user_content: str
+) -> AdjudicationOutcome:
+    """Walk ``synthesizer_chain`` for one adjudication role (DSE-1512).
 
-        Rule: a candidate is tried in declared order; an unkeyed candidate is
-        skipped without a call; a call that fails with a category in
-        :data:`FAILOVER_CATEGORIES` advances to the next candidate; ANY other
-        failure is terminal for the role (a model that answered is never
-        second-guessed by another vendor -- that would let adjudication shop for
-        a result). No scoring, no health tracking: the order is the operator's.
-        """
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ]
-        attempts: list[AdjudicationAttempt] = []
-        called: list[ModelAnswer] = []
-        last_failure: ModelAnswer | None = None
-        chain = self.synthesizer_chain
-        for index, candidate in enumerate(chain, start=1):
-            model_id = self.config.resolve_model_id(candidate)
-            if not key_present(model_id):
-                attempts.append(AdjudicationAttempt(role=role, candidate=candidate, model_id=model_id,
-                                                    attempt_index=index, outcome="skipped_unkeyed",
-                                                    failure_category="unkeyed"))
-                continue
-            answer = await call_model(candidate, model_id, messages, config=self.config,
-                                      temperature=self.temperature, timeout=self.timeout)
-            called.append(answer)
-            if answer.ok:
-                attempts.append(AdjudicationAttempt(role=role, candidate=candidate, model_id=model_id,
-                                                    attempt_index=index, outcome="success"))
-                return AdjudicationOutcome(answer=answer, attempts=attempts, called=called)
-            category = answer.failure_category
-            if category in FAILOVER_CATEGORIES:
-                is_last = index == len(chain)
-                attempts.append(AdjudicationAttempt(role=role, candidate=candidate, model_id=model_id,
-                                                    attempt_index=index,
-                                                    outcome="exhausted" if is_last else "failed_over",
-                                                    failure_category=category, http_status=answer.http_status))
-                last_failure = answer
-                if not is_last:
-                    logger.warning("%s: '%s' failed (%s); trying next candidate", role, candidate, category)
-                continue
-            attempts.append(AdjudicationAttempt(role=role, candidate=candidate, model_id=model_id,
-                                                attempt_index=index, outcome="terminal_failure",
-                                                failure_category=category, http_status=answer.http_status))
+    Rule: a candidate is tried in declared order; an unkeyed candidate is
+    skipped without a call; a call that fails with a category in
+    :data:`FAILOVER_CATEGORIES` advances to the next candidate; ANY other
+    failure is terminal for the role (a model that answered is never
+    second-guessed by another vendor -- that would let adjudication shop for
+    a result). No scoring, no health tracking: the order is the operator's.
+    """
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+    attempts: list[AdjudicationAttempt] = []
+    called: list[ModelAnswer] = []
+    last_failure: ModelAnswer | None = None
+    chain = self.synthesizer_chain
+    for index, candidate in enumerate(chain, start=1):
+        model_id = self.config.resolve_model_id(candidate)
+        if not key_present(model_id):
+            attempts.append(
+                AdjudicationAttempt(
+                    role=role,
+                    candidate=candidate,
+                    model_id=model_id,
+                    attempt_index=index,
+                    outcome="skipped_unkeyed",
+                    failure_category="unkeyed",
+                )
+            )
+            continue
+        answer = await call_model(
+            candidate,
+            model_id,
+            messages,
+            config=self.config,
+            temperature=self.temperature,
+            timeout=self.timeout,
+        )
+        called.append(answer)
+        if answer.ok:
+            attempts.append(
+                AdjudicationAttempt(
+                    role=role,
+                    candidate=candidate,
+                    model_id=model_id,
+                    attempt_index=index,
+                    outcome="success",
+                )
+            )
             return AdjudicationOutcome(answer=answer, attempts=attempts, called=called)
-        return AdjudicationOutcome(answer=last_failure, attempts=attempts, called=called)
+        category = answer.failure_category
+        if category in FAILOVER_CATEGORIES:
+            is_last = index == len(chain)
+            attempts.append(
+                AdjudicationAttempt(
+                    role=role,
+                    candidate=candidate,
+                    model_id=model_id,
+                    attempt_index=index,
+                    outcome="exhausted" if is_last else "failed_over",
+                    failure_category=category,
+                    http_status=answer.http_status,
+                )
+            )
+            last_failure = answer
+            if not is_last:
+                logger.warning(
+                    "%s: '%s' failed (%s); trying next candidate", role, candidate, category
+                )
+            continue
+        attempts.append(
+            AdjudicationAttempt(
+                role=role,
+                candidate=candidate,
+                model_id=model_id,
+                attempt_index=index,
+                outcome="terminal_failure",
+                failure_category=category,
+                http_status=answer.http_status,
+            )
+        )
+        return AdjudicationOutcome(answer=answer, attempts=attempts, called=called)
+    return AdjudicationOutcome(answer=last_failure, attempts=attempts, called=called)
 
-    def _record_adjudication(
-        self,
-        result: CouncilResult,
-        attempts: list[AdjudicationAttempt],
-        called: list[ModelAnswer],
-        *,
-        phase: str,
-        record_receipts: bool = True,
-        protocol_version: str | None = None,
-        prompt_version: str | None = SYNTHESIS_PROMPT_VERSION,
-    ) -> None:
-        """Append the succession ledger (always) and one receipt per real call."""
-        if result.manifest is None:
-            return
-        result.manifest.adjudication_succession.extend(attempts)
-        receipts = [
-            receipt_from_answer(answer, temperature=self.temperature, timeout=self.timeout,
-                                phase=phase, attempt=i, protocol_version=protocol_version,
-                                prompt_version=prompt_version)
+
+def _record_adjudication(
+    self,
+    result: CouncilResult,
+    attempts: list[AdjudicationAttempt],
+    called: list[ModelAnswer],
+    *,
+    phase: str,
+    record_receipts: bool = True,
+    protocol_version: str | None = None,
+    prompt_version: str | None = SYNTHESIS_PROMPT_VERSION,
+) -> None:
+    """Append the succession ledger (always) and one receipt per real call."""
+    if result.manifest is None:
+        return
+    result.manifest.adjudication_succession.extend(attempts)
+    receipts = (
+        [
+            receipt_from_answer(
+                answer,
+                temperature=self.temperature,
+                timeout=self.timeout,
+                phase=phase,
+                attempt=i,
+                protocol_version=protocol_version,
+                prompt_version=prompt_version,
+            )
             for i, answer in enumerate(called, start=1)
-        ] if record_receipts else []
-        if receipts:
-            result.manifest.receipts.extend(receipts)
-        self._recompute_manifest_accounting(result.manifest)   # re-stamps secret_safety
+        ]
+        if record_receipts
+        else []
+    )
+    if receipts:
+        result.manifest.receipts.extend(receipts)
+    self._recompute_manifest_accounting(result.manifest)  # re-stamps secret_safety
 ```
 `synthesize_blocks` becomes a compatibility wrapper: `out = await self.adjudicate("synthesis", ...)`; return `out.answer` or a `ModelAnswer(name=self.synthesizer, model_id=resolve(self.synthesizer), error="no candidate in synthesizer chain has an API key")`. Import `FAILOVER_CATEGORIES` from `.models` and `AdjudicationAttempt, AdjudicationRole` from `.manifest`; `from dataclasses import dataclass`.
 
