@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from conclave.config import ConclaveConfig
 from conclave.council import Council
 from conclave.manifest import AdjudicationAttempt, ModelHarnessManifest
@@ -161,3 +164,22 @@ def test_ledger_has_no_free_text_fields():
         "failure_category",
         "http_status",
     }
+
+
+def test_failure_category_is_a_bounded_literal():
+    """AdjudicationAttempt.failure_category rejects an arbitrary string (CSO finding, A4).
+
+    A raw provider error string could smuggle a word the secret-safety scan
+    forbids (e.g. "Authorization"); a bounded :data:`conclave.models.FailureCategory`
+    literal makes that structurally impossible rather than relying on every
+    call site to remember to pass a bounded category.
+    """
+    with pytest.raises(ValidationError):
+        AdjudicationAttempt(
+            role="synthesis",
+            candidate="claude",
+            model_id="anthropic/c",
+            attempt_index=1,
+            outcome="terminal_failure",
+            failure_category="Missing Authorization header",
+        )

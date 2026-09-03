@@ -29,7 +29,9 @@ This module deliberately does NOT import :mod:`conclave.models`; the dependency
 runs the other way (``models`` imports the manifest types and calls
 ``model_rebuild()``) so there is no cycle — the same no-cycle pattern
 :mod:`conclave.verdict` uses. It DOES import :class:`~conclave.models.TokenUsage`
-(a leaf type with no back-edge to the manifest) for the usage fields.
+and the :data:`~conclave.models.FailureCategory` literal (both leaf types with
+no back-edge to the manifest) for the usage fields and the bounded
+``failure_category`` on :class:`AdjudicationAttempt`, respectively.
 """
 
 from __future__ import annotations
@@ -38,7 +40,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from .models import TokenUsage
+from .models import FailureCategory, TokenUsage
 
 # ``secret_safety`` status literals. UNVERIFIED is the safe default (a manifest is
 # untrusted until the self-scan proves it clean); VERIFIED is stamped only by
@@ -102,7 +104,8 @@ class VerdictExtraction(BaseModel):
 AdjudicationRole = Literal["synthesis", "debate_final", "judge", "verdict_extraction"]
 AdjudicationAttemptOutcome = Literal[
     "success",  # this candidate adjudicated
-    "failed_over",  # infra failure; the next candidate was tried
+    "failed_over",  # infra failure; the ladder advanced to the next candidate
+    # (which may itself have been skipped for a missing key)
     "exhausted",  # infra failure on the LAST candidate; nothing left to try
     "terminal_failure",  # the candidate answered unusably; failover refused by rule
     "skipped_unkeyed",  # no API key in the environment; no call made
@@ -133,7 +136,7 @@ class AdjudicationAttempt(BaseModel):
     model_id: str
     attempt_index: int = Field(ge=1)
     outcome: AdjudicationAttemptOutcome
-    failure_category: str | None = None
+    failure_category: FailureCategory | None = None
     http_status: int | None = None
 
 

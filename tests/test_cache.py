@@ -852,3 +852,135 @@ async def test_terminal_failure_run_is_stored(monkeypatch, keys, cache_home):
     assert r2.cached is True and r2.degraded is True
     assert calls.count("claude") == 1  # only the first, live run called claude
     assert [a.outcome for a in r2.manifest.adjudication_succession] == ["terminal_failure"]
+
+
+async def test_chain_of_one_unkeyed_run_is_stored(monkeypatch, cache_home):
+    """A chain-of-one unkeyed synthesizer is NOT primary_failed_over and is cached
+    exactly like v1.3.0 (DSE-1512 review, Unit A3) -- there is no successor to
+    have adjudicated instead, so the ledger's lone ``skipped_unkeyed`` entry
+    must not itself block storage.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    calls = install_council_script(monkeypatch, {"gemini": make_ok_answer("gemini", "gemini/m")})
+    c = Council(
+        models=["gemini"],
+        synthesizer="claude",
+        config=_chain_config(),
+        cache=True,
+        extract_verdict=False,
+    )
+    r1 = await c.ask("q")
+    r2 = await c.ask("q")
+
+    assert r1.primary_failed_over is False
+    assert r1.cached is False and r2.cached is True
+    assert calls.count("gemini") == 1  # second run served from cache, not re-called
+
+
+# --------------------------------------------------------------------------- #
+# DSE-1512 review, Unit A2: ask_stream's cache store must honor the same
+# no-store-on-primary-failover rule as the buffered path (_cached_run).
+# --------------------------------------------------------------------------- #
+
+
+def _stream_chain_config() -> ConclaveConfig:
+    """Mirrors ``_chain_config`` with a friendly-name roster wide enough for
+    both the sole council member (``gemini``) and the ``claude>grok`` chain.
+    """
+    return ConclaveConfig(
+        models={"claude": "anthropic/c", "grok": "xai/g", "gemini": "gemini/m"},
+        cache=True,
+    )
+
+
+def _install_stream_script(monkeypatch, script: dict[str, list]) -> list[str]:
+    """Patch the streaming ``call_model_stream`` seam with a per-name script.
+
+    Mirrors ``tests/test_streaming.py``'s helper of the same name: council
+    members and synthesizer-chain candidates share this one seam, so a script
+    entry is needed for every name a test's run touches.
+    """
+    import conclave.streaming as streaming_mod
+
+    calls: list[str] = []
+
+    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+        calls.append(name)
+        for item in script[name]:
+            yield item
+
+    monkeypatch.setattr(streaming_mod, "call_model_stream", fake_stream)
+    return calls
+
+
+async def test_stream_successor_run_is_not_stored(monkeypatch, keys, cache_home):
+    """A stream whose primary synthesizer fails over is never persisted.
+
+    claude yields only an errored final (429, no deltas) so it fails over
+    before any output; grok then streams cleanly. Because the primary failed
+    for an infrastructure reason, the run must not reach the result cache --
+    a subsequent buffered ``ask`` re-calls every provider rather than
+    replaying the successor's answer from a stale entry.
+    """
+    _install_stream_script(
+        monkeypatch,
+        {
+            "gemini": ["gemini ", "says yes", make_ok_answer("gemini", "gemini/m")],
+            "claude": [make_failed_answer("claude", "anthropic/c", "quota", 429)],
+            "grok": ["grok ", "says yes", make_ok_answer("grok", "xai/g")],
+        },
+    )
+    c = Council(
+        models=["gemini"],
+        synthesizer="claude>grok",
+        config=_stream_chain_config(),
+        cache=True,
+        extract_verdict=False,
+    )
+
+    events = [e async for e in c.ask_stream("q")]
+    result = events[-1].result
+    assert result.cached is False
+    assert result.primary_failed_over is True
+    assert not list(cache_home.glob("*.json"))  # nothing was ever written
+
+    # A subsequent buffered ask is NOT served from cache: every provider is
+    # called again rather than replaying the successor's answer.
+    buffered_calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_failed_answer("claude", "anthropic/c", "quota", 429),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    r2 = await c.ask("q")
+    assert r2.cached is False
+    assert buffered_calls == ["gemini", "claude", "grok"]
+
+
+async def test_stream_primary_run_is_stored(monkeypatch, keys, cache_home):
+    """A stream whose primary synthesizer succeeds is cached like any other run."""
+    _install_stream_script(
+        monkeypatch,
+        {
+            "gemini": ["gemini ", "says yes", make_ok_answer("gemini", "gemini/m")],
+            "claude": ["claude ", "says yes", make_ok_answer("claude", "anthropic/c")],
+        },
+    )
+    c = Council(
+        models=["gemini"],
+        synthesizer="claude>grok",
+        config=_stream_chain_config(),
+        cache=True,
+        extract_verdict=False,
+    )
+
+    first = [e async for e in c.ask_stream("q")]
+    assert first[-1].result.cached is False
+    assert first[-1].result.primary_failed_over is False
+    assert len(list(cache_home.glob("*.json"))) == 1
+
+    r2 = await c.ask("q")
+    assert r2.cached is True

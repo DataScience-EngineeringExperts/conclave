@@ -485,3 +485,42 @@ async def test_chain_of_one_clean_run_is_not_primary_failed_over(monkeypatch, ke
     r = await c.ask("q")
     assert r.primary_failed_over is False
     assert "primary_failed_over" in r.model_dump(mode="json")
+
+
+async def test_successor_after_unkeyed_primary_is_primary_failed_over(monkeypatch):
+    """DSE-1512 review, Unit A3: a keyed successor after a SKIPPED (not failed) primary
+    still counts as primary_failed_over -- no candidate ever errored on a live call.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.setenv("XAI_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.primary_failed_over is True
+    assert r.degraded is False
+    ledger = r.manifest.adjudication_succession
+    assert [(a.candidate, a.outcome, a.attempt_index) for a in ledger] == [
+        ("claude", "skipped_unkeyed", 1),
+        ("grok", "success", 2),
+    ]
+
+
+async def test_chain_of_one_unkeyed_is_not_primary_failed_over(monkeypatch):
+    """A chain-of-one unkeyed synthesizer stays primary_failed_over=False -- there is no
+    successor to have adjudicated instead (v1.3.0 chain-of-one parity, unchanged).
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    install_council_script(monkeypatch, {"gemini": make_ok_answer("gemini", "gemini/m")})
+    c = Council(models=["gemini"], synthesizer="claude", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.primary_failed_over is False
+    assert r.degraded is True
+    assert [a.outcome for a in r.manifest.adjudication_succession] == ["skipped_unkeyed"]

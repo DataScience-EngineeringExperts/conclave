@@ -139,7 +139,17 @@ FAILOVER_CATEGORIES: frozenset[str] = frozenset(
 
 
 def categorize_http_status(status: int) -> FailureCategory:
-    """Map a non-2xx HTTP status to a :data:`FailureCategory` (pure, no I/O)."""
+    """Map a non-2xx HTTP status to a :data:`FailureCategory` (pure, no I/O).
+
+    Every 4xx/5xx status is bounded by one of the categories above. Anything
+    OUTSIDE that range (1xx, 2xx, 3xx, or >= 600 -- none of which this
+    function is meant to be called with, but a defensive raise site could)
+    maps to ``"unexpected"`` (QA review M3), never ``"malformed_response"``:
+    that category is reserved for a 2xx response with an unusable PAYLOAD, a
+    distinct failure mode this function never sees. Neither ``"unexpected"``
+    nor ``"malformed_response"`` is in :data:`FAILOVER_CATEGORIES`, so this
+    never affects failover either way.
+    """
     if status in (401, 403):
         return "auth"
     if status in (402, 429):
@@ -150,7 +160,7 @@ def categorize_http_status(status: int) -> FailureCategory:
         return "unavailable"
     if 400 <= status <= 499:
         return "bad_request"
-    return "malformed_response"
+    return "unexpected"
 
 
 class ModelAnswer(BaseModel):
@@ -505,18 +515,36 @@ class CouncilResult(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def primary_failed_over(self) -> bool:
-        """True when the primary adjudicator failed for an infrastructure reason (DSE-1512).
+        """True when the primary adjudicator was replaced (DSE-1512, review-corrected).
 
-        ``True`` when ``self.manifest`` is not ``None`` and any
-        ``manifest.adjudication_succession`` attempt has ``outcome`` in
-        ``("failed_over", "exhausted")`` -- i.e. the chain's primary candidate
-        for some adjudication role (synthesis, debate's final consolidation,
-        the adversarial judge, or verdict extraction) failed for an
-        infrastructure reason (auth/quota/5xx/timeout/network/no-key, see
-        :data:`FAILOVER_CATEGORIES`), whether a successor then answered
-        (``"failed_over"``) or the whole chain was exhausted
-        (``"exhausted"``). ``False`` for a chain of one that never had an
-        infrastructure failure, and for any run with no manifest.
+        ``True`` when ``self.manifest`` is not ``None`` and the succession
+        ledger for some adjudication role (synthesis, debate's final
+        consolidation, the adversarial judge, or verdict extraction) shows the
+        primary candidate did NOT itself produce the answer. Three cases, all
+        ``True``:
+
+        1. **Infrastructure failure of the primary.** Any
+           ``manifest.adjudication_succession`` attempt has ``outcome ==
+           "failed_over"`` -- the primary failed for an infrastructure reason
+           (auth/quota/5xx/timeout/network, see :data:`FAILOVER_CATEGORIES`)
+           and a successor then answered.
+        2. **Ladder exhausted.** Any attempt has ``outcome == "exhausted"`` --
+           every keyed candidate failed for an infrastructure reason and
+           nothing answered.
+        3. **Successor after a skipped-unkeyed primary.** A candidate at
+           ``attempt_index > 1`` has ``outcome == "success"`` -- the primary
+           was skipped for a missing key (``"skipped_unkeyed"``, which is
+           itself not a failure category eligible for cases 1/2) and a later,
+           keyed candidate adjudicated instead. This closed a real gap: an
+           unkeyed primary with a keyed successor used to report ``False``
+           (no ``"failed_over"``/``"exhausted"`` entry exists for that shape)
+           even though the primary plainly did not adjudicate.
+
+        ``False`` for a chain of one whose sole candidate was skipped for a
+        missing key (ledger ``["skipped_unkeyed"]`` only, nothing left to
+        succeed to -- unchanged v1.3.0 chain-of-one behavior, still
+        cacheable), for a chain of one that never had an infrastructure
+        failure, and for any run with no manifest.
 
         Independent of :attr:`degraded`: a run adjudicated by a successor is a
         clean run (``primary_failed_over=True, degraded=False``), while a run
@@ -537,9 +565,12 @@ class CouncilResult(BaseModel):
         """
         if self.manifest is None:
             return False
+        attempts = self.manifest.adjudication_succession
+        if any(attempt.outcome in ("failed_over", "exhausted") for attempt in attempts):
+            return True
+        # A successor adjudicated after the primary was skipped for a missing key.
         return any(
-            attempt.outcome in ("failed_over", "exhausted")
-            for attempt in self.manifest.adjudication_succession
+            attempt.outcome == "success" and attempt.attempt_index > 1 for attempt in attempts
         )
 
 

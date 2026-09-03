@@ -741,7 +741,13 @@ class Council:
         synthesis was cached) followed by the matching ``*_done`` events and the
         terminal ``done`` (with ``result.cached is True``). The providers are not
         called. On a cache **miss**, the live stream runs and, on completion, the
-        assembled result is stored so a later ``--stream`` or buffered run hits.
+        assembled result is stored so a later ``--stream`` or buffered run hits
+        -- UNLESS :attr:`~conclave.models.CouncilResult.primary_failed_over` is
+        ``True`` (the chain's primary adjudicator failed for an infrastructure
+        reason), mirroring :meth:`_cached_run`'s no-store rule exactly: a cache
+        hit must never pin a result the primary did not produce, nor replay an
+        outage after it has cleared. The run is still returned to this caller
+        unchanged; only the write to disk is skipped.
 
         Args:
             prompt: The user prompt to fan out.
@@ -763,14 +769,23 @@ class Council:
                     yield event
                 return
 
-            # Live miss: stream, capture the terminal result, then store it.
+            # Live miss: stream, capture the terminal result, then store it
+            # (no-store on primary infrastructure failure -- see the docstring).
             final: CouncilResult | None = None
             async for event in stream_ask(self, prompt, synthesize=synthesize):
                 if event.type == "done" and event.result is not None:
                     final = event.result
                 yield event
             if final is not None:
-                cache_mod.store(key, final)
+                if final.primary_failed_over:
+                    logger.info(
+                        "not caching %s run (%s): primary adjudicator failed for an "
+                        "infrastructure reason",
+                        mode,
+                        key[:12],
+                    )
+                else:
+                    cache_mod.store(key, final)
             return
 
         async for event in stream_ask(self, prompt, synthesize=synthesize):
@@ -1017,6 +1032,15 @@ class Council:
         chain = self.synthesizer_chain
         attempts: list[AdjudicationAttempt] = []
         vsr: VerdictSynthesisResult | None = None
+        # Running count of verdict receipts already appended across PRIOR chain
+        # candidates in this call (QA review M2): each candidate's own
+        # ``attempt_receipts`` restarts at 1 (extract_verdict has no visibility
+        # into the chain), so without an offset a successor's receipts collide
+        # with the primary's ("attempt=1" appears twice). Renumbering here keeps
+        # ``attempt`` monotonically increasing across the whole verdict-
+        # extraction sequence on the manifest; a chain of one has offset 0 and
+        # is byte-for-byte unchanged.
+        verdict_receipts_so_far = 0
         for index, candidate in enumerate(chain, start=1):
             model_id = self.config.resolve_model_id(candidate)
             vsr = await extract_verdict_fn(
@@ -1029,8 +1053,13 @@ class Council:
                 timeout=self.timeout,
                 protocol_version=protocol_version,
             )
+            renumbered_receipts = [
+                receipt.model_copy(update={"attempt": verdict_receipts_so_far + offset})
+                for offset, receipt in enumerate(vsr.attempt_receipts, start=1)
+            ]
             if record_receipts:
-                self._append_manifest_receipts(result, vsr.attempt_receipts)
+                self._append_manifest_receipts(result, renumbered_receipts)
+            verdict_receipts_so_far += len(renumbered_receipts)
             if not vsr.attempt_receipts:
                 # N<2 gate: no call was made for this candidate (or any other --
                 # the responder count does not depend on which candidate is
@@ -1378,26 +1407,34 @@ class Council:
         return outcome
 
     async def synthesize_blocks(self, system_prompt: str, user_content: str) -> ModelAnswer:
-        """Call the synthesizer model with an arbitrary system + user message.
+        """Call the synthesizer chain with an arbitrary system + user message.
 
-        Shared by synthesize mode, debate's final consolidation, and the
-        adversarial judge so the synthesizer call path (and its error capture)
-        is written once. Callers are responsible for checking ``key_present``
-        on the synthesizer beforehand when they need a distinct no-key message;
-        this method still returns a ``ModelAnswer.error`` if the call fails.
+        A compatibility wrapper kept for external/library callers that want one
+        synthesizer answer without building a full :class:`CouncilResult` (QA
+        review M4). It walks ``synthesizer_chain`` via :meth:`adjudicate` --
+        with a chain of one (the default) this is byte-for-byte the historic
+        single-call behavior -- and returns whichever :class:`ModelAnswer` the
+        walk resolves to, or a synthetic ``ModelAnswer.error`` when every
+        candidate was unkeyed. Callers are responsible for checking
+        ``key_present`` beforehand when they need a distinct no-key message.
 
-        **Now a thin wrapper (DSE-1512)** over :meth:`adjudicate` walking
-        ``synthesizer_chain``: with a chain of one (the default) this is
-        byte-for-byte the old single-call behavior. No caller is re-routed
-        through the succession ledger by this change -- that is a separate unit
-        of work; this method still returns a bare :class:`ModelAnswer`.
+        **No caller inside this package uses this method any more.**
+        :meth:`_synthesize`, :func:`conclave.modes._debate_synthesize`, and
+        :func:`conclave.modes._adversarial_judge` all go through
+        :meth:`_adjudicate_and_record` instead, because THIS method records
+        neither the succession ledger nor any receipts -- it has no
+        :class:`CouncilResult` to attach them to. A caller that needs the audit
+        trail (the manifest's ``adjudication_succession`` + per-call receipts)
+        must go through :meth:`Council.ask` / :meth:`debate` / :meth:`adversarial`
+        instead; this method remains for a caller that genuinely only wants the
+        bare answer. No behavior change from calling :meth:`adjudicate` directly.
 
         Args:
             system_prompt: System instruction for the synthesizer/judge.
             user_content: The user-role content (prompt + answers/critiques).
 
         Returns:
-            A :class:`ModelAnswer` from the synthesizer model.
+            A :class:`ModelAnswer` from the synthesizer chain.
         """
         outcome = await self.adjudicate("synthesis", system_prompt, user_content)
         if outcome.answer is not None:

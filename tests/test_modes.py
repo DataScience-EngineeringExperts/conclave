@@ -919,3 +919,72 @@ async def test_adversarial_judge_chain_of_one_no_key_message_unchanged(monkeypat
     assert adv.verdict_error == (
         "judge 'claude' (anthropic/c) has no API key; returning proposal and critiques only"
     )
+
+
+# --------------------------------------------------------------------------- #
+# primary_failed_over via a successor after a skipped-unkeyed primary
+# (DSE-1512 review, Unit A3) -- and proof the second run is not served from
+# cache, mirroring tests/test_council.py's synthesize-mode counterpart.
+# --------------------------------------------------------------------------- #
+
+
+async def test_debate_successor_after_unkeyed_primary_is_primary_failed_over(monkeypatch, tmp_path):
+    """A debate whose final consolidator's primary was skipped for a missing key,
+    with a keyed successor, counts as primary_failed_over -- and is not cached.
+    """
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.setenv("XAI_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    c = Council(
+        models=["gemini"],
+        synthesizer="claude>grok",
+        config=CFG,
+        extract_verdict=False,
+        cache=True,
+    )
+    r1 = await c.debate("q", rounds=1)
+    assert r1.primary_failed_over is True
+    assert r1.cached is False
+
+    r2 = await c.debate("q", rounds=1)
+    assert r2.cached is False  # not served from cache -- ran again
+    assert calls.count("gemini") == 2
+
+
+async def test_adversarial_successor_after_unkeyed_primary_is_primary_failed_over(
+    monkeypatch, tmp_path
+):
+    """Same for the adversarial judge: a successor after a skipped-unkeyed primary."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.setenv("XAI_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    c = Council(
+        models=["gemini"],
+        synthesizer="claude>grok",
+        config=CFG,
+        extract_verdict=False,
+        cache=True,
+    )
+    r1 = await c.adversarial("q")
+    assert r1.primary_failed_over is True
+    assert r1.cached is False
+
+    r2 = await c.adversarial("q")
+    assert r2.cached is False  # not served from cache -- ran again
+    assert calls.count("gemini") == 2

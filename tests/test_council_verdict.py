@@ -519,6 +519,17 @@ async def test_verdict_extraction_fails_over_to_successor(monkeypatch, keys):
         ("verdict_repair", "claude", "failed"),
         ("verdict_extraction", "grok", "success"),
     ]
+    # QA review M2: attempt numbers stay monotonic ACROSS candidates rather
+    # than each candidate's receipts restarting at 1 (which would collide).
+    assert [
+        (receipt.phase, receipt.attempt, receipt.name)
+        for receipt in r.manifest.receipts
+        if receipt.phase and receipt.phase.startswith("verdict")
+    ] == [
+        ("verdict_extraction", 1, "claude"),
+        ("verdict_repair", 2, "claude"),
+        ("verdict_extraction", 3, "grok"),
+    ]
     assert r.manifest.secret_safety == SECRET_SAFETY_VERIFIED
 
 
@@ -655,6 +666,159 @@ async def test_verdict_extraction_exhausted(monkeypatch, keys):
         ("verdict_repair", "grok", "failed"),
     ]
     assert r.manifest.secret_safety == SECRET_SAFETY_VERIFIED
+
+
+async def test_verdict_extraction_answered_then_repair_infra_is_terminal(monkeypatch, keys):
+    """A candidate that answered on EITHER attempt is terminal, even if the other errored.
+
+    claude's initial call answers with prose (200, unparsable as JSON); its
+    same-model repair retry then hits an unrelated infrastructure error
+    (429). Because claude answered at least once, the category must be the
+    fixed terminal ``"malformed_response"`` -- NOT the repair's infra
+    category -- so grok is never consulted (QA review A1).
+    """
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/gm"),
+            "openai": make_ok_answer("openai", "openai/o"),
+            "claude": make_ok_answer("claude", "anthropic/c"),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    verdict_calls: list[str] = []
+
+    async def verdict_seam(name, model_id, messages, **kwargs):
+        verdict_calls.append(name)
+        if name == "grok":
+            raise AssertionError("grok must not be consulted after a terminal failure")
+        if verdict_calls.count("claude") == 1:
+            # Initial call: answered, but the prose isn't parseable JSON.
+            return ModelAnswer(name=name, model_id=model_id, answer="not json")
+        # Repair retry: an unrelated infrastructure failure.
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            error="claude quota exceeded",
+            failure_category="quota",
+            http_status=429,
+        )
+
+    monkeypatch.setattr("conclave.verdict_synthesis.call_model", verdict_seam)
+
+    r = await Council(
+        models=["gemini", "openai"], synthesizer="claude>grok", config=_SUCCESSION_CFG
+    ).ask("Should we X?")
+
+    assert verdict_calls == ["claude", "claude"]
+    assert r.verdict is None
+    assert r.manifest.verdict_absent_reason == _REASON_EXTRACTION_FAILED
+    ledger = _verdict_ledger(r)
+    assert [(a.candidate, a.outcome, a.failure_category, a.http_status) for a in ledger] == [
+        ("claude", "terminal_failure", "malformed_response", None),
+    ]
+    assert r.manifest.secret_safety == SECRET_SAFETY_VERIFIED
+
+
+async def test_verdict_extraction_infra_then_answered_is_terminal(monkeypatch, keys):
+    """The mirror of the above: infra failure first, then an answer on repair.
+
+    claude's initial call fails infra-side (503); its repair retry then
+    answers unusably. Because claude answered on the repair, the category is
+    still the fixed terminal ``"malformed_response"`` regardless of the
+    initial's infra category, and grok is never consulted.
+    """
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/gm"),
+            "openai": make_ok_answer("openai", "openai/o"),
+            "claude": make_ok_answer("claude", "anthropic/c"),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    verdict_calls: list[str] = []
+
+    async def verdict_seam(name, model_id, messages, **kwargs):
+        verdict_calls.append(name)
+        if name == "grok":
+            raise AssertionError("grok must not be consulted after a terminal failure")
+        if verdict_calls.count("claude") == 1:
+            return ModelAnswer(
+                name=name,
+                model_id=model_id,
+                error="claude unavailable",
+                failure_category="unavailable",
+                http_status=503,
+            )
+        return ModelAnswer(name=name, model_id=model_id, answer="not json")
+
+    monkeypatch.setattr("conclave.verdict_synthesis.call_model", verdict_seam)
+
+    r = await Council(
+        models=["gemini", "openai"], synthesizer="claude>grok", config=_SUCCESSION_CFG
+    ).ask("Should we X?")
+
+    assert verdict_calls == ["claude", "claude"]
+    assert r.verdict is None
+    assert r.manifest.verdict_absent_reason == _REASON_EXTRACTION_FAILED
+    ledger = _verdict_ledger(r)
+    assert [(a.candidate, a.outcome, a.failure_category, a.http_status) for a in ledger] == [
+        ("claude", "terminal_failure", "malformed_response", None),
+    ]
+    assert r.manifest.secret_safety == SECRET_SAFETY_VERIFIED
+
+
+async def test_verdict_extraction_both_attempts_infra_fails_over(monkeypatch, keys):
+    """Both attempts errored -> the LAST errored attempt's category wins and the
+    chain advances (the ``extract_verdict_fails_over_to_successor`` case, made
+    explicit for both attempts erroring with DIFFERENT categories).
+    """
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/gm"),
+            "openai": make_ok_answer("openai", "openai/o"),
+            "claude": make_ok_answer("claude", "anthropic/c"),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    verdict_calls: list[str] = []
+
+    async def verdict_seam(name, model_id, messages, **kwargs):
+        verdict_calls.append(name)
+        if name != "claude":
+            return ModelAnswer(
+                name=name, model_id=model_id, answer=_extraction_json(members=("gemini", "openai"))
+            )
+        if verdict_calls.count("claude") == 1:
+            return ModelAnswer(
+                name=name,
+                model_id=model_id,
+                error="claude unavailable",
+                failure_category="unavailable",
+                http_status=503,
+            )
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            error="claude quota exceeded",
+            failure_category="quota",
+            http_status=429,
+        )
+
+    monkeypatch.setattr("conclave.verdict_synthesis.call_model", verdict_seam)
+
+    r = await Council(
+        models=["gemini", "openai"], synthesizer="claude>grok", config=_SUCCESSION_CFG
+    ).ask("Should we X?")
+
+    assert r.verdict is not None
+    ledger = _verdict_ledger(r)
+    assert [(a.candidate, a.outcome, a.failure_category, a.http_status) for a in ledger] == [
+        ("claude", "failed_over", "quota", 429),
+        ("grok", "success", None, None),
+    ]
 
 
 async def test_verdict_extraction_n_lt_2_records_no_ledger(monkeypatch, keys):

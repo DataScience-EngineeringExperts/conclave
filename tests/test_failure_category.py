@@ -37,6 +37,8 @@ def _openai_adapter() -> OpenAICompatAdapter:
         (400, "bad_request"),
         (404, "bad_request"),
         (422, "bad_request"),
+        (302, "unexpected"),
+        (101, "unexpected"),
     ],
 )
 def test_categorize_http_status(status, expected):

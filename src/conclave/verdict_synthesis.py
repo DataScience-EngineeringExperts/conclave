@@ -65,10 +65,17 @@ initial call, even when that call failed for an infrastructure reason -- only
 ``extract_verdict`` call per candidate) advances to a different model.
 
 On the ``REASON_EXTRACTION_FAILED`` path, :class:`VerdictSynthesisResult` also
-carries ``failure_category``/``http_status`` classifying the LAST attempt made
-(DSE-1512), so a caller can tell an infrastructure failure (eligible for
-chain failover) apart from a model that answered unusably (terminal for the
-role) without re-deriving it from the receipts.
+carries ``failure_category``/``http_status`` (DSE-1512, review-corrected) so a
+caller can tell an infrastructure failure (eligible for chain failover) apart
+from a model that answered unusably (terminal for the role) without
+re-deriving it from the receipts. The category is decided by whether the
+candidate EVER answered across its attempts, not by which attempt happened to
+run last: a candidate that answered on either the initial call or the repair
+retry is terminal (``"malformed_response"``) even if its OTHER attempt failed
+for an infrastructure reason -- a content failure can never be laundered into
+a failover by an unrelated infra hiccup on the repair. Only when every attempt
+made actually errored does the category reflect the last errored attempt's
+real :class:`~conclave.models.FailureCategory`.
 """
 
 from __future__ import annotations
@@ -81,7 +88,7 @@ from . import agreement
 from .adapters.base import OutputContract, redact
 from .logging import get_logger
 from .manifest import ProviderExecutionReceipt, VerdictExtraction
-from .models import ModelAnswer
+from .models import FailureCategory, ModelAnswer
 from .providers import call_model, receipt_from_answer
 from .verdict import (
     VERDICT_EXTRACTION_PROMPT_VERSION,
@@ -191,29 +198,30 @@ class VerdictSynthesisResult(BaseModel):
         attempt_receipts: One secret-free receipt for each actual extraction or
             repair call. The N<2 gate makes no call and therefore yields none.
         failure_category: Populated ONLY when ``verdict_absent_reason ==
-            REASON_EXTRACTION_FAILED`` (DSE-1512), classifying the LAST
-            extraction attempt made (the repair retry when one ran, else the
-            initial call) so :meth:`conclave.council.Council._apply_verdict`
-            can apply the same chain-failover rule every other adjudication
-            role uses. ``None`` on every other path (success, N<2, open-ended).
-            Two shapes: the last attempt errored (an infrastructure failure --
-            its :attr:`~conclave.models.ModelAnswer.failure_category` is
-            copied verbatim, which may or may not be in
-            :data:`conclave.models.FAILOVER_CATEGORIES`); or it answered but
-            failed schema validation, in which case this is the literal
-            ``"malformed_response"`` -- never a category the model itself could
-            have produced, and never in ``FAILOVER_CATEGORIES``, so a model
-            that responded (even unusably) is always terminal for the role.
-        http_status: The HTTP status of that same last attempt, when the
-            failure came from an HTTP response; ``None`` otherwise (including
-            the ``"malformed_response"`` case, which has no HTTP failure).
+            REASON_EXTRACTION_FAILED`` (DSE-1512, review-corrected), so
+            :meth:`conclave.council.Council._apply_verdict` can apply the same
+            chain-failover rule every other adjudication role uses. ``None`` on
+            every other path (success, N<2, open-ended). Decided by whether the
+            candidate EVER answered (see :func:`_extraction_failure_category`):
+            when every attempt made errored, this is the LAST errored attempt's
+            :attr:`~conclave.models.ModelAnswer.failure_category` verbatim,
+            which may or may not be in :data:`conclave.models.FAILOVER_CATEGORIES`;
+            when any attempt answered (even unusably), this is the fixed
+            literal ``"malformed_response"`` -- never a category the model
+            itself could have produced, and never in ``FAILOVER_CATEGORIES``,
+            so a candidate that responded even once is always terminal for the
+            role regardless of what its other attempt did.
+        http_status: The HTTP status of the same attempt ``failure_category``
+            was derived from, when the failure came from an HTTP response;
+            ``None`` otherwise (including the ``"malformed_response"`` case,
+            which has no HTTP failure).
     """
 
     verdict: CouncilVerdict | None = None
     extraction: VerdictExtraction
     verdict_absent_reason: str | None = Field(default=None)
     attempt_receipts: list[ProviderExecutionReceipt] = Field(default_factory=list)
-    failure_category: str | None = None
+    failure_category: FailureCategory | None = None
     http_status: int | None = None
 
 
@@ -252,30 +260,48 @@ def _verdict_attempt_receipt(
     )
 
 
-def _extraction_failure_category(last_attempt: ModelAnswer) -> tuple[str | None, int | None]:
-    """Classify the terminal (repair-exhausted) extraction failure (DSE-1512).
+def _extraction_failure_category(
+    initial: ModelAnswer, retry: ModelAnswer | None
+) -> tuple[FailureCategory | None, int | None]:
+    """Classify the terminal (repair-exhausted) extraction failure (DSE-1512 review).
 
-    Distinguishes an infrastructure failure -- the model never answered, so its
-    typed :attr:`~conclave.models.ModelAnswer.failure_category` /
-    :attr:`~conclave.models.ModelAnswer.http_status` are copied verbatim -- from
-    a schema/validation failure, where the model DID answer but not usably, so
-    the fixed literal ``"malformed_response"`` is returned instead (never in
-    :data:`conclave.models.FAILOVER_CATEGORIES`, so it is always terminal for
-    the role: a model that answered is never second-guessed by another vendor).
+    The category is decided by whether the candidate EVER answered across its
+    attempts -- NOT by which attempt happened to run last. This closes a real
+    bug: the initial call can answer (200 + unparsable prose) while the SAME-
+    MODEL repair retry then hits an unrelated infrastructure error (e.g. a
+    429 mid-repair); classifying from "the last attempt" alone would read that
+    as an infrastructure failure and wrongly fail the role over to the next
+    chain candidate even though the candidate demonstrably answered.
+
+    * If EITHER ``initial`` or ``retry`` answered (``error is None``), the
+      candidate answered -- return the fixed literal ``"malformed_response"``
+      (never in :data:`conclave.models.FAILOVER_CATEGORIES`, so it is always
+      terminal for the role: a model that answered is never second-guessed by
+      another vendor, regardless of what its other attempt did).
+    * Only when EVERY attempt made actually errored does this return the LAST
+      errored attempt's typed :attr:`~conclave.models.ModelAnswer.failure_category`
+      / :attr:`~conclave.models.ModelAnswer.http_status` verbatim (an
+      infrastructure failure, which may or may not be in
+      ``FAILOVER_CATEGORIES``).
+
     :meth:`conclave.council.Council._apply_verdict` reads this pair to decide
     whether the verdict-extraction role fails over to the next chain candidate.
 
     Args:
-        last_attempt: The final extraction attempt made -- the repair retry
-            when one ran, else the initial call.
+        initial: The initial extraction attempt.
+        retry: The repair retry, or ``None`` when no repair was attempted
+            (the initial call already validated, or errored and no retry
+            occurred).
 
     Returns:
         ``(failure_category, http_status)``, either fully populated (an infra
-        failure) or ``("malformed_response", None)`` (a schema failure).
+        failure on every attempt) or ``("malformed_response", None)`` (the
+        candidate answered on at least one attempt).
     """
-    if last_attempt.error is not None:
-        return last_attempt.failure_category, last_attempt.http_status
-    return "malformed_response", None
+    if initial.error is None or (retry is not None and retry.error is None):
+        return "malformed_response", None
+    last_attempt = retry if retry is not None else initial
+    return last_attempt.failure_category, last_attempt.http_status
 
 
 def _responding(member_answers: list[ModelAnswer]) -> list[ModelAnswer]:
@@ -679,8 +705,7 @@ async def extract_verdict(
     if extraction is None:
         # Repair exhausted — degrade gracefully (DD-2), never raise.
         logger.warning("verdict extraction failed schema validation after repair: %s", errors)
-        last_attempt = retry if retry is not None else answer
-        failure_category, http_status = _extraction_failure_category(last_attempt)
+        failure_category, http_status = _extraction_failure_category(answer, retry)
         return VerdictSynthesisResult(
             verdict=None,
             extraction=extraction_provenance,
