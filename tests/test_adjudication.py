@@ -132,6 +132,22 @@ async def test_all_unkeyed_returns_no_answer(monkeypatch):
     assert [a.outcome for a in out.attempts] == ["skipped_unkeyed", "skipped_unkeyed"]
 
 
+async def test_synthesize_blocks_all_unkeyed_synthetic_answer_is_typed(monkeypatch):
+    """The synthetic error answer for an all-unkeyed chain is typed 'unkeyed'.
+
+    ``synthesize_blocks`` fabricates a ``ModelAnswer`` when no chain candidate
+    has a key. It must carry ``failure_category="unkeyed"`` like every other
+    unkeyed outcome, not the pre-DSE-1512 untyped default of ``None``.
+    """
+    for var in ("ANTHROPIC_API_KEY", "XAI_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    _install(monkeypatch, {})
+    c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG)
+    answer = await c.synthesize_blocks("sys", "user")
+    assert not answer.ok
+    assert answer.failure_category == "unkeyed"
+
+
 def test_record_adjudication_appends_ledger_and_receipts():
     c = Council(models=["grok"], synthesizer="claude", config=CFG)
     result = CouncilResult(

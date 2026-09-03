@@ -992,17 +992,35 @@ class Council:
         chain = self.synthesizer_chain
         for index, candidate in enumerate(chain, start=1):
             model_id = self.config.resolve_model_id(candidate)
-            if not key_present(model_id):
-                attempts.append(
-                    AdjudicationAttempt(
-                        role=role,
-                        candidate=candidate,
-                        model_id=model_id,
-                        attempt_index=index,
-                        outcome="skipped_unkeyed",
-                        failure_category="unkeyed",
-                    )
+
+            def _attempt(
+                outcome: str,
+                *,
+                failure_category: str | None = None,
+                http_status: int | None = None,
+                _candidate: str = candidate,
+                _model_id: str = model_id,
+                _index: int = index,
+            ) -> AdjudicationAttempt:
+                """Build one ledger entry for the candidate/index of this iteration.
+
+                The loop variables are bound as default-argument values so the
+                closure captures THIS iteration's ``candidate``/``model_id``/
+                ``index`` rather than whatever they are when the loop ends
+                (flake8-bugbear B023).
+                """
+                return AdjudicationAttempt(
+                    role=role,
+                    candidate=_candidate,
+                    model_id=_model_id,
+                    attempt_index=_index,
+                    outcome=outcome,
+                    failure_category=failure_category,
+                    http_status=http_status,
                 )
+
+            if not key_present(model_id):
+                attempts.append(_attempt("skipped_unkeyed", failure_category="unkeyed"))
                 continue
             answer = await call_model(
                 candidate,
@@ -1014,26 +1032,14 @@ class Council:
             )
             called.append(answer)
             if answer.ok:
-                attempts.append(
-                    AdjudicationAttempt(
-                        role=role,
-                        candidate=candidate,
-                        model_id=model_id,
-                        attempt_index=index,
-                        outcome="success",
-                    )
-                )
+                attempts.append(_attempt("success"))
                 return AdjudicationOutcome(answer=answer, attempts=attempts, called=called)
             category = answer.failure_category
             if category in FAILOVER_CATEGORIES:
                 is_last = index == len(chain)
                 attempts.append(
-                    AdjudicationAttempt(
-                        role=role,
-                        candidate=candidate,
-                        model_id=model_id,
-                        attempt_index=index,
-                        outcome="exhausted" if is_last else "failed_over",
+                    _attempt(
+                        "exhausted" if is_last else "failed_over",
                         failure_category=category,
                         http_status=answer.http_status,
                     )
@@ -1045,12 +1051,8 @@ class Council:
                     )
                 continue
             attempts.append(
-                AdjudicationAttempt(
-                    role=role,
-                    candidate=candidate,
-                    model_id=model_id,
-                    attempt_index=index,
-                    outcome="terminal_failure",
+                _attempt(
+                    "terminal_failure",
                     failure_category=category,
                     http_status=answer.http_status,
                 )
@@ -1136,6 +1138,7 @@ class Council:
             name=self.synthesizer,
             model_id=synth_id,
             error="no candidate in synthesizer chain has an API key",
+            failure_category="unkeyed",
         )
 
     async def debate(
