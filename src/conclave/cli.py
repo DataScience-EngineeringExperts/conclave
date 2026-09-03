@@ -557,8 +557,8 @@ def ask(
         "-s",
         help=(
             "Synthesizer/judge model name, or an ordered failover ladder "
-            "'claude>grok>gemini': the next candidate is tried only on auth/quota/5xx/timeout/"
-            "network failures (DSE-1512)."
+            "'claude>grok>gemini': the next candidate is tried only on missing-key, "
+            "unknown-provider, auth, quota, 5xx, timeout, or network failures (DSE-1512)."
         ),
     ),
     rounds: int = typer.Option(

@@ -240,3 +240,7 @@ is available, and credit you in the advisory unless you ask to remain anonymous.
 - conclave is a council aggregator, not a security control. The *content* a model
   returns is not adjudicated for safety; that is out of scope. A leak of the
   user's own credentials is the security boundary we defend.
+- Synthesizer failover (`synthesizer_chain`, v1.4): on an infrastructure failure the
+  same prompt and council answers are sent to the next candidate the operator
+  declared. Failover never fires on a content failure and never adds data; it only
+  widens which of the operator's own declared vendors receive the prompt.

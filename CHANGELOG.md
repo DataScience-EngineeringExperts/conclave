@@ -36,26 +36,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regardless of category (tokens cannot be un-shown).
 - `VerdictSynthesisResult.failure_category` / `http_status` (set on the extraction-failed
   path only) and public `REASON_TOO_FEW` / `REASON_OPEN_ENDED` / `REASON_EXTRACTION_FAILED`.
+- A declared chain widens which vendors may receive the prompt (see README › Synthesizer
+  failover › Confidentiality).
 
 ### Changed
 
 - `debate` and `adversarial` manifests now carry a receipt for the final-consolidation /
-  judge call, which they previously omitted; `total_latency_ms` and `total_usage` for those
-  modes include it. Every real call now has a receipt, matching the Elite contract.
+  judge call, which they previously omitted; `total_latency_ms`, `total_usage`, and
+  `redacted_errors` for those modes include it. Every real call now has a receipt, matching
+  the Elite contract.
 - **Cache.** The full synthesizer chain is part of cache identity; `CACHE_FORMAT_VERSION`
-  `3` → `4` (old entries miss safely). A run whose primary adjudicator failed for an
-  infrastructure reason (`failed_over` or `exhausted` in the ledger) is **no longer stored**
-  — a cache hit must never pin a result the primary did not produce, nor replay an outage
-  after it ends. Consequence for a chain of one: a degraded run whose sole synthesizer
-  errored for an infrastructure reason used to be cached and now is not. `terminal_failure`
-  runs (the model answered) remain cacheable.
+  `3` → `4` (old entries miss safely). A run **adjudicated by a successor or whose ladder was
+  exhausted** (`failed_over` or `exhausted` in the ledger — matching
+  `CouncilResult.primary_failed_over`) is **no longer stored**, whether the run was buffered
+  or streamed via `--stream` — a cache hit must never pin a result the primary did not
+  produce, nor replay an outage after it ends. Consequence for a chain of one: a degraded run
+  whose sole synthesizer errored for an infrastructure reason used to be cached and now is
+  not. `terminal_failure` runs (the model answered) remain cacheable.
 - `ProviderError` and `TransportError` accept keyword-only `category` (and `http_status`);
   positional construction is unchanged.
 
 ### Not changed (deliberately)
 
 - Verdict extraction's same-model repair retry is still attempted after an infrastructure
-  error (it will fail the same way); removing that wasted call is a follow-up.
+  error; its outcome can never turn a content failure into a failover — the candidate's fate
+  is decided by whether it ever answered.
 - Member-level failover (members already degrade gracefully), transport-level retries, and
   the substring-derived `ReceiptErrorCategory` on receipts.
 

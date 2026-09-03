@@ -452,7 +452,7 @@ synthesizer_chain: [claude, grok, gemini]   # optional; empty means just `synthe
 
 | Failure category | Trigger | Next candidate tried? |
 |---|---|---|
-| `unkeyed` / `unresolved` | no API key in the environment / unknown provider | yes (no call made) |
+| `unkeyed` / `unresolved` | no API key in the environment / unknown provider | yes (no network request is made) |
 | `auth` | HTTP 401 / 403 | yes |
 | `quota` | HTTP 402 / 429 | yes |
 | `unavailable` | HTTP 5xx | yes |
@@ -464,6 +464,14 @@ The rule is deliberately narrow: a model that answered is never second-guessed b
 vendor, so a ladder cannot be used to shop for a verdict. The order is yours; conclave adds
 no scoring or health tracking. With `--stream`, failover happens only before the first token
 is shown.
+
+Verdict extraction attempts every candidate rather than pre-skipping unkeyed ones (those
+attempts fail before any network request), so its receipts stay complete; a candidate that
+produced any response — even unusable JSON — is terminal for that role.
+
+**Confidentiality.** A chain widens which vendors receive your prompt: on an infrastructure
+failure the same prompt and council answers are sent to the next declared candidate. Declare
+only vendors you are willing to have see the prompt.
 
 Every attempt is recorded on the manifest so the receipt answers *who adjudicated, and why
 not the primary?*:
@@ -478,8 +486,10 @@ not the primary?*:
 ```
 
 `result.synthesizer` names the candidate that actually adjudicated. A run adjudicated by a
-successor exits `0`; exit `3` (`degraded`) now means the whole ladder was exhausted. Runs in
-which the primary failed for an infrastructure reason are not written to the result cache.
+successor exits `0`; exit `3` (`degraded`) now means the whole ladder was exhausted. Runs
+adjudicated by a successor, or whose ladder was exhausted, are not written to the result
+cache — a cache hit must never pin a result the primary did not produce, nor replay an
+outage after it ends.
 
 ## Config (optional)
 
