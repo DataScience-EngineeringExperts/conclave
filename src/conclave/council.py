@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from uuid import uuid4
 
 from . import cache as cache_mod
@@ -61,12 +62,21 @@ from .adapters.base import redact
 from .config import ConclaveConfig, load_config, parse_synthesizer_chain
 from .logging import get_logger
 from .manifest import (
+    AdjudicationAttempt,
+    AdjudicationRole,
     ModelHarnessManifest,
     ProviderExecutionReceipt,
     ProviderSkip,
     verified_secret_safety,
 )
-from .models import ELITE_PROTOCOL_VERSION, CouncilResult, ModelAnswer, StreamEvent, TokenUsage
+from .models import (
+    ELITE_PROTOCOL_VERSION,
+    FAILOVER_CATEGORIES,
+    CouncilResult,
+    ModelAnswer,
+    StreamEvent,
+    TokenUsage,
+)
 from .prompts import ELITE_PROMPT_VERSION, SYNTHESIS_PROMPT_VERSION
 from .providers import call_model, receipt_from_answer
 from .registry import key_present
@@ -96,6 +106,29 @@ _SYNTH_SYSTEM = (
 
 # Re-exported for callers that want the version without importing prompts.
 __all__ = ["Council", "SYNTHESIS_PROMPT_VERSION"]
+
+
+@dataclass
+class AdjudicationOutcome:
+    """Return value of :meth:`Council.adjudicate`.
+
+    ``answer`` is the successful answer, or the terminal / exhausted failure, or
+    ``None`` when no candidate could be called at all (every one unkeyed).
+    ``called`` lists every REAL call in order (for receipts); ``attempts`` is the
+    full ledger including skipped candidates.
+    """
+
+    answer: ModelAnswer | None
+    attempts: list[AdjudicationAttempt]
+    called: list[ModelAnswer]
+
+    @property
+    def name(self) -> str | None:
+        return self.answer.name if self.answer is not None else None
+
+    @property
+    def model_id(self) -> str | None:
+        return self.answer.model_id if self.answer is not None else None
 
 
 class Council:
@@ -926,6 +959,153 @@ class Council:
             # the verdict-provenance fields just written (they are key-free).
             result.manifest.secret_safety = verified_secret_safety(result.manifest)
 
+    async def adjudicate(
+        self, role: AdjudicationRole, system_prompt: str, user_content: str
+    ) -> AdjudicationOutcome:
+        """Walk ``synthesizer_chain`` for one adjudication role (DSE-1512).
+
+        Rule: candidates are tried in declared order; an unkeyed candidate is
+        skipped without a call; a call that fails with a category in
+        :data:`FAILOVER_CATEGORIES` advances to the next candidate; ANY other
+        failure is terminal for the role -- a model that answered is never
+        second-guessed by another vendor, which would let adjudication shop for
+        a result. No scoring, no health tracking: the order is the operator's.
+
+        Args:
+            role: Which adjudication role this call serves (recorded on every
+                :class:`~conclave.manifest.AdjudicationAttempt`).
+            system_prompt: System instruction for the synthesizer/judge.
+            user_content: The user-role content (prompt + answers/critiques).
+
+        Returns:
+            An :class:`AdjudicationOutcome` carrying the resolved answer (or
+            ``None`` when every candidate was unkeyed), the full attempt
+            ledger, and the list of real calls made.
+        """
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        attempts: list[AdjudicationAttempt] = []
+        called: list[ModelAnswer] = []
+        last_failure: ModelAnswer | None = None
+        chain = self.synthesizer_chain
+        for index, candidate in enumerate(chain, start=1):
+            model_id = self.config.resolve_model_id(candidate)
+            if not key_present(model_id):
+                attempts.append(
+                    AdjudicationAttempt(
+                        role=role,
+                        candidate=candidate,
+                        model_id=model_id,
+                        attempt_index=index,
+                        outcome="skipped_unkeyed",
+                        failure_category="unkeyed",
+                    )
+                )
+                continue
+            answer = await call_model(
+                candidate,
+                model_id,
+                messages,
+                config=self.config,
+                temperature=self.temperature,
+                timeout=self.timeout,
+            )
+            called.append(answer)
+            if answer.ok:
+                attempts.append(
+                    AdjudicationAttempt(
+                        role=role,
+                        candidate=candidate,
+                        model_id=model_id,
+                        attempt_index=index,
+                        outcome="success",
+                    )
+                )
+                return AdjudicationOutcome(answer=answer, attempts=attempts, called=called)
+            category = answer.failure_category
+            if category in FAILOVER_CATEGORIES:
+                is_last = index == len(chain)
+                attempts.append(
+                    AdjudicationAttempt(
+                        role=role,
+                        candidate=candidate,
+                        model_id=model_id,
+                        attempt_index=index,
+                        outcome="exhausted" if is_last else "failed_over",
+                        failure_category=category,
+                        http_status=answer.http_status,
+                    )
+                )
+                last_failure = answer
+                if not is_last:
+                    logger.warning(
+                        "%s: '%s' failed (%s); trying next candidate", role, candidate, category
+                    )
+                continue
+            attempts.append(
+                AdjudicationAttempt(
+                    role=role,
+                    candidate=candidate,
+                    model_id=model_id,
+                    attempt_index=index,
+                    outcome="terminal_failure",
+                    failure_category=category,
+                    http_status=answer.http_status,
+                )
+            )
+            return AdjudicationOutcome(answer=answer, attempts=attempts, called=called)
+        return AdjudicationOutcome(answer=last_failure, attempts=attempts, called=called)
+
+    def _record_adjudication(
+        self,
+        result: CouncilResult,
+        attempts: list[AdjudicationAttempt],
+        called: list[ModelAnswer],
+        *,
+        phase: str,
+        record_receipts: bool = True,
+        protocol_version: str | None = None,
+        prompt_version: str | None = SYNTHESIS_PROMPT_VERSION,
+    ) -> None:
+        """Append the succession ledger (always) and one receipt per real call.
+
+        No-op when the result has no manifest yet. ``_recompute_manifest_accounting``
+        re-derives totals and re-stamps ``secret_safety`` over the new content.
+
+        Args:
+            result: The in-progress result. Mutated in place.
+            attempts: The full attempt ledger from :meth:`adjudicate`, including
+                skipped-unkeyed candidates.
+            called: The real calls made, in order (from
+                :attr:`AdjudicationOutcome.called`).
+            phase: The manifest receipt phase to stamp on each call.
+            record_receipts: When ``False``, skip appending receipts (the ledger
+                is still recorded); used by callers that record receipts
+                elsewhere.
+            protocol_version: Optional protocol version to stamp on receipts.
+            prompt_version: Prompt version to stamp on receipts; defaults to the
+                synthesis prompt version.
+        """
+        if result.manifest is None:
+            return
+        result.manifest.adjudication_succession.extend(attempts)
+        if record_receipts:
+            result.manifest.receipts.extend(
+                receipt_from_answer(
+                    answer,
+                    temperature=self.temperature,
+                    timeout=self.timeout,
+                    phase=phase,
+                    attempt=index,
+                    protocol_version=protocol_version,
+                    prompt_version=prompt_version,
+                )
+                for index, answer in enumerate(called, start=1)
+            )
+        self._recompute_manifest_accounting(result.manifest)
+
     async def synthesize_blocks(self, system_prompt: str, user_content: str) -> ModelAnswer:
         """Call the synthesizer model with an arbitrary system + user message.
 
@@ -935,6 +1115,12 @@ class Council:
         on the synthesizer beforehand when they need a distinct no-key message;
         this method still returns a ``ModelAnswer.error`` if the call fails.
 
+        **Now a thin wrapper (DSE-1512)** over :meth:`adjudicate` walking
+        ``synthesizer_chain``: with a chain of one (the default) this is
+        byte-for-byte the old single-call behavior. No caller is re-routed
+        through the succession ledger by this change -- that is a separate unit
+        of work; this method still returns a bare :class:`ModelAnswer`.
+
         Args:
             system_prompt: System instruction for the synthesizer/judge.
             user_content: The user-role content (prompt + answers/critiques).
@@ -942,18 +1128,14 @@ class Council:
         Returns:
             A :class:`ModelAnswer` from the synthesizer model.
         """
+        outcome = await self.adjudicate("synthesis", system_prompt, user_content)
+        if outcome.answer is not None:
+            return outcome.answer
         synth_id = self.config.resolve_model_id(self.synthesizer)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ]
-        return await call_model(
-            self.synthesizer,
-            synth_id,
-            messages,
-            config=self.config,
-            temperature=self.temperature,
-            timeout=self.timeout,
+        return ModelAnswer(
+            name=self.synthesizer,
+            model_id=synth_id,
+            error="no candidate in synthesizer chain has an API key",
         )
 
     async def debate(
