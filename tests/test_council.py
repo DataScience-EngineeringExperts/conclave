@@ -12,7 +12,7 @@ import pytest
 
 from conclave import Council
 from conclave.config import ConclaveConfig
-from tests.conftest import make_response
+from tests.conftest import install_council_script, make_failed_answer, make_ok_answer, make_response
 
 
 def _all_keys(monkeypatch) -> None:
@@ -356,3 +356,97 @@ def test_council_constructor_arg_beats_config_chain():
     cfg = ConclaveConfig(synthesizer_chain=["grok", "gemini"])
     c = Council(models=["claude"], synthesizer="claude", config=cfg)
     assert c.synthesizer_chain == ["claude"]
+
+
+# --------------------------------------------------------------------------- #
+# prose synthesis routed through the adjudication succession seam (DSE-1512, task 5)
+# --------------------------------------------------------------------------- #
+
+CFG = ConclaveConfig(
+    models={
+        "claude": "anthropic/c",
+        "grok": "xai/g",
+        "gemini": "gemini/m",
+        "openai": "openai/o",
+        "mistral": "mistral/m",
+    }
+)
+
+
+async def test_synthesize_mode_fails_over_and_is_not_degraded(monkeypatch, keys):
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_failed_answer("claude", "anthropic/c", "quota", 402),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.synthesis == "grok says yes" and r.synthesis_error is None and r.degraded is False
+    assert (r.synthesizer, r.synthesizer_model_id) == ("grok", "xai/g")
+    ledger = r.manifest.adjudication_succession
+    assert [(a.role, a.candidate, a.outcome) for a in ledger] == [
+        ("synthesis", "claude", "failed_over"),
+        ("synthesis", "grok", "success"),
+    ]
+    assert [
+        (x.phase, x.attempt, x.name) for x in r.manifest.receipts if x.phase == "synthesis"
+    ] == [
+        ("synthesis", 1, "claude"),
+        ("synthesis", 2, "grok"),
+    ]
+    assert r.manifest.secret_safety == "verified_no_secrets"
+    assert calls == ["gemini", "claude", "grok"]
+
+
+async def test_synthesize_mode_exhausted_is_degraded(monkeypatch, keys):
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_failed_answer("claude", "anthropic/c", "quota", 429),
+            "grok": make_failed_answer("grok", "xai/g", "unavailable", 503),
+        },
+    )
+    c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.synthesis is None
+    assert r.synthesis_error == "grok failed"
+    assert r.degraded is True
+    ledger = r.manifest.adjudication_succession
+    assert [a.outcome for a in ledger] == ["failed_over", "exhausted"]
+    assert (r.synthesizer, r.synthesizer_model_id) == ("grok", "xai/g")
+    assert calls == ["gemini", "claude", "grok"]
+
+
+async def test_synthesize_chain_of_one_no_key_message_unchanged(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    calls = install_council_script(monkeypatch, {"gemini": make_ok_answer("gemini", "gemini/m")})
+    c = Council(models=["gemini"], synthesizer="claude", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.synthesis_error == (
+        "synthesizer 'claude' (anthropic/c) has no API key; returning raw answers only"
+    )
+    ledger = r.manifest.adjudication_succession
+    assert [(a.role, a.candidate, a.outcome) for a in ledger] == [
+        ("synthesis", "claude", "skipped_unkeyed")
+    ]
+    assert [x for x in r.manifest.receipts if x.phase == "synthesis"] == []
+    assert calls == ["gemini"]
+
+
+async def test_synthesize_chain_all_unkeyed_message(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    calls = install_council_script(monkeypatch, {"gemini": make_ok_answer("gemini", "gemini/m")})
+    c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.synthesis_error == (
+        "synthesizer chain [claude, grok] has no API key for any candidate; "
+        "returning raw answers only"
+    )
+    ledger = r.manifest.adjudication_succession
+    assert [a.outcome for a in ledger] == ["skipped_unkeyed", "skipped_unkeyed"]
+    assert r.degraded is True
+    assert calls == ["gemini"]

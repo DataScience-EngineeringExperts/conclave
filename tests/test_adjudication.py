@@ -2,52 +2,17 @@
 
 from __future__ import annotations
 
-import pytest
-
-from conclave import council as council_mod
 from conclave.config import ConclaveConfig
 from conclave.council import Council
 from conclave.manifest import AdjudicationAttempt, ModelHarnessManifest
-from conclave.models import CouncilResult, ModelAnswer
+from conclave.models import CouncilResult
+from tests.conftest import install_council_script, make_failed_answer, make_ok_answer
 
 CFG = ConclaveConfig(models={"claude": "anthropic/c", "grok": "xai/g", "gemini": "gemini/m"})
 
 
-def _fail(name, model_id, category, status=None):
-    return ModelAnswer(
-        name=name,
-        model_id=model_id,
-        error=f"{name} failed",
-        failure_category=category,
-        http_status=status,
-    )
-
-
-def _ok(name, model_id):
-    return ModelAnswer(
-        name=name, model_id=model_id, answer=f"{name} says yes", answer_id=f"{name}-1"
-    )
-
-
-def _install(monkeypatch, script: dict[str, ModelAnswer]):
-    calls = []
-
-    async def fake(name, model_id, messages, **kw):
-        calls.append(name)
-        return script[name]
-
-    monkeypatch.setattr(council_mod, "call_model", fake)
-    return calls
-
-
-@pytest.fixture
-def keys(monkeypatch):
-    for var in ("ANTHROPIC_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY"):
-        monkeypatch.setenv(var, "dummy")
-
-
 async def test_chain_of_one_success(monkeypatch, keys):
-    calls = _install(monkeypatch, {"claude": _ok("claude", "anthropic/c")})
+    calls = install_council_script(monkeypatch, {"claude": make_ok_answer("claude", "anthropic/c")})
     c = Council(models=["grok"], synthesizer="claude", config=CFG)
     out = await c.adjudicate("synthesis", "sys", "user")
     assert out.answer.ok and out.name == "claude" and calls == ["claude"]
@@ -55,9 +20,12 @@ async def test_chain_of_one_success(monkeypatch, keys):
 
 
 async def test_auth_failure_advances(monkeypatch, keys):
-    calls = _install(
+    calls = install_council_script(
         monkeypatch,
-        {"claude": _fail("claude", "anthropic/c", "auth", 401), "grok": _ok("grok", "xai/g")},
+        {
+            "claude": make_failed_answer("claude", "anthropic/c", "auth", 401),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
     )
     c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG)
     out = await c.adjudicate("synthesis", "sys", "user")
@@ -70,11 +38,11 @@ async def test_auth_failure_advances(monkeypatch, keys):
 
 
 async def test_bad_request_is_terminal(monkeypatch, keys):
-    calls = _install(
+    calls = install_council_script(
         monkeypatch,
         {
-            "claude": _fail("claude", "anthropic/c", "bad_request", 400),
-            "grok": _ok("grok", "xai/g"),
+            "claude": make_failed_answer("claude", "anthropic/c", "bad_request", 400),
+            "grok": make_ok_answer("grok", "xai/g"),
         },
     )
     c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG)
@@ -85,11 +53,11 @@ async def test_bad_request_is_terminal(monkeypatch, keys):
 
 
 async def test_malformed_is_terminal(monkeypatch, keys):
-    calls = _install(
+    calls = install_council_script(
         monkeypatch,
         {
-            "claude": _fail("claude", "anthropic/c", "malformed_response"),
-            "grok": _ok("grok", "xai/g"),
+            "claude": make_failed_answer("claude", "anthropic/c", "malformed_response"),
+            "grok": make_ok_answer("grok", "xai/g"),
         },
     )
     c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG)
@@ -100,7 +68,7 @@ async def test_malformed_is_terminal(monkeypatch, keys):
 async def test_unkeyed_candidate_is_skipped_without_call(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv("XAI_API_KEY", "dummy")
-    calls = _install(monkeypatch, {"grok": _ok("grok", "xai/g")})
+    calls = install_council_script(monkeypatch, {"grok": make_ok_answer("grok", "xai/g")})
     c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG)
     out = await c.adjudicate("synthesis", "sys", "user")
     assert calls == ["grok"]
@@ -108,11 +76,11 @@ async def test_unkeyed_candidate_is_skipped_without_call(monkeypatch):
 
 
 async def test_chain_exhausted(monkeypatch, keys):
-    calls = _install(
+    calls = install_council_script(
         monkeypatch,
         {
-            "claude": _fail("claude", "anthropic/c", "quota", 429),
-            "grok": _fail("grok", "xai/g", "unavailable", 503),
+            "claude": make_failed_answer("claude", "anthropic/c", "quota", 429),
+            "grok": make_failed_answer("grok", "xai/g", "unavailable", 503),
         },
     )
     c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG)
@@ -125,7 +93,7 @@ async def test_chain_exhausted(monkeypatch, keys):
 async def test_all_unkeyed_returns_no_answer(monkeypatch):
     for var in ("ANTHROPIC_API_KEY", "XAI_API_KEY"):
         monkeypatch.delenv(var, raising=False)
-    calls = _install(monkeypatch, {})
+    calls = install_council_script(monkeypatch, {})
     c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG)
     out = await c.adjudicate("synthesis", "sys", "user")
     assert out.answer is None and calls == []
@@ -141,7 +109,7 @@ async def test_synthesize_blocks_all_unkeyed_synthetic_answer_is_typed(monkeypat
     """
     for var in ("ANTHROPIC_API_KEY", "XAI_API_KEY"):
         monkeypatch.delenv(var, raising=False)
-    _install(monkeypatch, {})
+    install_council_script(monkeypatch, {})
     c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG)
     answer = await c.synthesize_blocks("sys", "user")
     assert not answer.ok
@@ -168,7 +136,10 @@ def test_record_adjudication_appends_ledger_and_receipts():
             role="synthesis", candidate="grok", model_id="xai/g", attempt_index=2, outcome="success"
         ),
     ]
-    called = [_fail("claude", "anthropic/c", "auth", 401), _ok("grok", "xai/g")]
+    called = [
+        make_failed_answer("claude", "anthropic/c", "auth", 401),
+        make_ok_answer("grok", "xai/g"),
+    ]
     c._record_adjudication(result, attempts, called, phase="synthesis")
     m = result.manifest
     assert m.adjudication_succession == attempts

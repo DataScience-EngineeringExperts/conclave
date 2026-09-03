@@ -22,7 +22,7 @@ from conclave.prompts import (
     elite_critic_user,
     elite_revision_user,
 )
-from tests.conftest import make_response
+from tests.conftest import install_council_script, make_failed_answer, make_ok_answer, make_response
 
 
 def _all_keys(monkeypatch) -> None:
@@ -602,3 +602,61 @@ async def test_council_elite_open_ended_verdict_is_indeterminate(
     assert result.elite.completed is True
     assert result.elite.decision_readiness == "indeterminate"
     assert result.elite.readiness_reasons == ["adjudication.open_ended"]
+
+
+# --------------------------------------------------------------------------- #
+# elite synthesis routed through the adjudication succession seam (DSE-1512, task 5)
+# --------------------------------------------------------------------------- #
+
+CFG = ConclaveConfig(
+    models={
+        "claude": "anthropic/c",
+        "grok": "xai/g",
+        "gemini": "gemini/m",
+        "openai": "openai/o",
+        "mistral": "mistral/m",
+    }
+)
+
+
+async def test_elite_synthesis_fails_over(monkeypatch, keys):
+    """A failed primary synthesizer fails over to the next chain candidate.
+
+    Three members (gemini, claude, grok) answer identically across the
+    initial/critique/revision phases -- ``install_council_script`` returns the
+    same canned answer for every call to a given name, which is fine here
+    since the elite gate only requires >= 3 successful responders per phase,
+    not distinct text. The synthesizer chain "openai>mistral" fails over from
+    a quota-limited openai to a healthy mistral.
+    """
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_ok_answer("claude", "anthropic/c"),
+            "grok": make_ok_answer("grok", "xai/g"),
+            "openai": make_failed_answer("openai", "openai/o", "quota", 429),
+            "mistral": make_ok_answer("mistral", "mistral/m"),
+        },
+    )
+    c = Council(
+        models=["gemini", "claude", "grok"],
+        synthesizer="openai>mistral",
+        config=CFG,
+        extract_verdict=False,
+    )
+    r = await c.elite("q")
+
+    assert r.elite.completed is True
+    assert r.synthesis == "mistral says yes"
+    ledger = r.manifest.adjudication_succession
+    assert [(a.role, a.candidate, a.outcome) for a in ledger] == [
+        ("synthesis", "openai", "failed_over"),
+        ("synthesis", "mistral", "success"),
+    ]
+    synth_receipts = [x for x in r.manifest.receipts if x.phase == "synthesis"]
+    assert [(x.attempt, x.name) for x in synth_receipts] == [(1, "openai"), (2, "mistral")]
+    assert all(x.protocol_version == ELITE_PROTOCOL_VERSION for x in synth_receipts)
+    assert r.elite.decision_readiness == "indeterminate"
+    assert r.elite.readiness_reasons == ["adjudication.disabled"]
+    assert "openai" in calls and "mistral" in calls
