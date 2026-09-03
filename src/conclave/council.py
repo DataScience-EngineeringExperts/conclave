@@ -136,6 +136,34 @@ class AdjudicationOutcome:
         return self.answer.model_id if self.answer is not None else None
 
 
+def _primary_failed_over(result: CouncilResult) -> bool:
+    """True when the run's manifest records an infra failover away from the primary.
+
+    Checked before every cache store (DSE-1512): a cache hit must never pin a
+    result the chain's primary adjudicator did not produce, and it must never
+    replay an infrastructure-era failure once the outage has cleared. Both
+    ``"failed_over"`` (the primary yielded to a successor that then answered)
+    and ``"exhausted"`` (every candidate failed for an infrastructure reason,
+    including the primary) qualify -- see :data:`conclave.models.FAILOVER_CATEGORIES`.
+    ``"terminal_failure"`` (a candidate answered, just not usably) does NOT
+    qualify: re-running would not change that outcome, so it stays cacheable
+    exactly like any other content failure. See :meth:`Council._cached_run`.
+
+    Args:
+        result: The live result about to be considered for storage.
+
+    Returns:
+        ``True`` when storing ``result`` would risk pinning a
+        successor-produced or outage-era answer.
+    """
+    if result.manifest is None:
+        return False
+    return any(
+        attempt.outcome in ("failed_over", "exhausted")
+        for attempt in result.manifest.adjudication_succession
+    )
+
+
 class Council:
     """A council of foundation models with an optional synthesizer.
 
@@ -294,17 +322,21 @@ class Council:
     ) -> str:
         """Build the cache key for a run from the resolved, secret-free identity.
 
-        Uses the *resolved* member ids and the synthesizer/judge identity so two
-        runs collide only when they would genuinely produce equivalent output.
-        Members that would be skipped for a missing key are excluded -- a cache
-        entry reflects the council that actually ran, so a key reappearing later
+        Uses the *resolved* member ids and the FULL resolved synthesizer/judge
+        chain (DSE-1512, not just the primary) so two runs collide only when
+        they would genuinely produce equivalent output: changing any successor
+        candidate in the ladder invalidates a prior entry, since a later run
+        over the same prompt could fail over to a different model. Members
+        that would be skipped for a missing key are excluded -- a cache entry
+        reflects the council that actually ran, so a key reappearing later
         produces the same membership. No environment value is read here.
         """
         members, _skipped = self._available_members()
-        synth_id = self.config.resolve_model_id(self.synthesizer)
+        chain_pairs = [(c, self.config.resolve_model_id(c)) for c in self.synthesizer_chain]
+        synth_id = chain_pairs[0][1]
         used_prefixes = {
             model_id.split("/", 1)[0]
-            for _name, model_id in [*members, (self.synthesizer, synth_id)]
+            for _name, model_id in [*members, *chain_pairs]
             if "/" in model_id
         }
         return cache_mod.make_key(
@@ -313,6 +345,7 @@ class Council:
             members=members,
             synthesizer=self.synthesizer,
             synthesizer_model_id=synth_id,
+            synthesizer_chain=chain_pairs,
             temperature=self.temperature,
             timeout=self.timeout,
             rounds=rounds,
@@ -346,8 +379,9 @@ class Council:
 
         On a hit the cached :class:`CouncilResult` is returned with ``cached=True``
         and the providers are not called. On a miss (or when caching is off) the
-        live ``run`` executes; a successful live run is stored best-effort. Cache
-        read/write failures never propagate -- they degrade to a normal live run.
+        live ``run`` executes; a successful live run is stored best-effort, EXCEPT
+        for the no-store rule below. Cache read/write failures never propagate --
+        they degrade to a normal live run.
 
         This is the single chokepoint every mode funnels through, so it is also
         where the manifest-on-every-result invariant is enforced: each returned
@@ -355,6 +389,25 @@ class Council:
         synthesize/raw path, which builds its own richer manifest in
         :meth:`_ask_uncached`; a fill for ``debate``/``adversarial``/``vote`` and
         for a cache hit stored before the manifest existed).
+
+        **No-store on primary infrastructure failure (DSE-1512).** A cache hit
+        must never pin a result the chain's primary adjudicator did not
+        produce, and it must never replay an infrastructure outage after the
+        outage has ended. So a live result is NOT written to the cache when
+        :func:`_primary_failed_over` reports that its manifest's succession
+        ledger contains a ``"failed_over"`` or ``"exhausted"`` attempt -- i.e.
+        the primary candidate failed for an infrastructure reason (see
+        :data:`conclave.models.FAILOVER_CATEGORIES`), whether or not a
+        successor then answered. The uncached result is still returned to
+        THIS caller unchanged; only the write to disk is skipped, so the next
+        identical ``ask`` gets a fresh chance at a healthy primary rather than
+        a pinned failure or a successor's answer served under the primary's
+        name. This is a deliberate, narrow behavior change from v1.3.0: a
+        chain-of-one run whose synthesizer errored for an infrastructure
+        reason (ledger ``["exhausted"]``) used to be cached and now is not.
+        A ``"terminal_failure"`` ledger entry (the model answered, just not
+        usably) is unaffected and remains cacheable exactly as before --
+        re-running would not produce a different, better answer.
         """
         if not self.cache_enabled:
             result = await run()
@@ -377,6 +430,13 @@ class Council:
 
         result = await run()
         self._ensure_manifest(result, mode)
+        if _primary_failed_over(result):
+            logger.info(
+                "not caching %s run (%s): primary adjudicator failed for an infrastructure reason",
+                mode,
+                key[:12],
+            )
+            return result
         cache_mod.store(key, result)
         return result
 

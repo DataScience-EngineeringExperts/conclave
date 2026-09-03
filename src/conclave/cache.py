@@ -6,7 +6,10 @@ This is the §9 #4 roadmap item: an opt-in cache keyed on
 stored payload are derived solely from the exact prompt content, the ordered council
 member friendly-names + resolved model ids, the run mode, the synthesizer/judge
 identity, and the mode parameters that affect output. No environment variable is
-read here; no key value reaches the key string or the on-disk artifact.
+read here; no key value reaches the key string or the on-disk artifact. Identity
+also carries the full ordered synthesizer/judge failover chain (DSE-1512), not
+just the primary candidate, so changing any candidate anywhere in the ladder
+invalidates a prior entry -- see :func:`build_identity`.
 
 Storage
 =======
@@ -38,7 +41,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -56,7 +59,9 @@ logger = get_logger("cache")
 
 # Bumped if the cache-key composition or stored schema changes incompatibly, so
 # old entries simply miss instead of being mis-served against new code.
-CACHE_FORMAT_VERSION = "3"
+# v4 (DSE-1512): identity now carries the full ordered synthesizer/judge chain,
+# not just the primary candidate.
+CACHE_FORMAT_VERSION = "4"
 _SECRET_QUERY_PARTS = (
     "authorization",
     "auth",
@@ -161,6 +166,7 @@ def build_identity(
     extract_verdict: bool = True,
     endpoint_urls: Mapping[str, str] | None = None,
     source_bundle_digest: str | None = None,
+    synthesizer_chain: Sequence[tuple[str, str]] | None = None,
     cache_format_version: str = CACHE_FORMAT_VERSION,
     protocol_version: str = ELITE_PROTOCOL_VERSION,
     synthesis_prompt_version: str = SYNTHESIS_PROMPT_VERSION,
@@ -173,7 +179,19 @@ def build_identity(
     Raw endpoint URLs and source bundle values never enter the returned document;
     only sanitized one-way fingerprints do. API keys are not accepted and no
     environment value is read here.
+
+    ``synthesizer_chain`` (DSE-1512) is the full ordered ladder of
+    ``(friendly_name, resolved_model_id)`` candidates tried for the
+    synthesizer/judge role, not just the primary. When omitted it defaults to a
+    chain of one built from ``synthesizer``/``synthesizer_model_id``, so a
+    direct caller that never passes it still gets a stable, meaningful value
+    and existing single-candidate callers are unaffected.
     """
+    chain = (
+        list(synthesizer_chain)
+        if synthesizer_chain is not None
+        else [(synthesizer, synthesizer_model_id)]
+    )
     payload: dict[str, object] = {
         "versions": {
             "cache_format": cache_format_version,
@@ -188,6 +206,9 @@ def build_identity(
         # Pairs as lists so JSON round-trips; order preserved deliberately.
         "members": [[name, model_id] for name, model_id in members],
         "synthesizer": [synthesizer, synthesizer_model_id],
+        # The full ordered failover ladder (DSE-1512); a chain of one is
+        # byte-for-byte equivalent to the legacy "synthesizer" pair above.
+        "synthesizer_chain": [[name, model_id] for name, model_id in chain],
         "generation": {"temperature": temperature, "timeout": timeout},
         "extract_verdict": extract_verdict,
         "endpoint_fingerprints": {
@@ -229,6 +250,7 @@ def make_key(
     extract_verdict: bool = True,
     endpoint_urls: Mapping[str, str] | None = None,
     source_bundle_digest: str | None = None,
+    synthesizer_chain: Sequence[tuple[str, str]] | None = None,
     cache_format_version: str = CACHE_FORMAT_VERSION,
     protocol_version: str = ELITE_PROTOCOL_VERSION,
     synthesis_prompt_version: str = SYNTHESIS_PROMPT_VERSION,
@@ -244,7 +266,8 @@ def make_key(
     * run mode,
     * ordered ``(friendly_name, resolved_model_id)`` member pairs (order matters --
       see module docstring),
-    * synthesizer/judge friendly name + resolved model id,
+    * synthesizer/judge friendly name + resolved model id, AND the full ordered
+      ``synthesizer_chain`` failover ladder (DSE-1512),
     * generation settings and mode parameters,
     * protocol/prompt/schema/cache-format versions,
     * verdict extraction behavior, custom endpoint routing, and an optional
@@ -263,6 +286,12 @@ def make_key(
         converge_threshold: Debate early-stop threshold (included only for
             ``debate``). A converged run and a fixed-rounds run over otherwise
             identical inputs must not collide, so this is part of the key.
+        synthesizer_chain: The full ordered ``(friendly_name, resolved_model_id)``
+            failover ladder for the synthesizer/judge role (DSE-1512). Two runs
+            with the same primary but a different successor ladder must not
+            collide, since a later run over the same prompt could fail over
+            differently. Defaults to a chain of one built from
+            ``synthesizer``/``synthesizer_model_id`` when omitted.
 
     Returns:
         A 64-char lowercase hex SHA-256 digest. Contains zero key material.
@@ -282,6 +311,7 @@ def make_key(
         extract_verdict=extract_verdict,
         endpoint_urls=endpoint_urls,
         source_bundle_digest=source_bundle_digest,
+        synthesizer_chain=synthesizer_chain,
         cache_format_version=cache_format_version,
         protocol_version=protocol_version,
         synthesis_prompt_version=synthesis_prompt_version,

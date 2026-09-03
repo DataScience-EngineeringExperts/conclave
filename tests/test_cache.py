@@ -28,7 +28,7 @@ from conclave import Council
 from conclave import cache as cache_mod
 from conclave.config import ConclaveConfig, CustomEndpoint
 from conclave.models import ModelAnswer
-from tests.conftest import make_response
+from tests.conftest import install_council_script, make_failed_answer, make_ok_answer, make_response
 
 
 @pytest.fixture
@@ -50,6 +50,18 @@ def _config(cache: bool = False) -> ConclaveConfig:
         councils={"default": ["grok", "gemini", "claude", "perplexity"]},
         synthesizer="claude",
         cache=cache,
+    )
+
+
+def _chain_config() -> ConclaveConfig:
+    """A deterministic config for the DSE-1512 adjudication-succession cache tests.
+
+    Mirrors ``tests/test_adjudication.py``'s ``CFG`` so the chain candidate
+    friendly names/model ids line up with :func:`tests.conftest.install_council_script`.
+    """
+    return ConclaveConfig(
+        models={"claude": "anthropic/c", "grok": "xai/g", "gemini": "gemini/m"},
+        cache=True,
     )
 
 
@@ -662,3 +674,181 @@ async def test_cache_converge_vs_fixed_no_collision(cache_home, monkeypatch, pat
     # Two distinct cache files exist.
     files = list(cache_home.glob("*.json"))
     assert len(files) == 2
+
+
+# --------------------------------------------------------------------------- #
+# DSE-1512: chain identity + no-store on successor/exhausted adjudication
+# --------------------------------------------------------------------------- #
+
+
+def test_identity_includes_full_chain():
+    """A different successor ladder invalidates a prior entry."""
+    base = dict(
+        prompt="p",
+        mode="synthesize",
+        members=[("g", "xai/g")],
+        synthesizer="claude",
+        synthesizer_model_id="anthropic/c",
+        temperature=0.7,
+    )
+    one = cache_mod.make_key(**base, synthesizer_chain=[("claude", "anthropic/c")])
+    two = cache_mod.make_key(
+        **base, synthesizer_chain=[("claude", "anthropic/c"), ("grok", "xai/g")]
+    )
+    assert one != two
+
+    doc = cache_mod.build_identity(
+        **base, synthesizer_chain=[("claude", "anthropic/c"), ("grok", "xai/g")]
+    )
+    assert doc["synthesizer"] == ["claude", "anthropic/c"]  # legacy key kept
+    assert doc["synthesizer_chain"] == [["claude", "anthropic/c"], ["grok", "xai/g"]]
+
+
+def test_identity_chain_defaults_to_primary_when_omitted():
+    """A direct caller that never passes ``synthesizer_chain`` still gets a stable value."""
+    base = dict(
+        prompt="p",
+        mode="synthesize",
+        members=[("g", "xai/g")],
+        synthesizer="claude",
+        synthesizer_model_id="anthropic/c",
+        temperature=0.7,
+    )
+    omitted = cache_mod.make_key(**base)
+    explicit = cache_mod.make_key(**base, synthesizer_chain=[("claude", "anthropic/c")])
+    assert omitted == explicit
+
+    doc = cache_mod.build_identity(**base)
+    assert doc["synthesizer_chain"] == [["claude", "anthropic/c"]]
+
+
+def test_cache_format_version_bumped():
+    assert cache_mod.CACHE_FORMAT_VERSION == "4"
+
+
+async def test_result_adjudicated_by_successor_is_not_stored(monkeypatch, keys, cache_home):
+    """A run where the primary failed over to a successor is never persisted.
+
+    gemini (member) ok, claude (primary) quota 429 -> failed over, grok
+    (successor) ok -> success. Because the primary failed for an
+    infrastructure reason, the run must not be cached: a second identical
+    ``ask`` re-calls every provider rather than replaying the successor's
+    answer from cache.
+    """
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_failed_answer("claude", "anthropic/c", "quota", 429),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    c = Council(
+        models=["gemini"],
+        synthesizer="claude>grok",
+        config=_chain_config(),
+        cache=True,
+        extract_verdict=False,
+    )
+    r1 = await c.ask("q")
+    r2 = await c.ask("q")
+
+    assert r1.cached is False and r2.cached is False  # second run was NOT served from cache
+    assert calls.count("gemini") == 2 and calls.count("grok") == 2
+    assert not list(cache_home.glob("*.json"))  # nothing was ever written
+    assert [a.outcome for a in r2.manifest.adjudication_succession] == [
+        "failed_over",
+        "success",
+    ]
+
+
+async def test_result_adjudicated_by_primary_is_stored(monkeypatch, keys, cache_home):
+    """A run where the primary answers cleanly is cached like any other run."""
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_ok_answer("claude", "anthropic/c"),
+        },
+    )
+    c = Council(
+        models=["gemini"],
+        synthesizer="claude>grok",
+        config=_chain_config(),
+        cache=True,
+        extract_verdict=False,
+    )
+    r1 = await c.ask("q")
+    r2 = await c.ask("q")
+
+    assert r1.cached is False
+    assert r2.cached is True
+    assert calls.count("gemini") == 1 and calls.count("claude") == 1  # not re-called
+    assert [a.outcome for a in r2.manifest.adjudication_succession] == ["success"]
+
+
+async def test_exhausted_run_is_not_stored(monkeypatch, keys, cache_home):
+    """A chain-exhausted run (every candidate failed for an infra reason) is not cached.
+
+    This is a deliberate, narrow behavior change from v1.3.0 (see
+    ``Council._cached_run``'s docstring): caching a run whose whole chain was
+    down means an operator would get the same failure back from cache after
+    the outage clears.
+    """
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_failed_answer("claude", "anthropic/c", "quota", 429),
+            "grok": make_failed_answer("grok", "xai/g", "unavailable", 503),
+        },
+    )
+    c = Council(
+        models=["gemini"],
+        synthesizer="claude>grok",
+        config=_chain_config(),
+        cache=True,
+        extract_verdict=False,
+    )
+    r1 = await c.ask("q")
+    r2 = await c.ask("q")
+
+    assert r1.cached is False and r1.degraded is True
+    assert r2.cached is False and r2.degraded is True
+    assert calls.count("gemini") == 2  # ran again on the second call, not from cache
+    assert not list(cache_home.glob("*.json"))
+    assert [a.outcome for a in r2.manifest.adjudication_succession] == [
+        "failed_over",
+        "exhausted",
+    ]
+
+
+async def test_terminal_failure_run_is_stored(monkeypatch, keys, cache_home):
+    """A terminal-failure run (the model answered, just unusably) is still cached.
+
+    claude returns a bad_request (400): the request was wrong, not an
+    infrastructure problem, so the chain never fails over and the degraded
+    result is cached exactly like any other content failure (unchanged from
+    v1.3.0).
+    """
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_failed_answer("claude", "anthropic/c", "bad_request", 400),
+        },
+    )
+    c = Council(
+        models=["gemini"],
+        synthesizer="claude>grok",
+        config=_chain_config(),
+        cache=True,
+        extract_verdict=False,
+    )
+    r1 = await c.ask("q")
+    r2 = await c.ask("q")
+
+    assert r1.cached is False and r1.degraded is True
+    assert r2.cached is True and r2.degraded is True
+    assert calls.count("claude") == 1  # only the first, live run called claude
+    assert [a.outcome for a in r2.manifest.adjudication_succession] == ["terminal_failure"]
