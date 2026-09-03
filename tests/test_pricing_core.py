@@ -123,3 +123,40 @@ def test_token_bounds_reject_bools_and_negatives():
             upstream_output_bytes_per_token=4,
             max_output_tokens=0,
         )
+
+
+def test_eval_reserve_call_cost_delegates_to_the_shared_arithmetic():
+    from conclave.evals.pricing import ModelPrice, reserve_call_cost
+
+    price = ModelPrice(
+        provider_id="fictional-provider-a",
+        model_id="fictional-model-a",
+        model_revision="fixture-r1",
+        input_ceiling_usd_per_million_tokens=Decimal("1.234567"),
+        output_ceiling_usd_per_million_tokens=Decimal("4.567891"),
+        max_output_bytes_per_token=4,
+    )
+    rates = price.as_rates()
+    assert isinstance(rates, PriceRates)
+    assert rates.model_id == "fictional-provider-a/fictional-model-a"
+    assert rates.source_url is None
+
+    kwargs = {
+        "prompt_token_upper_bound": 900,
+        "prompt_template_token_allowance": 12,
+        "provider_framing_token_allowance": 96,
+        "upstream_output_token_ceilings": (256,),
+        "upstream_output_bytes_per_token": 4,
+        "max_output_tokens": 1_024,
+    }
+    reservation = reserve_call_cost(price, **kwargs)
+    amounts = reserve_cost(rates, **kwargs)
+
+    assert reservation.reserved_cost_usd == amounts.reserved_cost_usd
+    assert reservation.input_token_upper_bound == amounts.input_token_upper_bound
+    assert reservation.input_cost_upper_bound_usd == amounts.input_cost_upper_bound_usd
+    assert reservation.output_cost_upper_bound_usd == amounts.output_cost_upper_bound_usd
+    # The eval CallReservation contract is unchanged: it still carries revision
+    # identity and the eval schema_version that hash_price_entries depends on.
+    assert reservation.model_revision == "fixture-r1"
+    assert reservation.schema_version == "conclave_eval_v1"

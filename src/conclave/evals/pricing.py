@@ -5,16 +5,17 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable, Sequence
-from decimal import ROUND_CEILING, Decimal, localcontext
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
+from ..pricing import TOKENS_PER_MILLION as TOKENS_PER_MILLION
+from ..pricing import USD_MICROCENT as USD_MICROCENT
+from ..pricing import PriceRates, reserve_cost
 from .models import EvalModel, FrozenStudyDesign
 
-USD_MICROCENT = Decimal("0.000001")
-TOKENS_PER_MILLION = Decimal(1_000_000)
 _PRICE_HASH_NAMESPACE = "conclave_model_prices_v1"
 _ModelIdentity = tuple[str, str, str]
 
@@ -43,6 +44,23 @@ class ModelPrice(EvalModel):
     @property
     def identity(self) -> _ModelIdentity:
         return (self.provider_id, self.model_id, self.model_revision)
+
+    def as_rates(self) -> PriceRates:
+        """Project this eval price entry onto the shared arithmetic type.
+
+        The eval harness keys prices by ``(provider, model, revision)`` while the
+        product keys them by the full provider-prefixed model id, so the
+        projection joins provider and model with ``"/"``. The revision is not
+        carried: it participates in eval identity and in
+        :func:`hash_price_entries`, never in the arithmetic.
+        """
+        return PriceRates(
+            provider_id=self.provider_id,
+            model_id=f"{self.provider_id}/{self.model_id}",
+            input_ceiling_usd_per_million_tokens=self.input_ceiling_usd_per_million_tokens,
+            output_ceiling_usd_per_million_tokens=self.output_ceiling_usd_per_million_tokens,
+            max_output_bytes_per_token=self.max_output_bytes_per_token,
+        )
 
 
 class PriceBook(EvalModel):
@@ -177,15 +195,6 @@ def load_price_book(path: str | Path, *, frozen_design: FrozenStudyDesign) -> Pr
     return price_book
 
 
-def _validate_token_bound(name: str, value: int, *, positive: bool = False) -> None:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{name} must be an integer")
-    minimum = 1 if positive else 0
-    if value < minimum:
-        comparator = "positive" if positive else "nonnegative"
-        raise ValueError(f"{name} must be {comparator}")
-
-
 def reserve_call_cost(
     price: ModelPrice,
     *,
@@ -196,50 +205,23 @@ def reserve_call_cost(
     upstream_output_bytes_per_token: int,
     max_output_tokens: int,
 ) -> CallReservation:
-    """Reserve the pessimistic USD cost of all possible input and output tokens."""
+    """Reserve the pessimistic USD cost of all possible input and output tokens.
 
-    _validate_token_bound("prompt_token_upper_bound", prompt_token_upper_bound)
-    _validate_token_bound("prompt_template_token_allowance", prompt_template_token_allowance)
-    _validate_token_bound("provider_framing_token_allowance", provider_framing_token_allowance)
-    _validate_token_bound(
-        "upstream_output_bytes_per_token",
-        upstream_output_bytes_per_token,
-        positive=True,
+    Thin adapter over :func:`conclave.pricing.reserve_cost` (DSE-1514): the
+    arithmetic, the validation, and the ROUND_CEILING behaviour are shared with
+    the product run path, while the eval-only ``CallReservation`` contract --
+    including ``model_revision`` and the frozen eval ``schema_version`` that
+    :func:`hash_price_entries` depends on -- is assembled here unchanged.
+    """
+    amounts = reserve_cost(
+        price.as_rates(),
+        prompt_token_upper_bound=prompt_token_upper_bound,
+        prompt_template_token_allowance=prompt_template_token_allowance,
+        provider_framing_token_allowance=provider_framing_token_allowance,
+        upstream_output_token_ceilings=upstream_output_token_ceilings,
+        upstream_output_bytes_per_token=upstream_output_bytes_per_token,
+        max_output_tokens=max_output_tokens,
     )
-    _validate_token_bound("max_output_tokens", max_output_tokens, positive=True)
-    upstream_ceilings = tuple(upstream_output_token_ceilings)
-    for index, ceiling in enumerate(upstream_ceilings):
-        _validate_token_bound(f"upstream_output_token_ceilings[{index}]", ceiling)
-
-    input_token_upper_bound = (
-        prompt_token_upper_bound
-        + prompt_template_token_allowance
-        + provider_framing_token_allowance
-        + (sum(upstream_ceilings) * upstream_output_bytes_per_token)
-    )
-    precision = max(
-        64,
-        len(str(input_token_upper_bound))
-        + len(price.input_ceiling_usd_per_million_tokens.as_tuple().digits)
-        + 20,
-        len(str(max_output_tokens))
-        + len(price.output_ceiling_usd_per_million_tokens.as_tuple().digits)
-        + 20,
-    )
-    with localcontext() as context:
-        context.prec = precision
-        input_cost = (
-            Decimal(input_token_upper_bound)
-            * price.input_ceiling_usd_per_million_tokens
-            / TOKENS_PER_MILLION
-        )
-        output_cost = (
-            Decimal(max_output_tokens)
-            * price.output_ceiling_usd_per_million_tokens
-            / TOKENS_PER_MILLION
-        )
-        reserved_cost = (input_cost + output_cost).quantize(USD_MICROCENT, rounding=ROUND_CEILING)
-
     return CallReservation(
         provider_id=price.provider_id,
         model_id=price.model_id,
@@ -247,13 +229,13 @@ def reserve_call_cost(
         prompt_token_upper_bound=prompt_token_upper_bound,
         prompt_template_token_allowance=prompt_template_token_allowance,
         provider_framing_token_allowance=provider_framing_token_allowance,
-        upstream_output_token_ceilings=upstream_ceilings,
+        upstream_output_token_ceilings=tuple(upstream_output_token_ceilings),
         upstream_output_bytes_per_token=upstream_output_bytes_per_token,
-        input_token_upper_bound=input_token_upper_bound,
-        output_token_upper_bound=max_output_tokens,
+        input_token_upper_bound=amounts.input_token_upper_bound,
+        output_token_upper_bound=amounts.output_token_upper_bound,
         input_ceiling_usd_per_million_tokens=price.input_ceiling_usd_per_million_tokens,
         output_ceiling_usd_per_million_tokens=price.output_ceiling_usd_per_million_tokens,
-        input_cost_upper_bound_usd=input_cost,
-        output_cost_upper_bound_usd=output_cost,
-        reserved_cost_usd=reserved_cost,
+        input_cost_upper_bound_usd=amounts.input_cost_upper_bound_usd,
+        output_cost_upper_bound_usd=amounts.output_cost_upper_bound_usd,
+        reserved_cost_usd=amounts.reserved_cost_usd,
     )
