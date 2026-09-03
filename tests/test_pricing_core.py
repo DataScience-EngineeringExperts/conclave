@@ -160,3 +160,25 @@ def test_eval_reserve_call_cost_delegates_to_the_shared_arithmetic():
     # identity and the eval schema_version that hash_price_entries depends on.
     assert reservation.model_revision == "fixture-r1"
     assert reservation.schema_version == "conclave_eval_v1"
+
+
+def test_live_reported_usage_cost_delegates_to_the_shared_arithmetic():
+    from conclave.evals.live import _reported_usage_cost
+    from conclave.evals.pricing import ModelPrice
+    from conclave.models import TokenUsage
+
+    price = ModelPrice(
+        provider_id="fictional-provider-b",
+        model_id="fictional-model-b",
+        model_revision="fixture-r2",
+        input_ceiling_usd_per_million_tokens=Decimal("2.000001"),
+        output_ceiling_usd_per_million_tokens=Decimal("6.000001"),
+        max_output_bytes_per_token=4,
+    )
+    usage = TokenUsage(prompt_tokens=137, completion_tokens=421, total_tokens=600)
+    assert _reported_usage_cost(price, usage) == reported_usage_cost(
+        price.as_rates(),
+        prompt_tokens=137,
+        completion_tokens=421,
+        total_tokens=600,
+    )
