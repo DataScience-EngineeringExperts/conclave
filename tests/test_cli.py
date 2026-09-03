@@ -33,7 +33,7 @@ from conclave import cli
 from conclave.config import ConclaveConfig
 from conclave.models import CouncilResult, EliteResult, ModelAnswer
 from conclave.verdict import CouncilVerdict
-from tests.conftest import make_response
+from tests.conftest import install_council_script, make_failed_answer, make_ok_answer, make_response
 
 runner = CliRunner()
 
@@ -894,3 +894,114 @@ def test_providers_command_lists_new_first_class_providers(monkeypatch, tmp_path
     # No secret VALUE ever appears (only the env-var NAME does).
     for val in secrets.values():
         assert val not in result.output
+
+
+# --------------------------------------------------------------------------- #
+# Synthesizer chain / adjudication succession CLI surface (DSE-1512, Task 9).
+# --------------------------------------------------------------------------- #
+
+
+def test_cli_synthesizer_chain_successor_exits_zero_json(monkeypatch, patch_cli_config, keys):
+    """A successor adjudication is a clean run: exit 0, degraded false.
+
+    ``--json`` gains ``primary_failed_over: true`` (additive) and ``synthesizer``
+    names the candidate that actually adjudicated, not the declared primary.
+    """
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/gemini-2.5-pro"),
+            "claude": make_failed_answer("claude", "anthropic/claude-sonnet-4-6", "quota", 402),
+            "grok": make_ok_answer("grok", "xai/grok-4.3"),
+        },
+    )
+    result = runner.invoke(
+        cli.app,
+        ["ask", "hello", "--council", "gemini", "--synthesizer", "claude>grok", "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["degraded"] is False
+    assert payload["primary_failed_over"] is True
+    assert payload["synthesizer"] == "grok"
+    ledger = payload["manifest"]["adjudication_succession"]
+    assert [(a["candidate"], a["outcome"]) for a in ledger if a["role"] == "synthesis"] == [
+        ("claude", "failed_over"),
+        ("grok", "success"),
+    ]
+
+
+def test_cli_synthesizer_chain_exhausted_exits_degraded(monkeypatch, patch_cli_config, keys):
+    """Every candidate failing for an infrastructure reason is degraded, not clean."""
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/gemini-2.5-pro"),
+            "claude": make_failed_answer("claude", "anthropic/claude-sonnet-4-6", "quota", 402),
+            "grok": make_failed_answer("grok", "xai/grok-4.3", "unavailable", 503),
+        },
+    )
+    result = runner.invoke(
+        cli.app,
+        ["ask", "hello", "--council", "gemini", "--synthesizer", "claude>grok", "--json"],
+    )
+
+    assert result.exit_code == cli._DEGRADED_EXIT_CODE
+    payload = json.loads(result.stdout)
+    assert payload["degraded"] is True
+    assert payload["primary_failed_over"] is True
+    ledger = payload["manifest"]["adjudication_succession"]
+    assert [(a["candidate"], a["outcome"]) for a in ledger if a["role"] == "synthesis"] == [
+        ("claude", "failed_over"),
+        ("grok", "exhausted"),
+    ]
+
+
+def test_cli_human_output_prints_failover_note(monkeypatch, patch_cli_config, keys):
+    """The human render path prints one dim failover note per role that failed over."""
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/gemini-2.5-pro"),
+            "claude": make_failed_answer("claude", "anthropic/claude-sonnet-4-6", "quota", 402),
+            "grok": make_ok_answer("grok", "xai/grok-4.3"),
+        },
+    )
+    result = runner.invoke(
+        cli.app,
+        ["ask", "hello", "--council", "gemini", "--synthesizer", "claude>grok"],
+    )
+
+    assert result.exit_code == 0
+    assert "adjudication failover: synthesis: claude (quota, HTTP 402) → grok" in result.output
+
+
+def test_cli_human_output_unchanged_without_failover(
+    monkeypatch, patch_cli_config, patch_call_model
+):
+    """A chain-of-one clean run prints no failover note (byte-identical to v1.3.0)."""
+    _all_keys(monkeypatch)
+
+    def handler(model, messages, **kwargs):
+        return make_response(f"answer from {model}")
+
+    patch_call_model(handler)
+    result = runner.invoke(cli.app, ["ask", "hello", "--council", "grok,gemini"])
+
+    assert result.exit_code == 0
+    assert "adjudication failover" not in result.output
+
+
+def test_cli_providers_footer_shows_chain(monkeypatch, tmp_path):
+    """`conclave providers` shows the configured synthesizer chain when set."""
+    config_path = tmp_path / "config.yml"
+    config_path.write_text("synthesizer_chain: [claude, grok]\n", encoding="utf-8")
+    monkeypatch.setenv("CONCLAVE_CONFIG", str(config_path))
+    from conclave.config import clear_config_cache
+
+    clear_config_cache()
+
+    result = runner.invoke(cli.app, ["providers"])
+    assert result.exit_code == 0
+    assert "synthesizer chain: claude > grok" in result.output

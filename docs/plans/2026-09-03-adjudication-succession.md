@@ -1116,18 +1116,20 @@ async def test_result_adjudicated_by_successor_is_not_stored(monkeypatch, tmp_pa
 
 **Step 2: Run** → FAIL.
 
-**Step 3: Implement** — `build_identity`/`make_key` gain `synthesizer_chain: list[tuple[str, str]] | None = None` and write `"synthesizer_chain": [[n, m] ...]` (keep the existing `"synthesizer"` key). `CACHE_FORMAT_VERSION = "4"`. `Council._cache_key` passes `[(c, self.config.resolve_model_id(c)) for c in self.synthesizer_chain]` and includes every chain prefix in `used_prefixes`. In `_cached_run`, before `cache_mod.store`:
+**Step 3: Implement** — `build_identity`/`make_key` gain `synthesizer_chain: list[tuple[str, str]] | None = None` and write `"synthesizer_chain": [[n, m] ...]` (keep the existing `"synthesizer"` key). `CACHE_FORMAT_VERSION = "4"`. `Council._cache_key` passes `[(c, self.config.resolve_model_id(c)) for c in self.synthesizer_chain]` and includes every chain prefix in `used_prefixes`. In `_cached_run`, before `cache_mod.store`, skip the store when the run's succession ledger records that the **primary** candidate itself failed for an infrastructure reason — not just "a successor adjudicated". That is a strictly wider condition: it also covers a chain of one whose sole candidate exhausted the ladder (no successor to speak of), which the narrower "any `failed_over` attempt" check below would miss entirely:
 ```python
-        if result.manifest is not None and any(
-            a.outcome == "failed_over" for a in result.manifest.adjudication_succession
-        ):
-            logger.info("not caching %s run: adjudicated by a successor after failover", mode)
+        if result.primary_failed_over:
+            logger.info(
+                "not caching %s run: primary adjudicator failed for an infrastructure reason",
+                mode,
+            )
             return result
 ```
+`primary_failed_over` is `True` when the ledger contains a `"failed_over"` **or** `"exhausted"` attempt (promoted to a `CouncilResult.primary_failed_over` computed field in the Unit F review, after this task originally landed it as a private `_primary_failed_over(result)` module function). A `"terminal_failure"` entry (a candidate answered, just not usably) does **not** skip the store — re-running would not produce a different, better answer, so it stays cacheable exactly as before. Consequence for a chain of one: a degraded run whose sole synthesizer errored for an infrastructure reason (ledger `["exhausted"]`) used to be cached under v1.3.0 and is not anymore.
 
 **Step 4: Run** → PASS; `$BR` full → 0 failures.
 
-**Step 5: Commit** — `git commit -m "feat(cache): chain in identity; never cache a successor-adjudicated run (DSE-1512)"`
+**Step 5: Commit** — `git commit -m "feat(cache): chain in identity; never cache a run whose primary failed over (DSE-1512)"`
 
 ---
 
