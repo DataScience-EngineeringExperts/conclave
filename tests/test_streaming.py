@@ -27,6 +27,7 @@ from conclave import Council, cli, transport
 from conclave.config import ConclaveConfig
 from conclave.models import ModelAnswer, StreamEvent
 from conclave.providers import call_model, call_model_stream
+from tests.conftest import make_failed_answer, make_ok_answer
 
 runner = CliRunner()
 
@@ -575,3 +576,229 @@ def test_stream_event_done_carries_full_result_shape():
     dumped = ev.model_dump(mode="json")
     assert dumped["type"] == "done"
     assert dumped["result"]["prompt"] == "p"
+
+
+# --------------------------------------------------------------------------- #
+# Streaming synthesis succession (DSE-1512, Task 7)
+# --------------------------------------------------------------------------- #
+
+SYNTH_CFG = ConclaveConfig(models={"claude": "anthropic/c", "grok": "xai/g", "gemini": "gemini/m"})
+
+
+def _install_stream_script(monkeypatch, script: dict[str, list]) -> list[str]:
+    """Patch the streaming ``call_model_stream`` seam with a per-name script.
+
+    ``script[name]`` is the exact item list ``call_model_stream`` would yield
+    for that friendly name: zero or more ``str`` deltas, then exactly one
+    trailing :class:`~conclave.models.ModelAnswer` -- mirroring the real yield
+    contract. Council members stream through this SAME seam as the synthesizer
+    chain, so every member name needs a script entry too.
+
+    Returns:
+        The call log: one friendly name appended per invocation, in call order.
+    """
+    import conclave.streaming as streaming_mod
+
+    calls: list[str] = []
+
+    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+        calls.append(name)
+        for item in script[name]:
+            yield item
+
+    monkeypatch.setattr(streaming_mod, "call_model_stream", fake_stream)
+    return calls
+
+
+def _ledger(result):
+    """Flatten a result's adjudication ledger to comparable tuples."""
+    return [
+        (a.role, a.candidate, a.outcome, a.failure_category, a.http_status)
+        for a in result.manifest.adjudication_succession
+    ]
+
+
+async def test_stream_synthesis_fails_over_before_first_delta(monkeypatch, keys):
+    """A synthesizer candidate that fails with no deltas emitted fails over cleanly."""
+    calls = _install_stream_script(
+        monkeypatch,
+        {
+            "gemini": ["gem", "ini ok", make_ok_answer("gemini", "gemini/m")],
+            "claude": [make_failed_answer("claude", "anthropic/c", "quota", 429)],
+            "grok": ["grok ", "says yes", make_ok_answer("grok", "xai/g")],
+        },
+    )
+    council = Council(
+        models=["gemini"], synthesizer="claude>grok", config=SYNTH_CFG, extract_verdict=False
+    )
+    events = [e async for e in council.ask_stream("q")]
+
+    deltas = [e.text for e in events if e.type == "synthesis_delta"]
+    done = [e for e in events if e.type == "synthesis_done"]
+    assert "".join(deltas) == "grok says yes"
+    assert len(done) == 1
+    assert done[0].name == "grok" and done[0].model_id == "xai/g" and done[0].answer.ok
+
+    result = events[-1].result
+    assert result.synthesis == "grok says yes" and result.synthesis_error is None
+    assert result.degraded is False
+    assert (result.synthesizer, result.synthesizer_model_id) == ("grok", "xai/g")
+    assert _ledger(result) == [
+        ("synthesis", "claude", "failed_over", "quota", 429),
+        ("synthesis", "grok", "success", None, None),
+    ]
+    # Streaming receipt contract unchanged: no synthesis-phase receipts.
+    assert not [r for r in result.manifest.receipts if r.phase == "synthesis"]
+    assert result.manifest.secret_safety == "verified_no_secrets"
+    assert calls == ["gemini", "claude", "grok"]
+
+
+async def test_stream_synthesis_does_not_fail_over_after_deltas(monkeypatch, keys):
+    """A post-first-delta failure is terminal even though its category is infra-shaped."""
+    calls = _install_stream_script(
+        monkeypatch,
+        {
+            "gemini": [make_ok_answer("gemini", "gemini/m")],
+            "claude": ["partial", make_failed_answer("claude", "anthropic/c", "unavailable", 503)],
+            "grok": [make_ok_answer("grok", "xai/g")],
+        },
+    )
+    council = Council(
+        models=["gemini"], synthesizer="claude>grok", config=SYNTH_CFG, extract_verdict=False
+    )
+    events = [e async for e in council.ask_stream("q")]
+
+    deltas = [e for e in events if e.type == "synthesis_delta"]
+    done = [e for e in events if e.type == "synthesis_done"]
+    assert len(deltas) == 1 and deltas[0].text == "partial"
+    assert len(done) == 1
+    assert done[0].name == "claude" and not done[0].answer.ok
+
+    result = events[-1].result
+    assert result.synthesis is None
+    assert result.synthesis_error == "claude failed"
+    assert result.degraded is True
+    assert _ledger(result) == [("synthesis", "claude", "terminal_failure", "unavailable", 503)]
+    assert calls == ["gemini", "claude"]  # grok never invoked
+
+
+async def test_stream_synthesis_terminal_category_does_not_fail_over(monkeypatch, keys):
+    """A terminal (non-failover) category never advances the chain, deltas or not."""
+    calls = _install_stream_script(
+        monkeypatch,
+        {
+            "gemini": [make_ok_answer("gemini", "gemini/m")],
+            "claude": [make_failed_answer("claude", "anthropic/c", "bad_request", 400)],
+            "grok": [make_ok_answer("grok", "xai/g")],
+        },
+    )
+    council = Council(
+        models=["gemini"], synthesizer="claude>grok", config=SYNTH_CFG, extract_verdict=False
+    )
+    events = [e async for e in council.ask_stream("q")]
+
+    result = events[-1].result
+    assert _ledger(result) == [("synthesis", "claude", "terminal_failure", "bad_request", 400)]
+    assert result.degraded is True
+    assert calls == ["gemini", "claude"]  # grok never invoked
+
+
+async def test_stream_synthesis_chain_exhausted(monkeypatch, keys):
+    """Every keyed candidate fails infra-side -> chain exhausted, no deltas at all."""
+    calls = _install_stream_script(
+        monkeypatch,
+        {
+            "gemini": [make_ok_answer("gemini", "gemini/m")],
+            "claude": [make_failed_answer("claude", "anthropic/c", "quota", 429)],
+            "grok": [make_failed_answer("grok", "xai/g", "unavailable", 503)],
+        },
+    )
+    council = Council(
+        models=["gemini"], synthesizer="claude>grok", config=SYNTH_CFG, extract_verdict=False
+    )
+    events = [e async for e in council.ask_stream("q")]
+
+    assert not [e for e in events if e.type == "synthesis_delta"]
+    done = [e for e in events if e.type == "synthesis_done"]
+    assert len(done) == 1
+    assert done[0].name == "grok" and not done[0].answer.ok
+
+    result = events[-1].result
+    assert result.synthesis_error == "grok failed"
+    assert result.degraded is True
+    assert [a.outcome for a in result.manifest.adjudication_succession] == [
+        "failed_over",
+        "exhausted",
+    ]
+    assert (result.synthesizer, result.synthesizer_model_id) == ("grok", "xai/g")
+    assert calls == ["gemini", "claude", "grok"]
+
+
+async def test_stream_synthesis_skips_unkeyed_candidate(monkeypatch):
+    """An unkeyed chain candidate is skipped without ever opening a stream for it."""
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.setenv("XAI_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    calls = _install_stream_script(
+        monkeypatch,
+        {
+            "gemini": [make_ok_answer("gemini", "gemini/m")],
+            "grok": [make_ok_answer("grok", "xai/g")],
+        },
+    )
+    council = Council(
+        models=["gemini"], synthesizer="claude>grok", config=SYNTH_CFG, extract_verdict=False
+    )
+    events = [e async for e in council.ask_stream("q")]
+
+    result = events[-1].result
+    assert _ledger(result) == [
+        ("synthesis", "claude", "skipped_unkeyed", "unkeyed", None),
+        ("synthesis", "grok", "success", None, None),
+    ]
+    assert calls == ["gemini", "grok"]  # claude never called
+
+
+async def test_stream_synthesis_chain_of_one_no_key_message_unchanged(monkeypatch):
+    """A chain-of-one unkeyed synthesizer keeps today's wording and event shape."""
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    calls = _install_stream_script(monkeypatch, {"gemini": [make_ok_answer("gemini", "gemini/m")]})
+    council = Council(
+        models=["gemini"], synthesizer="claude", config=SYNTH_CFG, extract_verdict=False
+    )
+    events = [e async for e in council.ask_stream("q")]
+
+    types = [e.type for e in events]
+    assert "synthesis_delta" not in types and "synthesis_done" not in types
+
+    result = events[-1].result
+    assert (
+        result.synthesis_error
+        == "synthesizer 'claude' (anthropic/c) has no API key; returning raw answers only"
+    )
+    assert _ledger(result) == [("synthesis", "claude", "skipped_unkeyed", "unkeyed", None)]
+    assert calls == ["gemini"]
+
+
+async def test_stream_synthesis_chain_of_one_success_records_ledger(monkeypatch, keys):
+    """A chain-of-one success streams exactly like today and records one ledger entry."""
+    calls = _install_stream_script(
+        monkeypatch,
+        {
+            "gemini": [make_ok_answer("gemini", "gemini/m")],
+            "claude": ["claude ", "says yes", make_ok_answer("claude", "anthropic/c")],
+        },
+    )
+    council = Council(
+        models=["gemini"], synthesizer="claude", config=SYNTH_CFG, extract_verdict=False
+    )
+    events = [e async for e in council.ask_stream("q")]
+
+    types = [e.type for e in events]
+    assert types == ["member_done", "synthesis_delta", "synthesis_delta", "synthesis_done", "done"]
+
+    result = events[-1].result
+    assert result.synthesis == "claude says yes"
+    assert _ledger(result) == [("synthesis", "claude", "success", None, None)]
+    assert calls == ["gemini", "claude"]

@@ -7,12 +7,27 @@ async-generator engine behind :meth:`conclave.council.Council.ask_stream`: it
 * fans the prompt out to every available member **concurrently**, interleaving
   each member's incremental text into one flat :class:`conclave.models.StreamEvent`
   sequence (``member_delta`` / ``member_done``),
-* optionally streams the synthesizer over the successful answers
+* optionally streams the synthesizer **chain** (:attr:`Council.synthesizer_chain`,
+  DSE-1512) over the successful answers, walked by :func:`_stream_synthesis`
   (``synthesis_delta`` / ``synthesis_done``), and
 * emits a terminal ``done`` event carrying the fully-assembled
   :class:`conclave.models.CouncilResult` whose shape is **byte-for-byte
   identical** to the non-streaming :meth:`Council.ask` result -- so downstream
   consumers (and the cache) are unaffected.
+
+**Synthesis succession before the first delta (DSE-1512, Task 7).**
+:func:`_stream_synthesis` walks ``synthesizer_chain`` exactly like
+:meth:`Council.adjudicate`, but with one addition specific to a live token
+stream: a candidate may fail over to the next candidate ONLY while it has not
+yet emitted a single ``synthesis_delta``. Once a candidate's tokens have been
+shown to the caller they cannot be un-emitted, so any failure after the first
+delta is terminal for the role regardless of its failure category -- a stream
+that already started is a stream the caller committed to. The full succession
+(including the forced-terminal case) is recorded on
+``result.manifest.adjudication_succession`` via :meth:`Council._record_adjudication`
+exactly like every other adjudication role; the streaming receipt contract is
+unchanged (no ``phase="synthesis"`` receipts on this path -- see the comment
+above the ``_apply_verdict(result, record_receipts=False)`` call below).
 
 The terminal ``done`` result also carries the auditable
 :class:`conclave.manifest.ModelHarnessManifest` (CAC-04) and the structured
@@ -51,6 +66,7 @@ from typing import TYPE_CHECKING
 
 from .adapters.base import redact
 from .logging import get_logger
+from .manifest import AdjudicationAttempt
 from .models import CouncilResult, ModelAnswer, StreamEvent
 from .providers import call_model_stream
 from .registry import key_present
@@ -237,27 +253,59 @@ async def stream_ask(
         # stream completes so it can populate the now-existing manifest's
         # verdict-provenance slots. It is opt-out via the constructor flag and a
         # no-op when disabled, never raises, and only attaches secret-free content.
+        # _stream_synthesis walks the synthesizer chain (DSE-1512) and always
+        # records the full succession ledger via Council._record_adjudication --
+        # see that method's docstring for the before-first-delta failover rule.
         async for event in _stream_synthesis(council, result):
             yield event
-        # Streaming synthesis has its own token transport and does not yet emit a
-        # synthesis receipt. Preserve the established streaming manifest as a
-        # member-call ledger rather than appending only half of the downstream
-        # call sequence. Complete receipt capture is currently the buffered/Elite
-        # contract.
+        # Streaming synthesis has its own token transport and does not append a
+        # synthesis receipt on this path (record_receipts=False on both the
+        # succession ledger call inside _stream_synthesis and here) -- the ledger
+        # is NOT a receipt and is always recorded regardless. Preserve the
+        # established streaming manifest as a member-call receipt ledger rather
+        # than appending only half of the downstream call sequence. Complete
+        # receipt capture is currently the buffered/Elite contract.
         await council._apply_verdict(result, record_receipts=False)
 
     yield StreamEvent(type="done", result=result)
 
 
 async def _stream_synthesis(council: Council, result: CouncilResult) -> AsyncIterator[StreamEvent]:
-    """Stream the synthesizer over ``result``'s successful answers, mutating it.
+    """Walk the synthesizer chain over ``result``'s successful answers, mutating it.
 
-    Mirrors :meth:`Council._synthesize` (no-usable-answers and no-key short
-    circuits set ``synthesis_error`` exactly the same way), but streams the
-    synthesizer's tokens as ``synthesis_delta`` events and finishes with a
-    ``synthesis_done`` event. On any short circuit nothing is yielded (there is
-    no live token stream) -- the reason lands on ``result.synthesis_error`` and
-    is visible in the terminal ``done`` event.
+    The streaming counterpart of :meth:`Council._synthesize` (DSE-1512): the two
+    short circuits (no usable member answers; no chain candidate keyed) set
+    ``result.synthesis_error`` with byte-for-byte identical wording and, in the
+    no-key case, record the same ``skipped_unkeyed``-per-candidate ledger via
+    :meth:`Council._skipped_attempts` -- a chain of one with an unkeyed
+    synthesizer therefore still yields NO events at all, matching the historic
+    single-candidate streaming behavior exactly. On either short circuit nothing
+    is yielded (there is no live token stream); the reason lands on
+    ``result.synthesis_error``, visible in the terminal ``done`` event.
+
+    Past the short circuits this walks ``council.synthesizer_chain`` exactly
+    like :meth:`Council.adjudicate`, with one addition specific to a live
+    stream: **the failover boundary is the first emitted delta.** A candidate
+    that fails before yielding any ``synthesis_delta`` is a pure infrastructure
+    failure and may fail over per :meth:`Council._classify_outcome` (the same
+    rule ``adjudicate`` uses); a candidate that already streamed live tokens to
+    the caller cannot be silently retried elsewhere -- those tokens were already
+    shown -- so ANY failure after the first delta is terminal for the role
+    regardless of its failure category. This is implemented by passing
+    ``category=None`` into the classifier for a post-delta failure (masking it
+    out of :data:`~conclave.models.FAILOVER_CATEGORIES` membership) while the
+    ledger entry still records the REAL category for audit purposes.
+
+    Every real call this generator drives -- across every candidate tried -- is
+    recorded via :meth:`Council._record_adjudication`, which appends the full
+    succession ledger to ``result.manifest.adjudication_succession``. Per the
+    streaming receipt contract (see the comment above the
+    ``_apply_verdict(result, record_receipts=False)`` call in :func:`stream_ask`),
+    NO ``phase="synthesis"`` receipts are appended on this path -- the ledger is
+    not a receipt and is recorded regardless (``record_receipts=False`` here
+    only suppresses receipts, never the ledger). At most one ``synthesis_done``
+    is ever yielded, for whichever candidate the walk finally resolves to
+    (success, terminal failure, or chain exhaustion).
     """
     from .council import _SYNTH_SYSTEM
 
@@ -267,16 +315,20 @@ async def _stream_synthesis(council: Council, result: CouncilResult) -> AsyncIte
         logger.warning(result.synthesis_error)
         return
 
-    synth_id = council.config.resolve_model_id(council.synthesizer)
     result.synthesizer = council.synthesizer
-    result.synthesizer_model_id = synth_id
+    result.synthesizer_model_id = council.config.resolve_model_id(council.synthesizer)
 
-    if not key_present(synth_id):
-        result.synthesis_error = (
-            f"synthesizer '{council.synthesizer}' ({synth_id}) has no API key; "
-            "returning raw answers only"
+    no_key = council._chain_unkeyed_error("synthesizer", "returning raw answers only")
+    if no_key is not None:
+        result.synthesis_error = no_key
+        logger.warning(no_key)
+        council._record_adjudication(
+            result,
+            council._skipped_attempts("synthesis"),
+            [],
+            phase="synthesis",
+            record_receipts=False,
         )
-        logger.warning(result.synthesis_error)
         return
 
     blocks = "\n\n".join(f"### Answer from {a.name} ({a.model_id})\n{a.answer}" for a in usable)
@@ -290,33 +342,87 @@ async def _stream_synthesis(council: Council, result: CouncilResult) -> AsyncIte
         {"role": "user", "content": user_content},
     ]
 
+    attempts: list[AdjudicationAttempt] = []
+    called: list[ModelAnswer] = []
+    chain = council.synthesizer_chain
     final: ModelAnswer | None = None
-    async for item in call_model_stream(
-        council.synthesizer,
-        synth_id,
-        messages,
-        temperature=council.temperature,
-        timeout=council.timeout,
-        config=council.config,
-    ):
-        if isinstance(item, ModelAnswer):
-            final = item
-        else:
-            yield StreamEvent(
-                type="synthesis_delta",
-                name=council.synthesizer,
-                model_id=synth_id,
-                text=item,
-            )
+    for index, candidate in enumerate(chain, start=1):
+        model_id = council.config.resolve_model_id(candidate)
+        is_last = index == len(chain)
 
-    if final is not None and final.ok:
-        result.synthesis = final.answer
-    elif final is not None:
-        result.synthesis_error = final.error
-    if final is not None:
-        yield StreamEvent(
-            type="synthesis_done",
-            name=council.synthesizer,
-            model_id=synth_id,
-            answer=final,
+        if not key_present(model_id):
+            attempts.append(
+                AdjudicationAttempt(
+                    role="synthesis",
+                    candidate=candidate,
+                    model_id=model_id,
+                    attempt_index=index,
+                    outcome="skipped_unkeyed",
+                    failure_category="unkeyed",
+                )
+            )
+            continue
+
+        emitted = False
+        candidate_final: ModelAnswer | None = None
+        async for item in call_model_stream(
+            candidate,
+            model_id,
+            messages,
+            temperature=council.temperature,
+            timeout=council.timeout,
+            config=council.config,
+        ):
+            if isinstance(item, ModelAnswer):
+                candidate_final = item
+            else:
+                emitted = True
+                yield StreamEvent(
+                    type="synthesis_delta", name=candidate, model_id=model_id, text=item
+                )
+
+        if candidate_final is None:
+            # Defensive: call_model_stream's yield contract always ends with a
+            # final ModelAnswer. This should never happen in practice.
+            break
+
+        called.append(candidate_final)
+        final = candidate_final
+        failed = not candidate_final.ok
+        category = candidate_final.failure_category
+        # A stream that already emitted tokens cannot be retried elsewhere: mask
+        # the category out of the classifier (forcing "terminal_failure") while
+        # the ledger entry below still records the REAL category for audit.
+        outcome = council._classify_outcome(
+            failed=failed, category=None if emitted else category, is_last=is_last
         )
+        attempts.append(
+            AdjudicationAttempt(
+                role="synthesis",
+                candidate=candidate,
+                model_id=model_id,
+                attempt_index=index,
+                outcome=outcome,
+                failure_category=category if failed else None,
+                http_status=candidate_final.http_status if failed else None,
+            )
+        )
+        if outcome == "failed_over":
+            logger.warning(
+                "synthesis: '%s' failed (%s) before any output; trying next candidate",
+                candidate,
+                category,
+            )
+            continue
+        break
+
+    if final is not None:
+        result.synthesizer, result.synthesizer_model_id = final.name, final.model_id
+        if final.ok:
+            result.synthesis = final.answer
+        else:
+            result.synthesis_error = final.error
+        yield StreamEvent(
+            type="synthesis_done", name=final.name, model_id=final.model_id, answer=final
+        )
+    council._record_adjudication(result, attempts, called, phase="synthesis", record_receipts=False)
