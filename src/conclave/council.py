@@ -54,6 +54,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from . import cache as cache_mod
@@ -63,6 +64,7 @@ from .config import ConclaveConfig, load_config, parse_synthesizer_chain
 from .logging import get_logger
 from .manifest import (
     AdjudicationAttempt,
+    AdjudicationAttemptOutcome,
     AdjudicationRole,
     ModelHarnessManifest,
     ProviderExecutionReceipt,
@@ -80,6 +82,9 @@ from .models import (
 from .prompts import ELITE_PROMPT_VERSION, SYNTHESIS_PROMPT_VERSION
 from .providers import call_model, receipt_from_answer
 from .registry import key_present
+
+if TYPE_CHECKING:  # avoid an import cycle at runtime; only needed for typing
+    from .verdict_synthesis import VerdictSynthesisResult
 
 logger = get_logger("council")
 
@@ -978,7 +983,7 @@ class Council:
         protocol_version = ELITE_PROTOCOL_VERSION if result.mode == "elite" else None
         chain = self.synthesizer_chain
         attempts: list[AdjudicationAttempt] = []
-        vsr = None
+        vsr: VerdictSynthesisResult | None = None
         for index, candidate in enumerate(chain, start=1):
             model_id = self.config.resolve_model_id(candidate)
             vsr = await extract_verdict_fn(
@@ -1027,29 +1032,26 @@ class Council:
                 )
 
             failed = vsr.verdict_absent_reason == REASON_EXTRACTION_FAILED
-            if failed and vsr.failure_category in FAILOVER_CATEGORIES:
-                is_last = index == len(chain)
-                attempts.append(
-                    _attempt(
-                        "exhausted" if is_last else "failed_over",
-                        failure_category=vsr.failure_category,
-                        http_status=vsr.http_status,
-                    )
-                )
-                if not is_last:
-                    logger.warning(
-                        "verdict_extraction: '%s' failed (%s); trying next candidate",
-                        candidate,
-                        vsr.failure_category,
-                    )
-                continue
+            is_last = index == len(chain)
+            outcome = self._classify_outcome(
+                failed=failed, category=vsr.failure_category, is_last=is_last
+            )
             attempts.append(
                 _attempt(
-                    "terminal_failure" if failed else "success",
-                    failure_category=vsr.failure_category if failed else None,
-                    http_status=vsr.http_status if failed else None,
+                    outcome,
+                    failure_category=None if outcome == "success" else vsr.failure_category,
+                    http_status=None if outcome == "success" else vsr.http_status,
                 )
             )
+            if outcome == "failed_over":
+                logger.warning(
+                    "verdict_extraction: '%s' failed (%s); trying next candidate",
+                    candidate,
+                    vsr.failure_category,
+                )
+                continue
+            if outcome == "exhausted":
+                continue
             break
 
         result.verdict = vsr.verdict
@@ -1072,6 +1074,35 @@ class Council:
             # the verdict-provenance fields (including the new ledger entries)
             # just written (they are key-free).
             result.manifest.secret_safety = verified_secret_safety(result.manifest)
+
+    @staticmethod
+    def _classify_outcome(
+        *, failed: bool, category: str | None, is_last: bool
+    ) -> AdjudicationAttemptOutcome:
+        """The single failover rule, shared by every adjudication role (DSE-1512 review).
+
+        An infrastructure failure (``category in FAILOVER_CATEGORIES``) advances
+        the chain -- ``"failed_over"``, or ``"exhausted"`` when there is no next
+        candidate to try. Any other failure is terminal for the role: a model
+        that answered (even unusably) is never second-guessed by another vendor.
+        A non-failure is always ``"success"``.
+
+        Args:
+            failed: Whether this attempt failed.
+            category: The attempt's typed failure category, or ``None``. Callers
+                that must force a terminal outcome regardless of the real
+                category (e.g. streaming's post-first-delta rule) pass ``None``
+                here while still recording the true category on the ledger entry.
+            is_last: Whether this is the last candidate in the chain.
+
+        Returns:
+            The bounded :data:`~conclave.manifest.AdjudicationAttemptOutcome`.
+        """
+        if not failed:
+            return "success"
+        if category in FAILOVER_CATEGORIES:
+            return "exhausted" if is_last else "failed_over"
+        return "terminal_failure"
 
     async def adjudicate(
         self, role: AdjudicationRole, system_prompt: str, user_content: str
@@ -1145,33 +1176,29 @@ class Council:
                 timeout=self.timeout,
             )
             called.append(answer)
-            if answer.ok:
-                attempts.append(_attempt("success"))
-                return AdjudicationOutcome(answer=answer, attempts=attempts, called=called)
+            is_last = index == len(chain)
             category = answer.failure_category
-            if category in FAILOVER_CATEGORIES:
-                is_last = index == len(chain)
-                attempts.append(
-                    _attempt(
-                        "exhausted" if is_last else "failed_over",
-                        failure_category=category,
-                        http_status=answer.http_status,
-                    )
-                )
-                last_failure = answer
-                if not is_last:
-                    logger.warning(
-                        "%s: '%s' failed (%s); trying next candidate", role, candidate, category
-                    )
-                continue
+            outcome = self._classify_outcome(
+                failed=not answer.ok, category=category, is_last=is_last
+            )
             attempts.append(
                 _attempt(
-                    "terminal_failure",
-                    failure_category=category,
-                    http_status=answer.http_status,
+                    outcome,
+                    failure_category=None if outcome == "success" else category,
+                    http_status=None if outcome == "success" else answer.http_status,
                 )
             )
-            return AdjudicationOutcome(answer=answer, attempts=attempts, called=called)
+            if outcome == "success":
+                return AdjudicationOutcome(answer=answer, attempts=attempts, called=called)
+            if outcome == "terminal_failure":
+                return AdjudicationOutcome(answer=answer, attempts=attempts, called=called)
+            # "failed_over" or "exhausted": advance the chain (or fall through to
+            # the final return below when this was the last candidate).
+            last_failure = answer
+            if outcome == "failed_over":
+                logger.warning(
+                    "%s: '%s' failed (%s); trying next candidate", role, candidate, category
+                )
         return AdjudicationOutcome(answer=last_failure, attempts=attempts, called=called)
 
     def _skipped_attempts(self, role: AdjudicationRole) -> list[AdjudicationAttempt]:
