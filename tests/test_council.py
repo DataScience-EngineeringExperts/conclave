@@ -450,3 +450,38 @@ async def test_synthesize_chain_all_unkeyed_message(monkeypatch):
     assert [a.outcome for a in ledger] == ["skipped_unkeyed", "skipped_unkeyed"]
     assert r.degraded is True
     assert calls == ["gemini"]
+
+
+# --------------------------------------------------------------------------- #
+# CouncilResult.primary_failed_over computed field (DSE-1512 review, Unit F)
+# --------------------------------------------------------------------------- #
+
+
+async def test_successor_run_is_primary_failed_over_but_not_degraded(monkeypatch, keys):
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_failed_answer("claude", "anthropic/c", "quota", 402),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.primary_failed_over is True
+    assert r.degraded is False
+    assert "primary_failed_over" in r.model_dump(mode="json")
+
+
+async def test_chain_of_one_clean_run_is_not_primary_failed_over(monkeypatch, keys):
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_ok_answer("claude", "anthropic/c"),
+        },
+    )
+    c = Council(models=["gemini"], synthesizer="claude", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.primary_failed_over is False
+    assert "primary_failed_over" in r.model_dump(mode="json")

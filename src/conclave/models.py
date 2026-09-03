@@ -409,6 +409,12 @@ class CouncilResult(BaseModel):
             so a caller cannot mistake a partial run for a clean pass. See the
             property docstring below for the exact rule and the CLI's exit-code
             contract (:func:`conclave.cli.ask`) that keys off it.
+        primary_failed_over: Computed field (DSE-1512) -- ``True`` when the
+            chain's primary adjudicator failed for an infrastructure reason,
+            whether or not a successor then answered. Independent of
+            ``degraded``: a successor adjudication is ``primary_failed_over=True,
+            degraded=False``. See the property docstring below for the exact
+            rule and why the cache never stores such a run.
     """
 
     prompt: str
@@ -495,6 +501,46 @@ class CouncilResult(BaseModel):
         if self.adversarial is not None and self.adversarial.verdict_error:
             return True
         return False
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def primary_failed_over(self) -> bool:
+        """True when the primary adjudicator failed for an infrastructure reason (DSE-1512).
+
+        ``True`` when ``self.manifest`` is not ``None`` and any
+        ``manifest.adjudication_succession`` attempt has ``outcome`` in
+        ``("failed_over", "exhausted")`` -- i.e. the chain's primary candidate
+        for some adjudication role (synthesis, debate's final consolidation,
+        the adversarial judge, or verdict extraction) failed for an
+        infrastructure reason (auth/quota/5xx/timeout/network/no-key, see
+        :data:`FAILOVER_CATEGORIES`), whether a successor then answered
+        (``"failed_over"``) or the whole chain was exhausted
+        (``"exhausted"``). ``False`` for a chain of one that never had an
+        infrastructure failure, and for any run with no manifest.
+
+        Independent of :attr:`degraded`: a run adjudicated by a successor is a
+        clean run (``primary_failed_over=True, degraded=False``), while a run
+        where the whole chain was exhausted is both
+        (``primary_failed_over=True, degraded=True``). The two flags answer
+        different questions -- "did the judge/synthesis step ultimately
+        produce a usable result?" (``degraded``) versus "did the primary
+        candidate itself need to be replaced or exhausted?"
+        (``primary_failed_over``).
+
+        A run for which this is ``True`` is never written to the result cache
+        (see :meth:`conclave.council.Council._cached_run`): a cache hit must
+        never pin a result the primary did not produce, nor replay an
+        infrastructure outage after it has cleared. Included as a top-level
+        key in ``model_dump(mode="json")`` output (a Pydantic
+        ``computed_field``), so a scripted consumer can check it directly
+        instead of walking the manifest's succession ledger.
+        """
+        if self.manifest is None:
+            return False
+        return any(
+            attempt.outcome in ("failed_over", "exhausted")
+            for attempt in self.manifest.adjudication_succession
+        )
 
 
 # Late import (see the note near the top): ``manifest`` imports ``TokenUsage``

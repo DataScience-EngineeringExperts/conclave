@@ -136,34 +136,6 @@ class AdjudicationOutcome:
         return self.answer.model_id if self.answer is not None else None
 
 
-def _primary_failed_over(result: CouncilResult) -> bool:
-    """True when the run's manifest records an infra failover away from the primary.
-
-    Checked before every cache store (DSE-1512): a cache hit must never pin a
-    result the chain's primary adjudicator did not produce, and it must never
-    replay an infrastructure-era failure once the outage has cleared. Both
-    ``"failed_over"`` (the primary yielded to a successor that then answered)
-    and ``"exhausted"`` (every candidate failed for an infrastructure reason,
-    including the primary) qualify -- see :data:`conclave.models.FAILOVER_CATEGORIES`.
-    ``"terminal_failure"`` (a candidate answered, just not usably) does NOT
-    qualify: re-running would not change that outcome, so it stays cacheable
-    exactly like any other content failure. See :meth:`Council._cached_run`.
-
-    Args:
-        result: The live result about to be considered for storage.
-
-    Returns:
-        ``True`` when storing ``result`` would risk pinning a
-        successor-produced or outage-era answer.
-    """
-    if result.manifest is None:
-        return False
-    return any(
-        attempt.outcome in ("failed_over", "exhausted")
-        for attempt in result.manifest.adjudication_succession
-    )
-
-
 class Council:
     """A council of foundation models with an optional synthesizer.
 
@@ -394,8 +366,9 @@ class Council:
         must never pin a result the chain's primary adjudicator did not
         produce, and it must never replay an infrastructure outage after the
         outage has ended. So a live result is NOT written to the cache when
-        :func:`_primary_failed_over` reports that its manifest's succession
-        ledger contains a ``"failed_over"`` or ``"exhausted"`` attempt -- i.e.
+        :attr:`~conclave.models.CouncilResult.primary_failed_over` reports that
+        its manifest's succession ledger contains a ``"failed_over"`` or
+        ``"exhausted"`` attempt -- i.e.
         the primary candidate failed for an infrastructure reason (see
         :data:`conclave.models.FAILOVER_CATEGORIES`), whether or not a
         successor then answered. The uncached result is still returned to
@@ -430,7 +403,7 @@ class Council:
 
         result = await run()
         self._ensure_manifest(result, mode)
-        if _primary_failed_over(result):
+        if result.primary_failed_over:
             logger.info(
                 "not caching %s run (%s): primary adjudicator failed for an infrastructure reason",
                 mode,
