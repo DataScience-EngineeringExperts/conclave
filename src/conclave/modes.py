@@ -37,7 +37,6 @@ from .models import (
     VoteResult,
     derive_phase_answer_id,
 )
-from .registry import key_present
 
 if TYPE_CHECKING:  # avoid a circular import at runtime; only needed for typing
     from .council import Council
@@ -500,11 +499,14 @@ async def _debate_synthesize(council: Council, result: CouncilResult) -> None:
 
     Mirrors :meth:`conclave.council.Council._synthesize` short-circuit for
     short-circuit (DSE-1512): the "no surviving answers" gate is debate-specific
-    (there is nothing else to consolidate), but the keyed-chain check, the
-    chain-of-one/chain wording, and the succession-ledger bookkeeping are the
-    same shape. ``result.manifest`` is guaranteed non-``None`` here --
-    :func:`run_debate` calls :meth:`Council._ensure_manifest` immediately
-    before this function.
+    (there is nothing else to consolidate), but the keyed-chain check
+    (:meth:`Council._chain_unkeyed_error`) and the adjudicate-then-record tail
+    (:meth:`Council._adjudicate_and_record`) are the SAME shared methods
+    :meth:`Council._synthesize` and :func:`_adversarial_judge` call (DSE-1512
+    review, Unit C), so the chain-of-one/chain wording and the
+    succession-ledger bookkeeping can never drift between the three roles.
+    ``result.manifest`` is guaranteed non-``None`` here -- :func:`run_debate`
+    calls :meth:`Council._ensure_manifest` immediately before this function.
     """
     final = result.rounds[-1].successful_answers if result.rounds else []
     if not final:
@@ -516,21 +518,10 @@ async def _debate_synthesize(council: Council, result: CouncilResult) -> None:
     result.synthesizer = council.synthesizer
     result.synthesizer_model_id = primary_id
 
-    keyed = [
-        c for c in council.synthesizer_chain if key_present(council.config.resolve_model_id(c))
-    ]
-    if not keyed:
-        if len(council.synthesizer_chain) == 1:
-            result.synthesis_error = (
-                f"synthesizer '{council.synthesizer}' ({primary_id}) has no API key; "
-                "returning final-round answers only"
-            )
-        else:
-            result.synthesis_error = (
-                f"synthesizer chain [{', '.join(council.synthesizer_chain)}] has no API key "
-                "for any candidate; returning final-round answers only"
-            )
-        logger.warning(result.synthesis_error)
+    err = council._chain_unkeyed_error("synthesizer", "returning final-round answers only")
+    if err is not None:
+        result.synthesis_error = err
+        logger.warning(err)
         council._record_adjudication(
             result, council._skipped_attempts("debate_final"), [], phase="debate_final"
         )
@@ -540,14 +531,16 @@ async def _debate_synthesize(council: Council, result: CouncilResult) -> None:
         f"### Final answer from {a.name} ({a.model_id})\n{a.answer}" for a in final
     )
     user_content = prompts.debate_final_user(result.prompt, len(result.rounds), blocks)
-    outcome = await council.adjudicate("debate_final", prompts.DEBATE_FINAL_SYSTEM, user_content)
-    result.synthesizer, result.synthesizer_model_id = outcome.name, outcome.model_id
+    outcome = await council._adjudicate_and_record(
+        result, "debate_final", prompts.DEBATE_FINAL_SYSTEM, user_content, phase="debate_final"
+    )
     answer = outcome.answer
-    if answer is not None and answer.ok:
-        result.synthesis = answer.answer
-    elif answer is not None:
-        result.synthesis_error = answer.error
-    council._record_adjudication(result, outcome.attempts, outcome.called, phase="debate_final")
+    if answer is not None:
+        result.synthesizer, result.synthesizer_model_id = outcome.name, outcome.model_id
+        if answer.ok:
+            result.synthesis = answer.answer
+        else:
+            result.synthesis_error = answer.error
 
 
 async def run_adversarial(
@@ -723,12 +716,16 @@ async def _adversarial_judge(
 
     Mirrors :meth:`conclave.council.Council._synthesize` short-circuit for
     short-circuit (DSE-1512): the "proposal failed" gate is adversarial-specific
-    (nothing to judge without a proposal), but the keyed-chain check, the
-    chain-of-one/chain wording, and the succession-ledger bookkeeping are the
-    same shape. ``result`` (the enclosing :class:`CouncilResult`) is threaded
-    through only to reach its manifest -- callers guarantee
-    ``result.manifest is not None`` before calling this (:func:`run_adversarial`
-    calls :meth:`Council._ensure_manifest` immediately before this function).
+    (nothing to judge without a proposal), but the keyed-chain check
+    (:meth:`Council._chain_unkeyed_error`) and the adjudicate-then-record tail
+    (:meth:`Council._adjudicate_and_record`) are the SAME shared methods
+    :meth:`Council._synthesize` and :func:`_debate_synthesize` call (DSE-1512
+    review, Unit C), so the chain-of-one/chain wording and the
+    succession-ledger bookkeeping can never drift between the three roles.
+    ``result`` (the enclosing :class:`CouncilResult`) is threaded through only
+    to reach its manifest -- callers guarantee ``result.manifest is not None``
+    before calling this (:func:`run_adversarial` calls
+    :meth:`Council._ensure_manifest` immediately before this function).
     """
     primary_id = council.config.resolve_model_id(council.synthesizer)
     adv.judge = council.synthesizer
@@ -741,21 +738,10 @@ async def _adversarial_judge(
         logger.warning(adv.verdict_error)
         return
 
-    keyed = [
-        c for c in council.synthesizer_chain if key_present(council.config.resolve_model_id(c))
-    ]
-    if not keyed:
-        if len(council.synthesizer_chain) == 1:
-            adv.verdict_error = (
-                f"judge '{council.synthesizer}' ({primary_id}) has no API key; "
-                "returning proposal and critiques only"
-            )
-        else:
-            adv.verdict_error = (
-                f"judge chain [{', '.join(council.synthesizer_chain)}] has no API key "
-                "for any candidate; returning proposal and critiques only"
-            )
-        logger.warning(adv.verdict_error)
+    err = council._chain_unkeyed_error("judge", "returning proposal and critiques only")
+    if err is not None:
+        adv.verdict_error = err
+        logger.warning(err)
         council._record_adjudication(result, council._skipped_attempts("judge"), [], phase="judge")
         return
 
@@ -770,7 +756,9 @@ async def _adversarial_judge(
     user_content = prompts.judge_user(
         prompt, adv.proposer, adv.proposal.answer or "", critique_blocks
     )
-    outcome = await council.adjudicate("judge", prompts.JUDGE_SYSTEM, user_content)
+    outcome = await council._adjudicate_and_record(
+        result, "judge", prompts.JUDGE_SYSTEM, user_content, phase="judge"
+    )
     answer = outcome.answer
     if answer is not None:
         adv.judge, adv.judge_model_id = outcome.name, outcome.model_id
@@ -778,4 +766,3 @@ async def _adversarial_judge(
             adv.verdict = answer.answer
         else:
             adv.verdict_error = answer.error
-    council._record_adjudication(result, outcome.attempts, outcome.called, phase="judge")

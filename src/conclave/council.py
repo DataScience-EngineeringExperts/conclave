@@ -837,19 +837,10 @@ class Council:
         result.synthesizer = self.synthesizer
         result.synthesizer_model_id = primary_id
 
-        keyed = [c for c in self.synthesizer_chain if key_present(self.config.resolve_model_id(c))]
-        if not keyed:
-            if len(self.synthesizer_chain) == 1:
-                result.synthesis_error = (
-                    f"synthesizer '{self.synthesizer}' ({primary_id}) has no API key; "
-                    "returning raw answers only"
-                )
-            else:
-                result.synthesis_error = (
-                    f"synthesizer chain [{', '.join(self.synthesizer_chain)}] has no API key "
-                    "for any candidate; returning raw answers only"
-                )
-            logger.warning(result.synthesis_error)
+        err = self._chain_unkeyed_error("synthesizer", "returning raw answers only")
+        if err is not None:
+            result.synthesis_error = err
+            logger.warning(err)
             self._record_adjudication(
                 result, self._skipped_attempts("synthesis"), [], phase="synthesis"
             )
@@ -865,20 +856,21 @@ class Council:
             f"Council answers:\n\n{blocks}\n\n"
             "Now produce the consolidated answer."
         )
-        outcome = await self.adjudicate("synthesis", _SYNTH_SYSTEM, user_content)
-        result.synthesizer, result.synthesizer_model_id = outcome.name, outcome.model_id
-        answer = outcome.answer
-        if answer is not None and answer.ok:
-            result.synthesis = answer.answer
-        elif answer is not None:
-            result.synthesis_error = answer.error
-        self._record_adjudication(
+        outcome = await self._adjudicate_and_record(
             result,
-            outcome.attempts,
-            outcome.called,
+            "synthesis",
+            _SYNTH_SYSTEM,
+            user_content,
             phase="synthesis",
             protocol_version=(ELITE_PROTOCOL_VERSION if result.mode == "elite" else None),
         )
+        answer = outcome.answer
+        if answer is not None:
+            result.synthesizer, result.synthesizer_model_id = outcome.name, outcome.model_id
+            if answer.ok:
+                result.synthesis = answer.answer
+            else:
+                result.synthesis_error = answer.error
         return answer
 
     async def _apply_verdict(
@@ -1109,6 +1101,36 @@ class Council:
             for index, candidate in enumerate(self.synthesizer_chain, start=1)
         ]
 
+    def _chain_unkeyed_error(self, actor: str, suffix: str) -> str | None:
+        """Return the no-key error for the whole chain, or ``None`` if any candidate is keyed.
+
+        The shared keyed-check for every adjudication call site (synthesis,
+        debate's final consolidation, the adversarial judge) that needs a
+        distinct "no candidate has a key" message before calling
+        :meth:`adjudicate` (DSE-1512 review, Unit C). ``actor`` is the role
+        noun used in the message (``"synthesizer"`` / ``"judge"``); ``suffix``
+        is the mode-specific tail (``"returning raw answers only"``,
+        ``"returning final-round answers only"``, ``"returning proposal and
+        critiques only"``). A chain of one keeps the historic single-candidate
+        wording verbatim byte-for-byte.
+
+        Args:
+            actor: The role noun for the message.
+            suffix: The mode-specific tail clause.
+
+        Returns:
+            The formatted error string when every chain candidate is unkeyed,
+            else ``None``.
+        """
+        keyed = [c for c in self.synthesizer_chain if key_present(self.config.resolve_model_id(c))]
+        if keyed:
+            return None
+        if len(self.synthesizer_chain) == 1:
+            primary_id = self.config.resolve_model_id(self.synthesizer)
+            return f"{actor} '{self.synthesizer}' ({primary_id}) has no API key; {suffix}"
+        names = ", ".join(self.synthesizer_chain)
+        return f"{actor} chain [{names}] has no API key for any candidate; {suffix}"
+
     def _record_adjudication(
         self,
         result: CouncilResult,
@@ -1156,6 +1178,41 @@ class Council:
                 for index, answer in enumerate(called, start=1)
             )
         self._recompute_manifest_accounting(result.manifest)
+
+    async def _adjudicate_and_record(
+        self,
+        result: CouncilResult,
+        role: AdjudicationRole,
+        system_prompt: str,
+        user_content: str,
+        *,
+        phase: str,
+        protocol_version: str | None = None,
+    ) -> AdjudicationOutcome:
+        """``adjudicate`` then ``_record_adjudication`` -- the common tail of every role.
+
+        Shared by :meth:`_synthesize`, :func:`conclave.modes._debate_synthesize`,
+        and :func:`conclave.modes._adversarial_judge` (DSE-1512 review, Unit C)
+        so the "call the chain, then land the ledger + receipts" sequence is
+        written exactly once.
+
+        Args:
+            result: The in-progress result. Mutated in place via
+                :meth:`_record_adjudication`.
+            role: Which adjudication role this call serves.
+            system_prompt: System instruction for the synthesizer/judge.
+            user_content: The user-role content (prompt + answers/critiques).
+            phase: The manifest receipt phase to stamp on each real call.
+            protocol_version: Optional protocol version to stamp on receipts.
+
+        Returns:
+            The :class:`AdjudicationOutcome` from :meth:`adjudicate`.
+        """
+        outcome = await self.adjudicate(role, system_prompt, user_content)
+        self._record_adjudication(
+            result, outcome.attempts, outcome.called, phase=phase, protocol_version=protocol_version
+        )
+        return outcome
 
     async def synthesize_blocks(self, system_prompt: str, user_content: str) -> ModelAnswer:
         """Call the synthesizer model with an arbitrary system + user message.
