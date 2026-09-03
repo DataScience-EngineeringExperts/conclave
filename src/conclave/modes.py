@@ -1,8 +1,10 @@
 """Deliberation modes: multi-round debate and adversarial propose/refute/verdict.
 
 Both modes are built on :meth:`conclave.council.Council.fan_out` (the single
-concurrency + partial-failure primitive) and :meth:`Council.synthesize_blocks`
-(the single synthesizer call path). Keeping the logic here keeps ``council.py``
+concurrency + partial-failure primitive) and
+:meth:`Council._adjudicate_and_record` (the single adjudication path: it walks
+the synthesizer chain via :meth:`Council.adjudicate` and records the succession
+ledger + receipts, DSE-1512). Keeping the logic here keeps ``council.py``
 focused on the v0.1 surface while the deliberation algorithms live on their own.
 Prompt wording lives in :mod:`conclave.prompts`.
 
