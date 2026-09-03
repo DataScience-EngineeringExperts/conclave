@@ -20,6 +20,7 @@ from typing import NoReturn
 import httpx
 
 from .logging import get_logger
+from .models import FailureCategory, categorize_http_status
 
 logger = get_logger("transport")
 
@@ -98,6 +99,10 @@ class TransportError(Exception):
     it into a non-raising ``ModelAnswer.error``. The message is built from the
     exception type only -- never from request headers -- so it carries no secret.
 
+    ``category`` is typed at the raise site (DSE-1512, :data:`conclave.models.FailureCategory`)
+    so a caller can decide "retry a different provider or stop" from a typed
+    attribute instead of substring-matching the message.
+
     KEY-LEAK NOTE (audit RANK 1/5): the raise sites route through
     :func:`_raise_transport_error` (``raise ... from None``) and a boundary clear,
     so the surfaced TransportError retains **no** reference to the underlying httpx
@@ -110,8 +115,12 @@ class TransportError(Exception):
     value is lost.
     """
 
+    def __init__(self, message: str, *, category: FailureCategory = "transport") -> None:
+        super().__init__(message)
+        self.category: FailureCategory = category
 
-def _raise_transport_error(message: str) -> NoReturn:
+
+def _raise_transport_error(message: str, category: FailureCategory = "transport") -> NoReturn:
     """Raise a :class:`TransportError` that retains no link to the httpx exception.
 
     KEY-LEAK NOTE (audit RANK 1/5). The httpx exception active when this is called
@@ -133,7 +142,7 @@ def _raise_transport_error(message: str) -> NoReturn:
     transport raise sites. The message names only the failure kind, so dropping the
     chain loses no diagnostic value.
     """
-    raise TransportError(message) from None
+    raise TransportError(message, category=category) from None
 
 
 def _get_client() -> httpx.AsyncClient:
@@ -166,7 +175,9 @@ async def post_json(
     Raises:
         TransportError: On any network-level failure (timeout, connection error,
             or other ``httpx.HTTPError``). The message names only the failure
-            kind and never echoes the headers, so no key can leak. The underlying
+            kind and never echoes the headers, so no key can leak. ``category``
+            is ``"timeout"`` for a timeout and ``"transport"`` for any other
+            ``httpx.HTTPError`` (DSE-1512). The underlying
             httpx exception is deliberately dropped from the cause chain
             (``__cause__`` and ``__context__`` both cleared) so its header-bearing
             ``.request`` cannot leak the key via the surfaced error's traceback,
@@ -182,7 +193,7 @@ async def post_json(
         try:
             response = await client.post(url, headers=headers, json=json_body, timeout=timeout)
         except httpx.TimeoutException:
-            _raise_transport_error(f"request timed out after {timeout:.0f}s")
+            _raise_transport_error(f"request timed out after {timeout:.0f}s", "timeout")
         except httpx.HTTPError as exc:
             # Use the exception class NAME, not str(exc): httpx error strings can
             # include the request URL but never headers, yet we stay conservative.
@@ -246,7 +257,11 @@ async def stream_sse(
     Raises:
         TransportError: On any network-level failure (timeout, connection
             error) or a non-2xx streaming status. The message names only the
-            failure kind / HTTP status and never echoes the headers. The
+            failure kind / HTTP status and never echoes the headers.
+            ``category`` (DSE-1512) is ``"timeout"`` for a timeout,
+            ``"transport"`` for any other network error, and
+            :func:`conclave.models.categorize_http_status` of the status for a
+            non-2xx response. The
             underlying httpx exception is dropped from the cause chain
             (``__cause__`` and ``__context__`` both cleared) so its header-bearing
             ``.request`` cannot leak the key via the surfaced error's traceback,
@@ -278,7 +293,10 @@ async def stream_sse(
                     # on ModelAnswer.error or is logged. No streamed text delta is
                     # emitted on this path (deltas carry only parsed answer content),
                     # so the only surface for this string is that redacted final answer.
-                    raise TransportError(f"HTTP {response.status_code}: {detail}")
+                    raise TransportError(
+                        f"HTTP {response.status_code}: {detail}",
+                        category=categorize_http_status(response.status_code),
+                    )
 
                 event_name = ""
                 data_lines: list[str] = []
@@ -307,7 +325,7 @@ async def stream_sse(
             # Map to TransportError with the chain dropped (audit RANK 1/5). The
             # streaming httpx exception also carries ``.request.headers`` with the
             # live auth value; _raise_transport_error raises ``from None``.
-            _raise_transport_error(f"request timed out after {timeout:.0f}s")
+            _raise_transport_error(f"request timed out after {timeout:.0f}s", "timeout")
         except httpx.HTTPError as exc:
             # Drop the httpx exception from the cause chain so its header-bearing
             # ``.request`` cannot leak the key (audit RANK 1/5).

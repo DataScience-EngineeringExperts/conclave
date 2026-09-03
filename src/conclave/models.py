@@ -115,6 +115,44 @@ class TokenUsage(BaseModel):
     total_tokens: int = Field(default=0, ge=0)
 
 
+# DSE-1512 — typed failure categories. Derived at the RAISE SITE from the HTTP
+# status or exception type, never by inspecting a rendered error string. The
+# adjudication ladder (Council.adjudicate) fails over ONLY on the categories in
+# FAILOVER_CATEGORIES: infrastructure failures where no model ever produced an
+# answer. A model that answered (even malformed) is terminal for that role.
+FailureCategory = Literal[
+    "unkeyed",  # env var absent -- no call made
+    "unresolved",  # unknown provider prefix -- no call made
+    "auth",  # 401 / 403
+    "quota",  # 402 / 429
+    "unavailable",  # 5xx
+    "timeout",  # 408 or transport deadline
+    "transport",  # DNS / connection / other httpx network error
+    "bad_request",  # other 4xx -- the request was wrong, not the vendor
+    "malformed_response",  # 2xx with an unusable payload / empty content
+    "unexpected",  # anything else -- never failed over
+]
+
+FAILOVER_CATEGORIES: frozenset[str] = frozenset(
+    {"unkeyed", "unresolved", "auth", "quota", "unavailable", "timeout", "transport"}
+)
+
+
+def categorize_http_status(status: int) -> FailureCategory:
+    """Map a non-2xx HTTP status to a :data:`FailureCategory` (pure, no I/O)."""
+    if status in (401, 403):
+        return "auth"
+    if status in (402, 429):
+        return "quota"
+    if status == 408:
+        return "timeout"
+    if 500 <= status <= 599:
+        return "unavailable"
+    if 400 <= status <= 499:
+        return "bad_request"
+    return "malformed_response"
+
+
 class ModelAnswer(BaseModel):
     """One council member's response (or failure).
 
@@ -132,6 +170,15 @@ class ModelAnswer(BaseModel):
         warnings: Non-fatal notes about this answer (e.g. structured-output repair
             applied). Empty by default. Distinct from ``error``, which marks the
             whole call as failed.
+        failure_category: Typed classification of ``error`` (DSE-1512), derived
+            at the raise site from the HTTP status or exception type -- never by
+            inspecting ``error`` text. ``None`` on success and on any answer
+            collected before this field existed. See :data:`FailureCategory` and
+            :data:`FAILOVER_CATEGORIES`.
+        http_status: The HTTP status code that produced ``error``, when the
+            failure came from a response (as opposed to a pre-call or transport
+            failure). ``None`` on success and whenever no HTTP response was
+            received.
     """
 
     name: str
@@ -142,6 +189,8 @@ class ModelAnswer(BaseModel):
     error: str | None = None
     answer_id: str | None = None
     warnings: list[str] = Field(default_factory=list)
+    failure_category: FailureCategory | None = None
+    http_status: int | None = None
 
     @property
     def ok(self) -> bool:

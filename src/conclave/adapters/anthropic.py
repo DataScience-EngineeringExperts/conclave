@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 
 from ..logging import get_logger
-from ..models import TokenUsage
+from ..models import TokenUsage, categorize_http_status
 from ..provider_catalog import capabilities_for
 from ..registry import PROVIDER_ENV_VARS
 from .base import OutputContract, ProviderError, SSEDelta, status_error
@@ -200,7 +200,9 @@ class AnthropicAdapter:
         """
         if status < 200 or status >= 300:
             raise ProviderError(
-                status_error("anthropic", status, payload, secondary_keys=("type",))
+                status_error("anthropic", status, payload, secondary_keys=("type",)),
+                category=categorize_http_status(status),
+                http_status=status,
             )
         if not isinstance(payload, dict):
             raise ProviderError(f"anthropic: non-JSON response body (status {status})")
