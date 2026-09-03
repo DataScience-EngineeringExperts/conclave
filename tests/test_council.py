@@ -324,3 +324,35 @@ async def test_config_disk_read_at_most_once_per_ask(monkeypatch, tmp_path):
     assert reads["n"] <= 1, f"expected at most one disk read for the run, got {reads['n']}"
 
     config_mod.clear_config_cache()
+
+
+# --------------------------------------------------------------------------- #
+# synthesizer_chain resolution (DSE-1512)
+# --------------------------------------------------------------------------- #
+
+
+def test_council_chain_defaults_to_single_synthesizer():
+    c = Council(models=["grok"], config=ConclaveConfig(synthesizer="claude"))
+    assert c.synthesizer_chain == ["claude"] and c.synthesizer == "claude"
+
+
+def test_council_chain_from_constructor_string():
+    c = Council(models=["grok"], synthesizer="claude>grok", config=ConclaveConfig())
+    assert c.synthesizer_chain == ["claude", "grok"] and c.synthesizer == "claude"
+
+
+def test_council_chain_from_constructor_list():
+    c = Council(models=["grok"], synthesizer=["gemini", "grok"], config=ConclaveConfig())
+    assert c.synthesizer_chain == ["gemini", "grok"] and c.synthesizer == "gemini"
+
+
+def test_council_chain_from_config_overrides_scalar():
+    cfg = ConclaveConfig(synthesizer="claude", synthesizer_chain=["grok", "gemini"])
+    c = Council(models=["claude"], config=cfg)
+    assert c.synthesizer_chain == ["grok", "gemini"] and c.synthesizer == "grok"
+
+
+def test_council_constructor_arg_beats_config_chain():
+    cfg = ConclaveConfig(synthesizer_chain=["grok", "gemini"])
+    c = Council(models=["claude"], synthesizer="claude", config=cfg)
+    assert c.synthesizer_chain == ["claude"]

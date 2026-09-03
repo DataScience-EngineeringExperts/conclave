@@ -52,13 +52,13 @@ is detectable downstream instead of being silently absorbed as model drift.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from uuid import uuid4
 
 from . import cache as cache_mod
 from . import transport
 from .adapters.base import redact
-from .config import ConclaveConfig, load_config
+from .config import ConclaveConfig, load_config, parse_synthesizer_chain
 from .logging import get_logger
 from .manifest import (
     ModelHarnessManifest,
@@ -103,8 +103,16 @@ class Council:
 
     Args:
         models: Friendly names (or raw provider-prefixed model ids) of council members.
-        synthesizer: Friendly name of the synthesizer model. If ``None``, the
-            config default is used.
+        synthesizer: Friendly name of the synthesizer model, an ordered chain
+            spec (``"claude>grok>gemini"``), or a list of names
+            (``["claude", "grok"]``). If ``None``, ``config.synthesizer_chain``
+            is used when set, else ``config.synthesizer`` (a chain of one).
+            Whichever form resolves, ``self.synthesizer`` keeps its historic
+            meaning: the primary (first) candidate. The full ordered ladder is
+            ``self.synthesizer_chain`` (DSE-1512); :meth:`adjudicate` walks it
+            and advances past a candidate only on an infrastructure failure
+            (see :data:`conclave.models.FAILOVER_CATEGORIES`) -- any other
+            failure is terminal for the role.
         config: Pre-loaded config; if ``None``, loaded from disk + defaults.
         temperature: Sampling temperature for member calls.
         timeout: Per-call timeout in seconds.
@@ -154,7 +162,7 @@ class Council:
     def __init__(
         self,
         models: list[str],
-        synthesizer: str | None = None,
+        synthesizer: str | Sequence[str] | None = None,
         config: ConclaveConfig | None = None,
         temperature: float = 0.7,
         timeout: float = 120.0,
@@ -165,7 +173,9 @@ class Council:
     ) -> None:
         self.config = config or load_config()
         self.requested_models = list(models)
-        self.synthesizer = synthesizer or self.config.synthesizer
+        self.synthesizer_chain = self._resolve_chain(synthesizer, self.config)
+        # Back-compat: the primary candidate keeps the historic attribute.
+        self.synthesizer = self.synthesizer_chain[0]
         self.temperature = temperature
         self.timeout = timeout
         # Explicit override wins; otherwise defer to config (off by default).
@@ -189,6 +199,31 @@ class Council:
         # that DEBUG band and accept the responsibility.
         if not allow_transport_debug_logging:
             transport.guard_transport_logging()
+
+    @staticmethod
+    def _resolve_chain(spec: str | Sequence[str] | None, config: ConclaveConfig) -> list[str]:
+        """Resolve the synthesizer ladder (DSE-1512).
+
+        Precedence, highest first: the constructor ``synthesizer=`` arg (string
+        chain spec or list of names) -> ``config.synthesizer_chain`` -> a chain
+        of one built from ``config.synthesizer``. This mirrors the pre-existing
+        scalar-``synthesizer`` precedence documented in the class docstring, just
+        extended to an ordered list -- a chain of one behaves exactly like today.
+
+        Args:
+            spec: The constructor's ``synthesizer`` argument, or ``None``.
+            config: The resolved council config.
+
+        Returns:
+            A non-empty ordered list of candidate friendly names.
+        """
+        if isinstance(spec, str):
+            chain = parse_synthesizer_chain(spec)
+        elif spec is not None:
+            chain = parse_synthesizer_chain(">".join(spec))
+        else:
+            chain = list(config.synthesizer_chain)
+        return chain or [config.synthesizer]
 
     def _available_members(self) -> tuple[list[tuple[str, str]], list[str]]:
         """Partition requested members into (available, skipped-for-no-key).

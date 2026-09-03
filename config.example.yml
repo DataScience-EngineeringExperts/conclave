@@ -22,6 +22,10 @@ councils:
 # the answers into a scored, auditable verdict on `result.verdict`/`result.manifest`.
 # There is no config switch for it -- opt out in code via Council(extract_verdict=False).
 synthesizer: claude
+# synthesizer_chain: [claude, grok]  # optional: ordered failover ladder (DSE-1512).
+# Tried in order; a candidate advances to the next ONLY on an infrastructure
+# failure (auth/quota/5xx/timeout/network/no-key). Empty (the default) means
+# "just `synthesizer`" -- a chain of one, identical to today's behavior.
 
 # Optional result cache (OFF by default). When true, an identical repeat run is
 # served from an on-disk cache instead of re-calling the providers -- handy for
