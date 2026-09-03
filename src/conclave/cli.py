@@ -662,10 +662,11 @@ def ask(
       lone synthesizer failing.
 
     ``--json`` also carries the top-level ``"primary_failed_over"`` field
-    (DSE-1512, additive): ``true`` when the declared primary adjudicator
-    failed for an infrastructure reason for any role, whether a successor then
-    answered (exit 0) or the chain was exhausted (exit 3) -- see
-    ``CouncilResult.primary_failed_over``. The human render path prints one
+    (DSE-1512, additive): ``true`` when, for any role, the declared primary
+    adjudicator did not itself adjudicate for an infrastructure reason (no key,
+    or an infrastructure failure) -- whether a successor then answered (exit 0),
+    the chain was exhausted (exit 3), or a chain of one simply had no key
+    (exit 3) -- see ``CouncilResult.primary_failed_over``. The human render path prints one
     dim ``adjudication failover: ...`` line per role that failed over; a
     chain-of-one run that never fails over prints nothing extra.
     """

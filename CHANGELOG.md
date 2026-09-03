@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regardless of category (tokens cannot be un-shown).
 - `VerdictSynthesisResult.failure_category` / `http_status` (set on the extraction-failed
   path only) and public `REASON_TOO_FEW` / `REASON_OPEN_ENDED` / `REASON_EXTRACTION_FAILED`.
+- `CouncilResult.primary_failed_over` (computed field, present in `model_dump(mode="json")`
+  and `--json`): `true` when, for any role, the primary adjudicator did not itself adjudicate
+  for an infrastructure reason (no key, auth, quota, 5xx, timeout, network) or the ladder was
+  exhausted. Independent of `degraded`; the cache never stores a `true` run.
 - A declared chain widens which vendors may receive the prompt (see README › Synthesizer
   failover › Confidentiality).
 
