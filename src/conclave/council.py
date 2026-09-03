@@ -906,22 +906,61 @@ class Council:
         retry on a malformed response) distinct from the prose synthesis call --
         the documented cost of the default-on verdict.
 
-        ``extract_verdict`` owns the N<2 gate (it returns ``verdict=None`` with the
-        reason ``"fewer than 2 responding members"`` and makes NO LLM call in that
-        case), so this method delegates unconditionally rather than duplicating the
-        responder-counting logic; that keeps a single code path and lets the
-        manifest carry the N<2 reason. ``extract_verdict`` never raises, and this
-        method only assigns already-secret-free objects afterward, so no defensive
-        try/except is needed.
+        **Chain walk (DSE-1512).** Unlike every other adjudication role, this one
+        cannot simply call :meth:`adjudicate`: verdict extraction is not a single
+        call -- :func:`conclave.verdict_synthesis.extract_verdict` makes the
+        initial structured call PLUS one same-model repair retry, validates the
+        JSON, and computes consensus, all in one invocation. So the chain walk for
+        this role lives here: ``extract_verdict`` is called once per
+        ``self.synthesizer_chain`` candidate, and the outcome is classified from
+        what it reports (``vsr.verdict_absent_reason`` /
+        ``vsr.failure_category`` / ``vsr.http_status``) rather than from a raw
+        :class:`~conclave.models.ModelAnswer`. A candidate whose failure category
+        is in :data:`~conclave.models.FAILOVER_CATEGORIES` advances the chain
+        (``"failed_over"``, or ``"exhausted"`` on the last candidate); any other
+        failure -- including ``"malformed_response"`` (the candidate answered, but
+        not usably) -- is terminal for the role, exactly like every other
+        adjudication role's rule: a model that answered is never second-guessed by
+        another vendor.
+
+        **Unkeyed candidates are NOT pre-skipped for this role** -- a deliberate
+        difference from :meth:`adjudicate`. Today, with a chain of one and an
+        unkeyed synthesizer, ``_apply_verdict`` still calls ``extract_verdict``,
+        which makes two ``call_model`` invocations that return instantly with the
+        "no API key" error (no network), yielding two failed
+        ``verdict_extraction``/``verdict_repair`` receipts and
+        ``verdict_absent_reason == "verdict extraction failed schema
+        validation"``. Preserving that byte-for-byte (the chain-of-one rule) means
+        letting ``extract_verdict`` run for every candidate rather than
+        pre-filtering by :func:`conclave.registry.key_present` first: an unkeyed
+        candidate's ``vsr.failure_category`` comes back ``"unkeyed"``, which IS in
+        ``FAILOVER_CATEGORIES``, so it becomes ``"failed_over"`` (or
+        ``"exhausted"`` on the last candidate) -- matching the receipts exactly,
+        since the calls did happen and did fail. The ``"skipped_unkeyed"`` outcome
+        (used by every other role via :meth:`_skipped_attempts`) is therefore
+        never produced for this role.
+
+        The N<2 responder gate is unaffected: ``extract_verdict`` returns
+        immediately with NO call made (``vsr.attempt_receipts == []``) regardless
+        of which candidate is asked, since the gate counts responding MEMBERS, not
+        chain candidates. The chain walk stops after the first candidate in that
+        case (asking a second candidate would just repeat the same no-call
+        no-op), so N<2 never contributes a ``verdict_extraction`` ledger entry.
+
+        ``extract_verdict`` never raises, and this method only assigns
+        already-secret-free objects afterward, so no defensive try/except is
+        needed.
 
         When ``result.manifest`` exists its verdict-provenance slots are populated
-        (extractor identity + prompt version, absent reason, consensus method,
-        verdict type) and the manifest's ``secret_safety`` stamp is RE-RUN over the
+        from the LAST candidate consulted (extractor identity + prompt version,
+        absent reason, consensus method, verdict type), the full succession ledger
+        is appended, and the manifest's ``secret_safety`` stamp is RE-RUN over the
         final content: the stamp was first computed in :meth:`_build_manifest`
         before these fields existed, so re-stamping keeps the VERIFIED claim honest
         over the manifest a consumer actually receives. The new fields (a resolved
         model id, a prompt-version string, the ``verdict_type``/``consensus_method``
-        literals) are provably key-free, so the stamp stays VERIFIED.
+        literals, and the ledger's bounded categories) are provably key-free, so
+        the stamp stays VERIFIED.
 
         Args:
             result: The in-progress :class:`CouncilResult` (answers + manifest
@@ -933,23 +972,85 @@ class Council:
         # Lazy import mirrors this module's deferred-import style (``modes`` /
         # ``streaming`` are imported inside methods) and sidesteps any import-cycle
         # risk between council and the verdict engine.
+        from .verdict_synthesis import REASON_EXTRACTION_FAILED
         from .verdict_synthesis import extract_verdict as extract_verdict_fn
 
-        synthesizer_name = self.synthesizer
-        synth_id = self.config.resolve_model_id(self.synthesizer)
-        vsr = await extract_verdict_fn(
-            result.prompt,
-            result.answers,
-            synthesizer_name=synthesizer_name,
-            synthesizer_model_id=synth_id,
-            config=self.config,
-            temperature=self.temperature,
-            timeout=self.timeout,
-            protocol_version=(ELITE_PROTOCOL_VERSION if result.mode == "elite" else None),
-        )
+        protocol_version = ELITE_PROTOCOL_VERSION if result.mode == "elite" else None
+        chain = self.synthesizer_chain
+        attempts: list[AdjudicationAttempt] = []
+        vsr = None
+        for index, candidate in enumerate(chain, start=1):
+            model_id = self.config.resolve_model_id(candidate)
+            vsr = await extract_verdict_fn(
+                result.prompt,
+                result.answers,
+                synthesizer_name=candidate,
+                synthesizer_model_id=model_id,
+                config=self.config,
+                temperature=self.temperature,
+                timeout=self.timeout,
+                protocol_version=protocol_version,
+            )
+            if record_receipts:
+                self._append_manifest_receipts(result, vsr.attempt_receipts)
+            if not vsr.attempt_receipts:
+                # N<2 gate: no call was made for this candidate (or any other --
+                # the responder count does not depend on which candidate is
+                # asked), so there is nothing to adjudicate. Stop here rather
+                # than repeating the same no-op for every remaining candidate.
+                break
 
-        if record_receipts:
-            self._append_manifest_receipts(result, vsr.attempt_receipts)
+            def _attempt(
+                outcome: str,
+                *,
+                failure_category: str | None = None,
+                http_status: int | None = None,
+                _candidate: str = candidate,
+                _model_id: str = model_id,
+                _index: int = index,
+            ) -> AdjudicationAttempt:
+                """Build one ledger entry for the candidate/index of this iteration.
+
+                The loop variables are bound as default-argument values so the
+                closure captures THIS iteration's ``candidate``/``model_id``/
+                ``index`` rather than whatever they are when the loop ends
+                (flake8-bugbear B023) -- mirrors :meth:`adjudicate`'s ``_attempt``.
+                """
+                return AdjudicationAttempt(
+                    role="verdict_extraction",
+                    candidate=_candidate,
+                    model_id=_model_id,
+                    attempt_index=_index,
+                    outcome=outcome,
+                    failure_category=failure_category,
+                    http_status=http_status,
+                )
+
+            failed = vsr.verdict_absent_reason == REASON_EXTRACTION_FAILED
+            if failed and vsr.failure_category in FAILOVER_CATEGORIES:
+                is_last = index == len(chain)
+                attempts.append(
+                    _attempt(
+                        "exhausted" if is_last else "failed_over",
+                        failure_category=vsr.failure_category,
+                        http_status=vsr.http_status,
+                    )
+                )
+                if not is_last:
+                    logger.warning(
+                        "verdict_extraction: '%s' failed (%s); trying next candidate",
+                        candidate,
+                        vsr.failure_category,
+                    )
+                continue
+            attempts.append(
+                _attempt(
+                    "terminal_failure" if failed else "success",
+                    failure_category=vsr.failure_category if failed else None,
+                    http_status=vsr.http_status if failed else None,
+                )
+            )
+            break
 
         result.verdict = vsr.verdict
         if vsr.verdict is not None:
@@ -962,12 +1063,14 @@ class Council:
             result.minority_reports = vsr.verdict.minority_reports
 
         if result.manifest is not None:
+            result.manifest.adjudication_succession.extend(attempts)
             result.manifest.verdict_extraction = vsr.extraction
             result.manifest.verdict_absent_reason = vsr.verdict_absent_reason
             result.manifest.consensus_method = vsr.verdict.consensus_method if vsr.verdict else None
             result.manifest.verdict_type = vsr.verdict.verdict_type if vsr.verdict else None
             # Re-stamp over the now-complete manifest so the VERIFIED claim covers
-            # the verdict-provenance fields just written (they are key-free).
+            # the verdict-provenance fields (including the new ledger entries)
+            # just written (they are key-free).
             result.manifest.secret_safety = verified_secret_safety(result.manifest)
 
     async def adjudicate(

@@ -58,7 +58,17 @@ re-calls the model ONCE with the stringified errors appended, then validates
 again. If it still fails (or the model returned an error / empty answer), the
 verdict is absent (``verdict=None``) with a recorded reason — it NEVER raises. The
 extractor's identity + prompt version is recorded as provenance on EVERY path
-(success and all three absent paths).
+(success and all three absent paths). This repair-retry behavior is unchanged
+by DSE-1512: the retry is always made against the SAME model that made the
+initial call, even when that call failed for an infrastructure reason -- only
+:meth:`conclave.council.Council._apply_verdict`'s outer chain walk (one
+``extract_verdict`` call per candidate) advances to a different model.
+
+On the ``REASON_EXTRACTION_FAILED`` path, :class:`VerdictSynthesisResult` also
+carries ``failure_category``/``http_status`` classifying the LAST attempt made
+(DSE-1512), so a caller can tell an infrastructure failure (eligible for
+chain failover) apart from a model that answered unusably (terminal for the
+role) without re-deriving it from the receipts.
 """
 
 from __future__ import annotations
@@ -83,6 +93,9 @@ from .verdict import (
 )
 
 __all__ = [
+    "REASON_EXTRACTION_FAILED",
+    "REASON_OPEN_ENDED",
+    "REASON_TOO_FEW",
     "VERDICT_EXTRACTION_PROMPT_VERSION",
     "VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES",
     "VerdictSynthesisResult",
@@ -101,6 +114,15 @@ VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES = 2048
 _REASON_TOO_FEW = "fewer than 2 responding members"
 _REASON_OPEN_ENDED = "open-ended prompt (no decision/review to adjudicate)"
 _REASON_EXTRACTION_FAILED = "verdict extraction failed schema validation"
+
+# Public aliases (DSE-1512). ``council.py``'s ``_apply_verdict`` (and any other
+# out-of-module reader) imports these rather than reaching for a
+# leading-underscore "private" symbol. The private names above remain the
+# canonical definitions and every existing internal use/import of them is
+# unchanged -- these are additive aliases, not a rename.
+REASON_TOO_FEW = _REASON_TOO_FEW
+REASON_OPEN_ENDED = _REASON_OPEN_ENDED
+REASON_EXTRACTION_FAILED = _REASON_EXTRACTION_FAILED
 
 
 def _bounded_repair_error(detail: object) -> str:
@@ -168,12 +190,31 @@ class VerdictSynthesisResult(BaseModel):
             schema validation"``), or ``None`` when a verdict is present.
         attempt_receipts: One secret-free receipt for each actual extraction or
             repair call. The N<2 gate makes no call and therefore yields none.
+        failure_category: Populated ONLY when ``verdict_absent_reason ==
+            REASON_EXTRACTION_FAILED`` (DSE-1512), classifying the LAST
+            extraction attempt made (the repair retry when one ran, else the
+            initial call) so :meth:`conclave.council.Council._apply_verdict`
+            can apply the same chain-failover rule every other adjudication
+            role uses. ``None`` on every other path (success, N<2, open-ended).
+            Two shapes: the last attempt errored (an infrastructure failure --
+            its :attr:`~conclave.models.ModelAnswer.failure_category` is
+            copied verbatim, which may or may not be in
+            :data:`conclave.models.FAILOVER_CATEGORIES`); or it answered but
+            failed schema validation, in which case this is the literal
+            ``"malformed_response"`` -- never a category the model itself could
+            have produced, and never in ``FAILOVER_CATEGORIES``, so a model
+            that responded (even unusably) is always terminal for the role.
+        http_status: The HTTP status of that same last attempt, when the
+            failure came from an HTTP response; ``None`` otherwise (including
+            the ``"malformed_response"`` case, which has no HTTP failure).
     """
 
     verdict: CouncilVerdict | None = None
     extraction: VerdictExtraction
     verdict_absent_reason: str | None = Field(default=None)
     attempt_receipts: list[ProviderExecutionReceipt] = Field(default_factory=list)
+    failure_category: str | None = None
+    http_status: int | None = None
 
 
 def _verdict_attempt_receipt(
@@ -209,6 +250,32 @@ def _verdict_attempt_receipt(
         prompt_version=VERDICT_EXTRACTION_PROMPT_VERSION,
         schema_version=VERDICT_SCHEMA_VERSION,
     )
+
+
+def _extraction_failure_category(last_attempt: ModelAnswer) -> tuple[str | None, int | None]:
+    """Classify the terminal (repair-exhausted) extraction failure (DSE-1512).
+
+    Distinguishes an infrastructure failure -- the model never answered, so its
+    typed :attr:`~conclave.models.ModelAnswer.failure_category` /
+    :attr:`~conclave.models.ModelAnswer.http_status` are copied verbatim -- from
+    a schema/validation failure, where the model DID answer but not usably, so
+    the fixed literal ``"malformed_response"`` is returned instead (never in
+    :data:`conclave.models.FAILOVER_CATEGORIES`, so it is always terminal for
+    the role: a model that answered is never second-guessed by another vendor).
+    :meth:`conclave.council.Council._apply_verdict` reads this pair to decide
+    whether the verdict-extraction role fails over to the next chain candidate.
+
+    Args:
+        last_attempt: The final extraction attempt made -- the repair retry
+            when one ran, else the initial call.
+
+    Returns:
+        ``(failure_category, http_status)``, either fully populated (an infra
+        failure) or ``("malformed_response", None)`` (a schema failure).
+    """
+    if last_attempt.error is not None:
+        return last_attempt.failure_category, last_attempt.http_status
+    return "malformed_response", None
 
 
 def _responding(member_answers: list[ModelAnswer]) -> list[ModelAnswer]:
@@ -573,6 +640,7 @@ async def extract_verdict(
             protocol_version=protocol_version,
         )
     ]
+    retry: ModelAnswer | None = None
     if extraction is None:
         repair_messages = messages + [
             {
@@ -611,11 +679,15 @@ async def extract_verdict(
     if extraction is None:
         # Repair exhausted — degrade gracefully (DD-2), never raise.
         logger.warning("verdict extraction failed schema validation after repair: %s", errors)
+        last_attempt = retry if retry is not None else answer
+        failure_category, http_status = _extraction_failure_category(last_attempt)
         return VerdictSynthesisResult(
             verdict=None,
             extraction=extraction_provenance,
             verdict_absent_reason=_REASON_EXTRACTION_FAILED,
             attempt_receipts=attempt_receipts,
+            failure_category=failure_category,
+            http_status=http_status,
         )
 
     # Step 4 — open-ended prompt → synthesis-only, no verdict (DD-2).

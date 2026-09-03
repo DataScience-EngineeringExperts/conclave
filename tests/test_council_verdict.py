@@ -28,7 +28,7 @@ from conclave.verdict_synthesis import (
     _REASON_OPEN_ENDED,
     _REASON_TOO_FEW,
 )
-from tests.conftest import make_response
+from tests.conftest import install_council_script, make_ok_answer, make_response
 
 # The synthesizer/extractor resolved id for the "claude" friendly name below.
 _SYNTH_MODEL_ID = "anthropic/claude-sonnet-4-6"
@@ -432,3 +432,257 @@ def test_apply_verdict_opt_out_is_noop_no_calls(monkeypatch, patch_call_model):
     asyncio.run(council._apply_verdict(result))
     assert result.verdict is None
     assert result.manifest.verdict_extraction.model_id is None
+
+
+# --------------------------------------------------------------------------- #
+# 9. Verdict-extraction succession (DSE-1512, Task 6): ``_apply_verdict`` walks
+#    the synthesizer chain, calling ``extract_verdict`` once per candidate and
+#    classifying from what it reports.
+# --------------------------------------------------------------------------- #
+
+# A council seam config wide enough for every candidate used below (members
+# gemini/openai, chain candidates claude/grok). The verdict-extraction seam is
+# patched per-test with a bespoke fake (keyed by ``name``, mirroring the
+# ``config_spy``/``fake_call_model`` pattern in ``test_council.py`` /
+# ``test_manifest_all_modes.py``) so each test can script a distinct
+# infra-failure/success sequence per chain candidate independently of the
+# council seam.
+_SUCCESSION_CFG = ConclaveConfig(
+    models={
+        "gemini": "gemini/gm",
+        "openai": "openai/o",
+        "claude": "anthropic/c",
+        "grok": "xai/g",
+    }
+)
+
+
+def _verdict_receipts(result: CouncilResult) -> list[tuple[str, str, str]]:
+    """Return ``(phase, name, outcome)`` for every verdict-related receipt, in order."""
+    return [
+        (r.phase, r.name, r.outcome)
+        for r in result.manifest.receipts
+        if r.phase and r.phase.startswith("verdict")
+    ]
+
+
+def _verdict_ledger(result: CouncilResult) -> list:
+    """Return the ``verdict_extraction`` slice of the adjudication succession ledger."""
+    return [a for a in result.manifest.adjudication_succession if a.role == "verdict_extraction"]
+
+
+async def test_verdict_extraction_fails_over_to_successor(monkeypatch, keys):
+    """An infra failure on the primary extractor fails over to the next candidate.
+
+    The repair retry (same-model, per ``extract_verdict``'s own unchanged
+    behavior) also fails for claude, so claude contributes TWO failed receipts
+    before the chain advances to grok, which succeeds on its first call.
+    """
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/gm"),
+            "openai": make_ok_answer("openai", "openai/o"),
+            "claude": make_ok_answer("claude", "anthropic/c"),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+
+    async def verdict_seam(name, model_id, messages, **kwargs):
+        if name == "claude":
+            return ModelAnswer(
+                name=name,
+                model_id=model_id,
+                error="claude failed",
+                failure_category="auth",
+                http_status=401,
+            )
+        return ModelAnswer(
+            name=name, model_id=model_id, answer=_extraction_json(members=("gemini", "openai"))
+        )
+
+    monkeypatch.setattr("conclave.verdict_synthesis.call_model", verdict_seam)
+
+    r = await Council(
+        models=["gemini", "openai"], synthesizer="claude>grok", config=_SUCCESSION_CFG
+    ).ask("Should we X?")
+
+    assert r.verdict is not None
+    assert r.manifest.verdict_extraction.model_id == "xai/g"
+    ledger = _verdict_ledger(r)
+    assert [(a.candidate, a.outcome, a.failure_category, a.http_status) for a in ledger] == [
+        ("claude", "failed_over", "auth", 401),
+        ("grok", "success", None, None),
+    ]
+    assert _verdict_receipts(r) == [
+        ("verdict_extraction", "claude", "failed"),
+        ("verdict_repair", "claude", "failed"),
+        ("verdict_extraction", "grok", "success"),
+    ]
+    assert r.manifest.secret_safety == SECRET_SAFETY_VERIFIED
+
+
+async def test_verdict_extraction_schema_failure_is_terminal(monkeypatch, keys):
+    """A candidate that ANSWERS unusably is terminal for the role -- no failover.
+
+    claude returns prose (not JSON) on both the initial call and the repair
+    retry; grok is never consulted -- confirmed via a call log keyed by name.
+    """
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/gm"),
+            "openai": make_ok_answer("openai", "openai/o"),
+            "claude": make_ok_answer("claude", "anthropic/c"),
+        },
+    )
+    verdict_calls: list[str] = []
+
+    async def verdict_seam(name, model_id, messages, **kwargs):
+        verdict_calls.append(name)
+        if name == "grok":
+            raise AssertionError("grok must not be consulted after a terminal failure")
+        return ModelAnswer(name=name, model_id=model_id, answer="not json")
+
+    monkeypatch.setattr("conclave.verdict_synthesis.call_model", verdict_seam)
+
+    r = await Council(
+        models=["gemini", "openai"], synthesizer="claude>grok", config=_SUCCESSION_CFG
+    ).ask("Should we X?")
+
+    assert verdict_calls == ["claude", "claude"]
+    assert r.verdict is None
+    assert r.manifest.verdict_absent_reason == _REASON_EXTRACTION_FAILED
+    ledger = _verdict_ledger(r)
+    assert [(a.candidate, a.outcome, a.failure_category, a.http_status) for a in ledger] == [
+        ("claude", "terminal_failure", "malformed_response", None),
+    ]
+    assert _verdict_receipts(r) == [
+        ("verdict_extraction", "claude", "schema_invalid"),
+        ("verdict_repair", "claude", "schema_invalid"),
+    ]
+    assert r.manifest.secret_safety == SECRET_SAFETY_VERIFIED
+
+
+async def test_verdict_extraction_chain_of_one_unkeyed_unchanged(monkeypatch):
+    """Chain of one + unkeyed synthesizer: today's receipt shape is preserved.
+
+    Restores the REAL ``conclave.providers.call_model`` on the verdict seam
+    (instead of an offline fake) so the "no API key" short-circuit -- which
+    makes no network call -- runs exactly as it does in production: two
+    failed receipts (initial + repair), both unkeyed, no schema check ever
+    reached. The new ledger entry is additive.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.setenv("OPENAI_API_KEY", "dummy")
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/gm"),
+            "openai": make_ok_answer("openai", "openai/o"),
+        },
+    )
+    import conclave.providers as providers_mod
+
+    monkeypatch.setattr("conclave.verdict_synthesis.call_model", providers_mod.call_model)
+
+    r = await Council(
+        models=["gemini", "openai"], synthesizer="claude", config=_SUCCESSION_CFG
+    ).ask("Should we X?")
+
+    assert r.verdict is None
+    assert r.manifest.verdict_absent_reason == _REASON_EXTRACTION_FAILED
+    ledger = _verdict_ledger(r)
+    assert [(a.candidate, a.outcome, a.failure_category, a.http_status) for a in ledger] == [
+        ("claude", "exhausted", "unkeyed", None),
+    ]
+    verdict_receipts = _verdict_receipts(r)
+    assert [phase for phase, _name, _outcome in verdict_receipts] == [
+        "verdict_extraction",
+        "verdict_repair",
+    ]
+    assert all(outcome == "failed" for _phase, _name, outcome in verdict_receipts)
+
+
+async def test_verdict_extraction_exhausted(monkeypatch, keys):
+    """Every chain candidate fails an infra error -> the chain is exhausted."""
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/gm"),
+            "openai": make_ok_answer("openai", "openai/o"),
+            "claude": make_ok_answer("claude", "anthropic/c"),
+        },
+    )
+
+    async def verdict_seam(name, model_id, messages, **kwargs):
+        if name == "claude":
+            return ModelAnswer(
+                name=name,
+                model_id=model_id,
+                error="claude quota exceeded",
+                failure_category="quota",
+                http_status=429,
+            )
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            error="grok unavailable",
+            failure_category="unavailable",
+            http_status=503,
+        )
+
+    monkeypatch.setattr("conclave.verdict_synthesis.call_model", verdict_seam)
+
+    r = await Council(
+        models=["gemini", "openai"], synthesizer="claude>grok", config=_SUCCESSION_CFG
+    ).ask("Should we X?")
+
+    assert r.verdict is None
+    assert r.manifest.verdict_absent_reason == _REASON_EXTRACTION_FAILED
+    ledger = _verdict_ledger(r)
+    assert [a.outcome for a in ledger] == ["failed_over", "exhausted"]
+    assert [(a.candidate, a.failure_category, a.http_status) for a in ledger] == [
+        ("claude", "quota", 429),
+        ("grok", "unavailable", 503),
+    ]
+    assert r.manifest.verdict_extraction.model_id == "xai/g"
+    assert _verdict_receipts(r) == [
+        ("verdict_extraction", "claude", "failed"),
+        ("verdict_repair", "claude", "failed"),
+        ("verdict_extraction", "grok", "failed"),
+        ("verdict_repair", "grok", "failed"),
+    ]
+    assert r.manifest.secret_safety == SECRET_SAFETY_VERIFIED
+
+
+async def test_verdict_extraction_n_lt_2_records_no_ledger(monkeypatch, keys):
+    """N<2 responders -> no extraction call at all, no verdict_extraction ledger entries."""
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/gm"),
+            "openai": ModelAnswer(
+                name="openai", model_id="openai/o", error="openai failed", failure_category="auth"
+            ),
+            "claude": make_ok_answer("claude", "anthropic/c"),
+        },
+    )
+
+    verdict_calls: list[str] = []
+
+    async def verdict_seam(name, model_id, messages, **kwargs):
+        verdict_calls.append(name)
+        raise AssertionError("verdict extraction must not run with <2 responders")
+
+    monkeypatch.setattr("conclave.verdict_synthesis.call_model", verdict_seam)
+
+    r = await Council(
+        models=["gemini", "openai"], synthesizer="claude>grok", config=_SUCCESSION_CFG
+    ).ask("Should we X?")
+
+    assert verdict_calls == []
+    assert r.verdict is None
+    assert r.manifest.verdict_absent_reason == _REASON_TOO_FEW
+    assert _verdict_ledger(r) == []
