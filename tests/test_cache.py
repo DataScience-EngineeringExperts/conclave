@@ -27,7 +27,8 @@ import conclave.council as council_mod
 from conclave import Council
 from conclave import cache as cache_mod
 from conclave.config import ConclaveConfig, CustomEndpoint
-from conclave.models import ModelAnswer
+from conclave.manifest import AdjudicationAttempt, ModelHarnessManifest
+from conclave.models import CouncilResult, ModelAnswer
 from tests.conftest import install_council_script, make_failed_answer, make_ok_answer, make_response
 
 
@@ -854,11 +855,14 @@ async def test_terminal_failure_run_is_stored(monkeypatch, keys, cache_home):
     assert [a.outcome for a in r2.manifest.adjudication_succession] == ["terminal_failure"]
 
 
-async def test_chain_of_one_unkeyed_run_is_stored(monkeypatch, cache_home):
-    """A chain-of-one unkeyed synthesizer is NOT primary_failed_over and is cached
-    exactly like v1.3.0 (DSE-1512 review, Unit A3) -- there is no successor to
-    have adjudicated instead, so the ledger's lone ``skipped_unkeyed`` entry
-    must not itself block storage.
+async def test_chain_of_one_unkeyed_run_is_not_stored(monkeypatch, cache_home):
+    """A chain-of-one unkeyed synthesizer IS primary_failed_over (DSE-1512 review,
+    uniform rule) and is therefore NOT cached -- the ledger's lone
+    ``skipped_unkeyed`` entry at attempt_index 1 means the primary never
+    adjudicated, even though there is no successor to have adjudicated instead.
+    Runs with ``extract_verdict=False`` (below) and the default
+    ``extract_verdict=True`` (the second test) must agree: the rule does not
+    depend on which roles ran.
     """
     monkeypatch.setenv("GEMINI_API_KEY", "dummy")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -873,9 +877,109 @@ async def test_chain_of_one_unkeyed_run_is_stored(monkeypatch, cache_home):
     r1 = await c.ask("q")
     r2 = await c.ask("q")
 
-    assert r1.primary_failed_over is False
-    assert r1.cached is False and r2.cached is True
-    assert calls.count("gemini") == 1  # second run served from cache, not re-called
+    assert r1.primary_failed_over is True
+    assert r1.cached is False and r2.cached is False
+    assert not list(cache_home.glob("*.json"))  # nothing was ever written
+    assert calls.count("gemini") == 2  # second run re-called the providers, not cached
+
+
+async def test_chain_of_one_unkeyed_run_is_not_stored_with_verdict_extraction(
+    monkeypatch, cache_home
+):
+    """Same as above with the default ``extract_verdict=True``."""
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    calls = install_council_script(monkeypatch, {"gemini": make_ok_answer("gemini", "gemini/m")})
+    c = Council(
+        models=["gemini"],
+        synthesizer="claude",
+        config=_chain_config(),
+        cache=True,
+    )
+    r1 = await c.ask("q")
+    r2 = await c.ask("q")
+
+    assert r1.primary_failed_over is True
+    assert r1.cached is False and r2.cached is False
+    assert not list(cache_home.glob("*.json"))
+    assert calls.count("gemini") == 2
+
+
+# --------------------------------------------------------------------------- #
+# CouncilResult.primary_failed_over truth table (DSE-1512 review, uniform rule).
+# Constructs a ModelHarnessManifest directly -- no council run -- to pin the
+# computed field's rule independent of how any particular role's ledger gets
+# built.
+# --------------------------------------------------------------------------- #
+
+
+def _attempt(role: str, outcome: str, index: int) -> AdjudicationAttempt:
+    """Build one succession-ledger entry for the truth-table test below."""
+    return AdjudicationAttempt(
+        role=role,
+        candidate="claude",
+        model_id="anthropic/c",
+        attempt_index=index,
+        outcome=outcome,
+    )
+
+
+def _manifest_with(attempts: list[AdjudicationAttempt]) -> ModelHarnessManifest:
+    return ModelHarnessManifest(
+        request_id="r",
+        conclave_version="v",
+        mode="synthesize",
+        adjudication_succession=attempts,
+    )
+
+
+@pytest.mark.parametrize(
+    ("attempts", "expected"),
+    [
+        pytest.param([], False, id="empty_ledger"),
+        pytest.param(
+            [_attempt("synthesis", "terminal_failure", 1)], False, id="terminal_failure_at_1"
+        ),
+        pytest.param(
+            [_attempt("synthesis", "skipped_unkeyed", 1)], True, id="skipped_unkeyed_at_1"
+        ),
+        pytest.param(
+            [_attempt("synthesis", "skipped_unkeyed", 1), _attempt("synthesis", "success", 2)],
+            True,
+            id="skipped_unkeyed_then_success",
+        ),
+        pytest.param(
+            [
+                _attempt("synthesis", "skipped_unkeyed", 1),
+                _attempt("synthesis", "terminal_failure", 2),
+            ],
+            True,
+            id="skipped_unkeyed_then_terminal_failure",
+        ),
+        pytest.param(
+            [
+                _attempt("synthesis", "failed_over", 1),
+                _attempt("synthesis", "skipped_unkeyed", 2),
+            ],
+            True,
+            id="failed_over_then_skipped_unkeyed",
+        ),
+        pytest.param([_attempt("synthesis", "success", 1)], False, id="success_at_1"),
+        pytest.param([_attempt("synthesis", "exhausted", 1)], True, id="exhausted_at_1"),
+        pytest.param(
+            [_attempt("synthesis", "success", 1), _attempt("judge", "failed_over", 1)],
+            True,
+            id="second_role_index_1_failed_over",
+        ),
+    ],
+)
+def test_primary_failed_over_truth_table(attempts, expected):
+    """primary_failed_over depends only on each role's attempt_index==1 outcome,
+    uniformly across every role, independent of whether a council run ever
+    actually happened.
+    """
+    result = CouncilResult(prompt="p", manifest=_manifest_with(attempts))
+    assert result.primary_failed_over is expected
 
 
 # --------------------------------------------------------------------------- #

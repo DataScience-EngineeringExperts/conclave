@@ -362,22 +362,22 @@ class Council:
         :meth:`_ask_uncached`; a fill for ``debate``/``adversarial``/``vote`` and
         for a cache hit stored before the manifest existed).
 
-        **No-store on primary infrastructure failure (DSE-1512).** A cache hit
-        must never pin a result the chain's primary adjudicator did not
-        produce, and it must never replay an infrastructure outage after the
-        outage has ended. So a live result is NOT written to the cache when
-        :attr:`~conclave.models.CouncilResult.primary_failed_over` reports that
-        its manifest's succession ledger contains a ``"failed_over"`` or
-        ``"exhausted"`` attempt -- i.e.
-        the primary candidate failed for an infrastructure reason (see
-        :data:`conclave.models.FAILOVER_CATEGORIES`), whether or not a
-        successor then answered. The uncached result is still returned to
-        THIS caller unchanged; only the write to disk is skipped, so the next
-        identical ``ask`` gets a fresh chance at a healthy primary rather than
-        a pinned failure or a successor's answer served under the primary's
-        name. This is a deliberate, narrow behavior change from v1.3.0: a
-        chain-of-one run whose synthesizer errored for an infrastructure
-        reason (ledger ``["exhausted"]``) used to be cached and now is not.
+        **No-store when the primary did not adjudicate (DSE-1512).** A cache
+        hit must never pin a result the chain's primary adjudicator did not
+        produce, and it must never replay an infrastructure outage -- including
+        a still-missing key -- after it has cleared. So a live result is NOT
+        written to the cache when
+        :attr:`~conclave.models.CouncilResult.primary_failed_over` is ``True``.
+        See that property for the exact rule; in one sentence: the primary
+        adjudicator of some role did not itself produce the answer, for an
+        infrastructure reason (no key, auth, quota, 5xx, timeout, network) or
+        because the whole ladder was exhausted. The uncached result is still
+        returned to THIS caller unchanged; only the write to disk is skipped,
+        so the next identical ``ask`` gets a fresh chance at a healthy primary
+        rather than a pinned failure or a successor's answer served under the
+        primary's name. This is a deliberate, narrow behavior change from
+        v1.3.0: a chain-of-one run whose sole synthesizer had no key or
+        errored for an infrastructure reason used to be cached and now is not.
         A ``"terminal_failure"`` ledger entry (the model answered, just not
         usably) is unaffected and remains cacheable exactly as before --
         re-running would not produce a different, better answer.
@@ -743,11 +743,12 @@ class Council:
         called. On a cache **miss**, the live stream runs and, on completion, the
         assembled result is stored so a later ``--stream`` or buffered run hits
         -- UNLESS :attr:`~conclave.models.CouncilResult.primary_failed_over` is
-        ``True`` (the chain's primary adjudicator failed for an infrastructure
-        reason), mirroring :meth:`_cached_run`'s no-store rule exactly: a cache
+        ``True``: the primary adjudicator of some role did not itself produce
+        the answer (see that property for the exact rule, including a missing
+        key), mirroring :meth:`_cached_run`'s no-store rule exactly -- a cache
         hit must never pin a result the primary did not produce, nor replay an
-        outage after it has cleared. The run is still returned to this caller
-        unchanged; only the write to disk is skipped.
+        infrastructure outage after it has cleared. The run is still returned
+        to this caller unchanged; only the write to disk is skipped.
 
         Args:
             prompt: The user prompt to fan out.
@@ -992,6 +993,14 @@ class Council:
         since the calls did happen and did fail. The ``"skipped_unkeyed"`` outcome
         (used by every other role via :meth:`_skipped_attempts`) is therefore
         never produced for this role.
+
+        This distinction is invisible to the cache. Whether an unkeyed primary
+        lands as ``"skipped_unkeyed"`` (every other role) or as
+        ``"failed_over"``/``"exhausted"`` (this role) does not change the
+        no-store outcome, because
+        :attr:`~conclave.models.CouncilResult.primary_failed_over` treats all
+        three the same at the primary's ``attempt_index == 1`` -- see that
+        property for the uniform rule.
 
         The N<2 responder gate is unaffected: ``extract_verdict`` returns
         immediately with NO call made (``vsr.attempt_receipts == []``) regardless

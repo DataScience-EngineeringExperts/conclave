@@ -46,13 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `redacted_errors` for those modes include it. Every real call now has a receipt, matching
   the Elite contract.
 - **Cache.** The full synthesizer chain is part of cache identity; `CACHE_FORMAT_VERSION`
-  `3` → `4` (old entries miss safely). A run **adjudicated by a successor or whose ladder was
-  exhausted** (`failed_over` or `exhausted` in the ledger — matching
-  `CouncilResult.primary_failed_over`) is **no longer stored**, whether the run was buffered
-  or streamed via `--stream` — a cache hit must never pin a result the primary did not
-  produce, nor replay an outage after it ends. Consequence for a chain of one: a degraded run
-  whose sole synthesizer errored for an infrastructure reason used to be cached and now is
-  not. `terminal_failure` runs (the model answered) remain cacheable.
+  `3` → `4` (old entries miss safely). A run whose primary adjudicator did not adjudicate for
+  an infrastructure reason — no key, auth, quota, 5xx, timeout, network — or whose ladder was
+  exhausted, is **never stored** (buffered or `--stream`); a cache hit must never pin a result
+  the primary did not produce, nor replay an outage after it ends. `terminal_failure` runs (the
+  model answered) remain cacheable. Chain-of-one consequence: a degraded run whose sole
+  synthesizer had no key or errored for an infrastructure reason used to be cached and now is
+  not.
 - `ProviderError` and `TransportError` accept keyword-only `category` (and `http_status`);
   positional construction is unchanged.
 

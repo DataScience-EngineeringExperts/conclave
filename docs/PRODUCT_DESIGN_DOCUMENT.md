@@ -301,9 +301,10 @@ re-adjudicate after a content failure would let a run shop for its verdict and w
 reproducibility. Failure categories are typed at the raise site (`TransportError.category`,
 `ProviderError.category`), never inferred from error text. The ledger carries bounded
 categories and an integer HTTP status only, so `secret_safety` remains provable. A successor
-adjudication is a clean run; a run adjudicated by a successor, or whose ladder was exhausted,
-is never cached — a cache hit must never pin a result the primary did not produce, nor replay
-an outage after it ends. For verdict extraction specifically, the failure category is decided
+adjudication is a clean run; a run whose primary adjudicator did not adjudicate for an
+infrastructure reason — no key, auth, quota, 5xx, timeout, network — or whose ladder was
+exhausted, is never cached — a cache hit must never pin a result the primary did not produce,
+nor replay an outage after it ends. For verdict extraction specifically, the failure category is decided
 by whether the candidate EVER answered across its initial call and same-model repair retry,
 not by whichever attempt happened to run last: a candidate that answered on either attempt is
 terminal for the role even if its other attempt hit an unrelated infrastructure error.

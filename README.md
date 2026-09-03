@@ -486,10 +486,11 @@ not the primary?*:
 ```
 
 `result.synthesizer` names the candidate that actually adjudicated. A run adjudicated by a
-successor exits `0`; exit `3` (`degraded`) now means the whole ladder was exhausted. Runs
-adjudicated by a successor, or whose ladder was exhausted, are not written to the result
-cache — a cache hit must never pin a result the primary did not produce, nor replay an
-outage after it ends.
+successor exits `0`; exit `3` (`degraded`) now means the whole ladder was exhausted. A run
+whose primary adjudicator did not adjudicate for an infrastructure reason — no key, auth,
+quota, 5xx, timeout, network — or whose ladder was exhausted, is never written to the result
+cache (buffered or `--stream`) — a cache hit must never pin a result the primary did not
+produce, nor replay an outage after it ends.
 
 ## Config (optional)
 

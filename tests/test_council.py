@@ -487,6 +487,25 @@ async def test_chain_of_one_clean_run_is_not_primary_failed_over(monkeypatch, ke
     assert "primary_failed_over" in r.model_dump(mode="json")
 
 
+async def test_terminal_failure_primary_is_not_primary_failed_over(monkeypatch, keys):
+    """A primary that answered unusably (``terminal_failure`` at index 1) is NOT
+    primary_failed_over -- it adjudicated, just badly, so failover never fires and
+    the run must stay cacheable exactly like any other content failure.
+    """
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_failed_answer("claude", "anthropic/c", "bad_request", 400),
+        },
+    )
+    c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.primary_failed_over is False
+    assert r.degraded is True
+    assert [a.outcome for a in r.manifest.adjudication_succession] == ["terminal_failure"]
+
+
 async def test_successor_after_unkeyed_primary_is_primary_failed_over(monkeypatch):
     """DSE-1512 review, Unit A3: a keyed successor after a SKIPPED (not failed) primary
     still counts as primary_failed_over -- no candidate ever errored on a live call.
@@ -512,15 +531,32 @@ async def test_successor_after_unkeyed_primary_is_primary_failed_over(monkeypatc
     ]
 
 
-async def test_chain_of_one_unkeyed_is_not_primary_failed_over(monkeypatch):
-    """A chain-of-one unkeyed synthesizer stays primary_failed_over=False -- there is no
-    successor to have adjudicated instead (v1.3.0 chain-of-one parity, unchanged).
+async def test_chain_of_one_unkeyed_is_primary_failed_over(monkeypatch):
+    """A chain-of-one unkeyed synthesizer IS primary_failed_over (DSE-1512 review,
+    uniform rule): the primary's attempt_index==1 outcome is "skipped_unkeyed" --
+    it never adjudicated, for an infrastructure reason (no key) -- exactly like a
+    live failover or an exhausted ladder, even though there is no successor to
+    have adjudicated instead.
     """
     monkeypatch.setenv("GEMINI_API_KEY", "dummy")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     install_council_script(monkeypatch, {"gemini": make_ok_answer("gemini", "gemini/m")})
     c = Council(models=["gemini"], synthesizer="claude", config=CFG, extract_verdict=False)
     r = await c.ask("q")
-    assert r.primary_failed_over is False
+    assert r.primary_failed_over is True
     assert r.degraded is True
     assert [a.outcome for a in r.manifest.adjudication_succession] == ["skipped_unkeyed"]
+
+
+async def test_chain_of_one_unkeyed_is_primary_failed_over_with_verdict_extraction(monkeypatch):
+    """Same as above with the default ``extract_verdict=True``: the rule must not
+    depend on which roles ran or whether verdict extraction's separate
+    unkeyed-candidate handling (see ``Council._apply_verdict``) happened to run.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    install_council_script(monkeypatch, {"gemini": make_ok_answer("gemini", "gemini/m")})
+    c = Council(models=["gemini"], synthesizer="claude", config=CFG)
+    r = await c.ask("q")
+    assert r.primary_failed_over is True
+    assert r.degraded is True

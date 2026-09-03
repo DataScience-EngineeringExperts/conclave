@@ -316,6 +316,15 @@ class AdversarialResult(BaseModel):
         return [c for c in self.critiques if c.ok]
 
 
+# DSE-1512 review — the uniform primary_failed_over rule. An outcome at the
+# PRIMARY's attempt (attempt_index == 1) in this set means the primary did not
+# itself adjudicate for an infrastructure reason: a missing key
+# ("skipped_unkeyed") is treated exactly like a live failover or an exhausted
+# ladder, because in every case no key/content answer ever came back from the
+# primary. See CouncilResult.primary_failed_over for the full rule.
+_PRIMARY_INFRA_OUTCOMES: frozenset[str] = frozenset({"failed_over", "exhausted", "skipped_unkeyed"})
+
+
 class VoteResult(BaseModel):
     """The tally from a constrained-choice vote run.
 
@@ -419,12 +428,16 @@ class CouncilResult(BaseModel):
             so a caller cannot mistake a partial run for a clean pass. See the
             property docstring below for the exact rule and the CLI's exit-code
             contract (:func:`conclave.cli.ask`) that keys off it.
-        primary_failed_over: Computed field (DSE-1512) -- ``True`` when the
-            chain's primary adjudicator failed for an infrastructure reason,
-            whether or not a successor then answered. Independent of
-            ``degraded``: a successor adjudication is ``primary_failed_over=True,
-            degraded=False``. See the property docstring below for the exact
-            rule and why the cache never stores such a run.
+        primary_failed_over: Computed field (DSE-1512, review-uniform rule) --
+            ``True`` when the primary adjudicator of at least one role did not
+            itself adjudicate for an infrastructure reason (no key, auth,
+            quota, 5xx, timeout, network) or the ladder was exhausted, whether
+            or not a successor then answered. Independent of ``degraded``: a
+            successor adjudication is ``primary_failed_over=True,
+            degraded=False``. A ``terminal_failure`` primary (the model
+            answered, just not usably) is ``False``. See the property
+            docstring below for the exact rule and why the cache never stores
+            such a run, buffered or streamed.
     """
 
     prompt: str
@@ -515,36 +528,44 @@ class CouncilResult(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def primary_failed_over(self) -> bool:
-        """True when the primary adjudicator was replaced (DSE-1512, review-corrected).
+        """True when the primary adjudicator did not adjudicate, for any role (DSE-1512, uniform rule).
 
-        ``True`` when ``self.manifest`` is not ``None`` and the succession
-        ledger for some adjudication role (synthesis, debate's final
-        consolidation, the adversarial judge, or verdict extraction) shows the
-        primary candidate did NOT itself produce the answer. Three cases, all
-        ``True``:
+        ``True`` iff, for any adjudication role recorded on
+        ``self.manifest.adjudication_succession`` (synthesis, debate's final
+        consolidation, the adversarial judge, or verdict extraction), the
+        attempt at ``attempt_index == 1`` -- the chain's declared primary --
+        has ``outcome`` in :data:`_PRIMARY_INFRA_OUTCOMES`:
 
-        1. **Infrastructure failure of the primary.** Any
-           ``manifest.adjudication_succession`` attempt has ``outcome ==
-           "failed_over"`` -- the primary failed for an infrastructure reason
-           (auth/quota/5xx/timeout/network, see :data:`FAILOVER_CATEGORIES`)
-           and a successor then answered.
-        2. **Ladder exhausted.** Any attempt has ``outcome == "exhausted"`` --
-           every keyed candidate failed for an infrastructure reason and
-           nothing answered.
-        3. **Successor after a skipped-unkeyed primary.** A candidate at
-           ``attempt_index > 1`` has ``outcome == "success"`` -- the primary
-           was skipped for a missing key (``"skipped_unkeyed"``, which is
-           itself not a failure category eligible for cases 1/2) and a later,
-           keyed candidate adjudicated instead. This closed a real gap: an
-           unkeyed primary with a keyed successor used to report ``False``
-           (no ``"failed_over"``/``"exhausted"`` entry exists for that shape)
-           even though the primary plainly did not adjudicate.
+        * ``"failed_over"`` -- the primary failed for an infrastructure reason
+          (auth/quota/5xx/timeout/network/unresolved, see
+          :data:`FAILOVER_CATEGORIES`) and a successor then answered;
+        * ``"exhausted"`` -- the primary failed the same way and NOTHING in
+          the chain answered (the ladder was exhausted);
+        * ``"skipped_unkeyed"`` -- the primary had no API key, so no call was
+          ever made for it. A missing key is an infrastructure reason like any
+          other: the primary simply did not adjudicate.
 
-        ``False`` for a chain of one whose sole candidate was skipped for a
-        missing key (ledger ``["skipped_unkeyed"]`` only, nothing left to
-        succeed to -- unchanged v1.3.0 chain-of-one behavior, still
-        cacheable), for a chain of one that never had an infrastructure
-        failure, and for any run with no manifest.
+        This one condition subsumes every case the previous, two-outcome rule
+        handled separately: a successor can only have adjudicated
+        (``attempt_index > 1``, ``outcome == "success"``) if the primary at
+        index 1 was ``"failed_over"`` or ``"skipped_unkeyed"``; a fully
+        exhausted ladder always has index 1 in this set too. A role with no
+        ledger entries (it never ran for this result -- e.g. ``vote``/``raw``
+        modes, or a role this run never reached) contributes nothing.
+
+        ``False`` when the primary's index-1 attempt is ``"success"`` (it
+        adjudicated) or ``"terminal_failure"`` (it answered, just not usably
+        -- a content failure, not an infrastructure one, so re-running the
+        same model would not produce a different, better answer). Also
+        ``False`` for any run with no manifest.
+
+        This closes a real gap from the prior two-outcome rule: an unkeyed
+        primary was recorded as ``"skipped_unkeyed"`` by every role except
+        verdict extraction (which deliberately calls the unkeyed candidate
+        anyway and records ``"failed_over"``/``"exhausted"`` -- see
+        :meth:`conclave.council.Council._apply_verdict`), so whether an
+        unkeyed-primary run reported ``True`` used to depend on which roles
+        happened to run and on ``extract_verdict``, rather than being uniform.
 
         Independent of :attr:`degraded`: a run adjudicated by a successor is a
         clean run (``primary_failed_over=True, degraded=False``), while a run
@@ -555,22 +576,22 @@ class CouncilResult(BaseModel):
         candidate itself need to be replaced or exhausted?"
         (``primary_failed_over``).
 
-        A run for which this is ``True`` is never written to the result cache
-        (see :meth:`conclave.council.Council._cached_run`): a cache hit must
-        never pin a result the primary did not produce, nor replay an
-        infrastructure outage after it has cleared. Included as a top-level
-        key in ``model_dump(mode="json")`` output (a Pydantic
-        ``computed_field``), so a scripted consumer can check it directly
-        instead of walking the manifest's succession ledger.
+        A run for which this is ``True`` is never written to the result cache,
+        whether the run was buffered or streamed via ``--stream`` (see
+        :meth:`conclave.council.Council._cached_run` and
+        :meth:`conclave.council.Council.ask_stream`): a cache hit must never
+        pin a result the primary did not produce, nor replay an
+        infrastructure outage -- including a still-missing key -- after it
+        has cleared. Included as a top-level key in ``model_dump(mode="json")``
+        output (a Pydantic ``computed_field``), so a scripted consumer can
+        check it directly instead of walking the manifest's succession
+        ledger.
         """
         if self.manifest is None:
             return False
-        attempts = self.manifest.adjudication_succession
-        if any(attempt.outcome in ("failed_over", "exhausted") for attempt in attempts):
-            return True
-        # A successor adjudicated after the primary was skipped for a missing key.
         return any(
-            attempt.outcome == "success" and attempt.attempt_index > 1 for attempt in attempts
+            a.attempt_index == 1 and a.outcome in _PRIMARY_INFRA_OUTCOMES
+            for a in self.manifest.adjudication_succession
         )
 
 
