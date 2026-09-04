@@ -171,6 +171,19 @@ _EXTRACTION_SYSTEM = (
     "clustering. Emit only the fields in the schema."
 )
 
+# DSE-1514: byte sizes the pre-flight spend planner needs without making a call.
+# The extraction schema and its system prompt are fixed, so their UTF-8 byte cost
+# is a constant of this module rather than a per-run guess.
+VERDICT_CONTRACT_BYTES = len(
+    json.dumps(
+        verdict_extraction_json_schema(),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+)
+VERDICT_TEMPLATE_PROBE = _EXTRACTION_SYSTEM
+
 
 class VerdictSynthesisResult(BaseModel):
     """The outcome of one verdict-extraction run (CAC-05 engine return type).

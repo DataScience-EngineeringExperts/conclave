@@ -59,7 +59,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from . import cache as cache_mod
-from . import transport
+from . import prompts, transport
 from .adapters.base import redact
 from .config import ConclaveConfig, load_config, parse_synthesizer_chain
 from .logging import get_logger
@@ -88,6 +88,8 @@ from .pricing import (
 from .prompts import ELITE_PROMPT_VERSION, SYNTHESIS_PROMPT_VERSION
 from .providers import call_model, receipt_from_answer
 from .registry import key_present
+from .verdict_synthesis import VERDICT_CONTRACT_BYTES as _VERDICT_CONTRACT_BYTES
+from .verdict_synthesis import VERDICT_TEMPLATE_PROBE as _VERDICT_TEMPLATE_PROBE
 
 if TYPE_CHECKING:  # avoid an import cycle at runtime; only needed for typing
     from .verdict_synthesis import VerdictSynthesisResult
@@ -113,6 +115,19 @@ _SYNTH_SYSTEM = (
     "Produce one consolidated, accurate answer. Reconcile agreements, surface "
     "and adjudicate disagreements, and note any answer that is clearly wrong. "
     "Do not invent a model's position; rely only on the answers provided."
+)
+
+# The modes Council.plan_calls knows how to enumerate (DSE-1514). Kept as its own
+# frozenset (rather than re-deriving from _RENDERERS or similar) so the planner's
+# contract is explicit and independent of any CLI-only vocabulary.
+_VALID_PLAN_MODES = frozenset({"raw", "synthesize", "vote", "debate", "adversarial", "elite"})
+
+# The exact refusal message when a spend cap is requested but output is
+# unbounded (DSE-1514): shared verbatim by Council.plan_calls, the Council
+# constructor's max_spend_usd guard, and the CLI so the message a library caller
+# sees and the message a CLI user sees are byte-identical.
+_NO_OUTPUT_CAP_MESSAGE = (
+    "cannot bound spend: no output cap (set --max-output-tokens or config max_output_tokens)"
 )
 
 # Re-exported for callers that want the version without importing prompts.
@@ -167,6 +182,50 @@ class AdjudicationOutcome:
     @property
     def model_id(self) -> str | None:
         return self.answer.model_id if self.answer is not None else None
+
+
+@dataclass(frozen=True)
+class PlannedCall:
+    """One provider call a mode COULD make, bounded without making it.
+
+    Every field is knowable before the first call: the resolved model, the
+    output cap the call will be issued with, and a three-part input bound (exact
+    prompt bytes, fixed template bytes, provider framing) plus a count of
+    upstream calls whose not-yet-produced output this call's input will embed.
+
+    Attributes:
+        phase: The manifest phase this call would be recorded under.
+        name: Friendly member / candidate name.
+        model_id: Resolved provider-prefixed model id.
+        prompt_token_upper_bound: UTF-8 bytes of the exact known content.
+        prompt_template_token_allowance: UTF-8 bytes of the fixed system + user
+            template wording that will surround it.
+        provider_framing_token_allowance: ``64 + 16 * messages`` (+256 with a
+            structured-output contract), mirroring the eval runner.
+        upstream_output_call_count: How many upstream calls' outputs this call's
+            input embeds. Multiplied by the output cap and the snapshot's
+            ``max_output_bytes_per_token`` to bound them.
+        max_output_tokens: The hard output cap this call would carry.
+    """
+
+    phase: str
+    name: str
+    model_id: str
+    prompt_token_upper_bound: int
+    prompt_template_token_allowance: int
+    provider_framing_token_allowance: int
+    upstream_output_call_count: int
+    max_output_tokens: int
+
+
+@dataclass(frozen=True)
+class CallPlan:
+    """The complete worst-case call plan for one run of one mode."""
+
+    mode: str
+    calls: tuple[PlannedCall, ...]
+    member_count: int
+    chain_count: int
 
 
 class Council:
@@ -342,6 +401,179 @@ class Council:
         if self.max_output_tokens is not None:
             settings["max_output_tokens"] = self.max_output_tokens
         return settings
+
+    def _keyed_chain(self) -> list[tuple[str, str]]:
+        """Resolve the synthesizer chain to the candidates that could be CALLED.
+
+        :meth:`adjudicate` skips an unkeyed candidate without making a call, so
+        an unkeyed candidate cannot cost anything and is excluded from the plan.
+        ``registry.key_present`` returns ``True`` for an unknown provider prefix,
+        which errs toward INCLUDING the call -- the safe direction for a ceiling.
+        """
+        pairs = [(name, self.config.resolve_model_id(name)) for name in self.synthesizer_chain]
+        return [(name, model_id) for name, model_id in pairs if key_present(model_id)]
+
+    def plan_calls(
+        self,
+        mode: str,
+        prompt: str,
+        *,
+        rounds: int = 2,
+        proposer: str | None = None,
+        choices: list[str] | None = None,
+    ) -> CallPlan:
+        """Enumerate every provider call this mode could make, worst case (DSE-1514).
+
+        The counts are derived from :mod:`conclave.modes` and
+        :meth:`_apply_verdict`, not from a remembered formula. With ``N`` keyed
+        members, ``C`` keyed chain candidates, ``R`` debate rounds, and ``V`` = 1
+        when verdict extraction is on:
+
+        * ``raw`` -- ``N``: fan-out only.
+        * ``synthesize`` -- ``N + C + 2CV``: fan-out, the chain, then
+          extract+repair per candidate.
+        * ``vote`` -- ``N``: fan-out only; no adjudication.
+        * ``debate`` -- ``N*R + C``: every round at full membership (drop-out
+          only shrinks it), then the final consolidation chain.
+        * ``adversarial`` -- ``N + C``: ``k`` proposer attempts plus ``N - k``
+          critics is exactly ``N`` for every ``k``; then the judge chain.
+        * ``elite`` -- ``3N + C + 2CV``: three phases at full membership, then
+          synthesis and verdict extraction.
+
+        Convergence early-stop, member drop-out, and a proposer succeeding on the
+        first try all make a real run CHEAPER than its plan. A plan is never an
+        under-count, which is what makes it usable as a spend gate.
+
+        Args:
+            mode: One of ``raw``/``synthesize``/``vote``/``debate``/
+                ``adversarial``/``elite``.
+            prompt: The exact user prompt (bounded by its UTF-8 byte length).
+            rounds: Debate rounds; ignored for other modes.
+            proposer: Adversarial proposer. It does not change the COUNT (see
+                above) and is accepted only for signature parity with the modes.
+            choices: Vote choices, which enlarge the vote prompt template.
+
+        Returns:
+            The :class:`CallPlan`.
+
+        Raises:
+            ValueError: ``mode`` is not a known deliberation mode, or
+                ``max_output_tokens`` is not configured (an unbounded output
+                cannot be planned).
+        """
+        if mode not in _VALID_PLAN_MODES:
+            raise ValueError(f"unknown mode for call planning: {mode}")
+        cap = self.max_output_tokens
+        if cap is None:
+            raise ValueError(_NO_OUTPUT_CAP_MESSAGE)
+
+        members, _skipped = self._available_members()
+        chain = self._keyed_chain()
+        n_members = len(members)
+        prompt_bytes = len(prompt.encode("utf-8"))
+        calls: list[PlannedCall] = []
+
+        def member_calls(phase: str, *, template: str, upstream: int) -> None:
+            for name, model_id in members:
+                calls.append(
+                    PlannedCall(
+                        phase=phase,
+                        name=name,
+                        model_id=model_id,
+                        prompt_token_upper_bound=prompt_bytes,
+                        prompt_template_token_allowance=len(template.encode("utf-8")),
+                        provider_framing_token_allowance=64 + (16 * 2),
+                        upstream_output_call_count=upstream,
+                        max_output_tokens=cap,
+                    )
+                )
+
+        def chain_calls(phase: str, *, template: str, upstream: int, contract: bool) -> None:
+            for name, model_id in chain:
+                calls.append(
+                    PlannedCall(
+                        phase=phase,
+                        name=name,
+                        model_id=model_id,
+                        prompt_token_upper_bound=(
+                            prompt_bytes + (_VERDICT_CONTRACT_BYTES if contract else 0)
+                        ),
+                        prompt_template_token_allowance=len(template.encode("utf-8")),
+                        provider_framing_token_allowance=(64 + (16 * 3) + (256 if contract else 0)),
+                        upstream_output_call_count=upstream,
+                        max_output_tokens=cap,
+                    )
+                )
+
+        if mode in ("raw", "synthesize"):
+            member_calls("member", template="", upstream=0)
+        elif mode == "vote":
+            member_calls(
+                "member",
+                template=prompts.VOTE_SYSTEM + prompts.vote_user("", choices or []),
+                upstream=0,
+            )
+        elif mode == "debate":
+            member_calls("round-1", template="", upstream=0)
+            for round_no in range(2, max(1, rounds) + 1):
+                member_calls(
+                    f"round-{round_no}",
+                    template=(
+                        prompts.DEBATE_SYSTEM
+                        + prompts.debate_round_user("", round_no, max(1, rounds), "")
+                    ),
+                    upstream=n_members,
+                )
+        elif mode == "adversarial":
+            # k proposer attempts + (N - k) critics == N, for every k.
+            member_calls("proposal", template="", upstream=0)
+        elif mode == "elite":
+            member_calls("initial", template="", upstream=0)
+            member_calls(
+                "critique",
+                template=prompts.ELITE_CRITIC_SYSTEM + prompts.elite_critic_user("", []),
+                upstream=n_members,
+            )
+            member_calls("revision", template=prompts.ELITE_REVISION_SYSTEM, upstream=2 * n_members)
+
+        if mode == "debate":
+            chain_calls(
+                "debate_final",
+                template=(
+                    prompts.DEBATE_FINAL_SYSTEM + prompts.debate_final_user("", max(1, rounds), "")
+                ),
+                upstream=n_members,
+                contract=False,
+            )
+        elif mode == "adversarial":
+            chain_calls(
+                "judge",
+                template=prompts.JUDGE_SYSTEM + prompts.judge_user("", "", "", ""),
+                upstream=n_members,
+                contract=False,
+            )
+        elif mode in ("synthesize", "elite"):
+            chain_calls("synthesis", template=_SYNTH_SYSTEM, upstream=n_members, contract=False)
+            if self.extract_verdict_enabled:
+                chain_calls(
+                    "verdict_extraction",
+                    template=_VERDICT_TEMPLATE_PROBE,
+                    upstream=n_members,
+                    contract=True,
+                )
+                chain_calls(
+                    "verdict_repair",
+                    template=_VERDICT_TEMPLATE_PROBE,
+                    upstream=n_members + 1,
+                    contract=True,
+                )
+
+        return CallPlan(
+            mode=mode,
+            calls=tuple(calls),
+            member_count=n_members,
+            chain_count=len(chain),
+        )
 
     def _cache_key(
         self,
