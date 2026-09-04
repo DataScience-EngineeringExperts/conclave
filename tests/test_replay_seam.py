@@ -22,11 +22,17 @@ Test map (docstring on each test names which binding-rule item it proves):
 7. The strict backstop blocks a thread-hop call; ``strict=False`` does not; the
    refcount always returns to 0.
 8. ``unkeyed_error_message`` is byte-identical to what ``call_model`` surfaces.
+9. The strict refcount is thread-safe: many OS threads entering/exiting
+   ``replaying(strict=True)`` concurrently never lose an update (final value
+   settles at 0), and a barrier forces all threads to be inside the context
+   simultaneously so the observed peak is exactly the thread count (DSE-1517
+   Task 2b review fix).
 """
 
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 
@@ -340,3 +346,95 @@ async def test_unkeyed_error_message_matches_call_model_output(monkeypatch):
     assert not answer.ok
     assert "OPENAI_API_KEY" in answer.error  # existing test_providers.py assertion
     assert answer.error == unkeyed_error_message(adapter)
+
+
+# --------------------------------------------------------------------------- #
+# 9. Thread-safety of the strict refcount (DSE-1517 Task 2b review fix)
+# --------------------------------------------------------------------------- #
+
+
+def _trivial_replay_context() -> ReplayContext:
+    """A ``ReplayContext`` whose ``post_json`` override is never invoked.
+
+    Every test in this section only enters/exits ``replaying(strict=True)`` --
+    it never calls ``transport.post_json`` -- so the override just needs to
+    satisfy the dataclass's type; reaching it would itself be a test failure.
+    """
+
+    async def _unused(url, headers, json_body, timeout):
+        raise AssertionError("post_json override must not be called in this test")
+
+    return ReplayContext(post_json=_unused)
+
+
+def test_strict_refcount_survives_many_threads_hammering_it_concurrently():
+    """N threads each enter/exit ``replaying(strict=True)`` 200x concurrently.
+
+    A non-atomic ``+= 1`` / ``-= 1`` read-modify-write can lose updates under
+    concurrent mutation from multiple OS threads (the CPython bytecode for
+    ``global_var += 1`` is a separate LOAD_GLOBAL/BINARY_ADD/STORE_GLOBAL
+    sequence, so the GIL can switch threads mid-update). If the fix's lock is
+    missing or removed, this test is expected to fail *intermittently* --
+    the final value lands above 0 on some runs and not others, depending on
+    scheduler timing. The companion barrier test below is the deterministic
+    one.
+    """
+    ctx = _trivial_replay_context()
+    n_threads = 8
+    n_iterations = 200
+
+    def worker() -> None:
+        for _ in range(n_iterations):
+            with transport.replaying(ctx, strict=True):
+                pass
+
+    threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert transport._OFFLINE_STRICT == 0
+
+
+def test_strict_refcount_reads_exact_thread_count_at_peak_interleaving():
+    """A ``threading.Barrier`` forces deterministic peak interleaving.
+
+    All ``n_threads`` threads block on ``entered_barrier`` immediately after
+    incrementing (inside ``replaying(strict=True)``). ``entered_barrier``'s
+    ``action`` callback -- which the ``Barrier`` API guarantees runs on one of
+    the arriving threads *before any thread is released* -- records the
+    refcount while every thread is still blocked inside the context. That
+    recorded value MUST equal ``n_threads`` exactly; anything less is the
+    deterministic signature of a lost update from an unsynchronized
+    read-modify-write. Only the ``n_threads`` workers are parties to either
+    barrier (the main thread never calls ``.wait()``, which would deadlock an
+    8-party barrier by adding a 9th waiter). A second barrier holds every
+    thread inside the context until the peak is recorded, then releases them
+    all to exit together; the refcount must land back at exactly 0.
+    """
+    ctx = _trivial_replay_context()
+    n_threads = 8
+    observed_peak: list[int] = []
+
+    def record_peak_while_all_threads_are_still_blocked() -> None:
+        observed_peak.append(transport._OFFLINE_STRICT)
+
+    entered_barrier = threading.Barrier(
+        n_threads, action=record_peak_while_all_threads_are_still_blocked
+    )
+    release_barrier = threading.Barrier(n_threads)
+
+    def worker() -> None:
+        with transport.replaying(ctx, strict=True):
+            entered_barrier.wait()  # last arrival triggers the peak recording
+            release_barrier.wait()  # hold here so the peak stays observable
+
+    threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert observed_peak == [n_threads]
+    assert transport._OFFLINE_STRICT == 0

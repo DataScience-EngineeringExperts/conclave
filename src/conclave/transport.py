@@ -27,6 +27,7 @@ quietly turn into a live call.
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -227,7 +228,19 @@ _TRANSPORT: ContextVar[RecordingContext | ReplayContext | None] = ContextVar(
 # escapes normal asyncio task-context inheritance -- e.g. a
 # ``loop.run_in_executor`` hop onto a plain OS thread, which does not inherit
 # contextvars state -- still cannot reach the network during a strict replay.
+#
+# THREAD-SAFETY (DSE-1517 Task 2b review): two OS threads can each enter
+# ``replaying(strict=True)`` concurrently -- e.g. Task 6's ``replay_bundle``
+# embedded in a threaded host -- and ``+= 1`` / ``-= 1`` is not an atomic
+# read-modify-write, so unsynchronized concurrent mutation can lose an update
+# (leaving the counter stuck above 0, or dropping to 0 while a sibling replay
+# still believes it is strict). ``_OFFLINE_STRICT_LOCK`` below serializes both
+# mutation sites; every *read* of ``_OFFLINE_STRICT`` (in ``post_json`` and
+# ``stream_sse``) stays lock-free -- CPython integer reads are atomic, and a
+# stale read is harmless here since it can only ever be one increment/
+# decrement behind, never torn.
 _OFFLINE_STRICT = 0
+_OFFLINE_STRICT_LOCK = threading.Lock()
 
 
 def transport_context() -> RecordingContext | ReplayContext | None:
@@ -267,16 +280,25 @@ def replaying(context: ReplayContext, *, strict: bool = True) -> Iterator[None]:
             (``replay_bundle(..., strict=False)``) where other live traffic may
             legitimately share the process; using it is the caller's
             responsibility.
+
+    Strict replays may be entered from multiple OS threads concurrently (e.g.
+    ``replay_bundle`` embedded in a threaded host); both mutations of the
+    refcount are serialized under ``_OFFLINE_STRICT_LOCK`` (DSE-1517 Task 2b)
+    so concurrent entries/exits can never lose an update. The ``ContextVar``
+    itself remains per-context/per-task as always -- only the process-global
+    refcount needs the lock.
     """
     token = _TRANSPORT.set(context)
     global _OFFLINE_STRICT
     if strict:
-        _OFFLINE_STRICT += 1
+        with _OFFLINE_STRICT_LOCK:
+            _OFFLINE_STRICT += 1
     try:
         yield
     finally:
         if strict:
-            _OFFLINE_STRICT -= 1
+            with _OFFLINE_STRICT_LOCK:
+                _OFFLINE_STRICT -= 1
         _TRANSPORT.reset(token)
 
 
