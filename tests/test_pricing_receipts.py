@@ -316,20 +316,24 @@ async def test_a_zero_usage_success_is_unpriced_not_free(monkeypatch, keys):
     assert "unpriced_receipts_present" in manifest.pricing_warnings
 
 
-async def test_a_failed_call_with_no_usage_is_unpriced_even_when_capped_this_round(
+async def test_a_failed_call_with_no_usage_is_priced_as_a_reservation_when_capped(
     monkeypatch, keys
 ):
-    """DSE-1514 Round 3 review, interim: a cap does not resurrect flat-constant reservation.
+    """DSE-1514 Round 4: the phase-aware reservation basis, end to end.
 
     Round 3 removed the flat-allowance reservation branch entirely (QA C1):
     it silently mis-priced synthesis/judge/verdict calls, which embed
-    upstream output, by 3-9x. So even with a real ``max_output_tokens`` cap
-    threaded through the constructor (this commit), a usage-less receipt
-    stays unpriced -- exactly like the uncapped case above -- until Round 4's
-    phase-aware reservation basis lands (see the test with "when_capped" in
-    its name for that end state).
+    upstream output, by 3-9x, while never distinguishing a bare member call
+    from one embedding N upstream answers. Round 4 re-adds reservation
+    pricing for a usage-less receipt, now derived from the SAME plan-table
+    row :meth:`Council.plan_calls` would build for this receipt's phase (see
+    ``Council._reservation_row_for_phase``) -- never a flat constant. Proves
+    the two pricing paths (reported-usage and phase-aware reservation)
+    coexist cleanly in one manifest: an all-or-nothing ceiling sums BOTH
+    kinds of priced receipt, not just one.
     """
     import conclave.council as council_mod
+    from conclave.council import Council
     from conclave.models import ModelAnswer, TokenUsage
 
     _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3", "gemini/gemini-2.5-pro"))
@@ -360,12 +364,15 @@ async def test_a_failed_call_with_no_usage_is_unpriced_even_when_capped_this_rou
     succeeded = receipts_by_model["xai/grok-4.3"]
 
     assert failed.usage is None
-    assert failed.cost_basis is None
-    assert failed.cost_ceiling_usd is None
+    assert failed.phase is None  # an untagged raw-mode member call -> the "member" row
+    assert failed.cost_basis == "reservation"
+    assert failed.cost_ceiling_usd is not None
     assert succeeded.cost_basis == "reported_usage"
 
-    # A capped, usage-less receipt is unpriced this round, so the run-level
-    # ceiling stays None even though the OTHER receipt priced cleanly.
-    assert manifest.unpriced_receipts == 1
-    assert manifest.cost_ceiling_usd is None
-    assert "unpriced_receipts_present" in manifest.pricing_warnings
+    # All-or-nothing, but every receipt IS priced (one by usage, one by a
+    # phase-aware reservation), so the run-level ceiling is a real sum, not None.
+    assert manifest.unpriced_models == []
+    assert manifest.unpriced_receipts == 0
+    assert manifest.cost_ceiling_usd == sum(
+        (receipt.cost_ceiling_usd for receipt in manifest.receipts), Decimal("0")
+    )

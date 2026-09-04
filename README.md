@@ -545,7 +545,7 @@ A council run has always reported *tokens*. It now also reports *dollars* — as
 * An **estimate** is a guess. A wrong number inside an audit receipt is worse than
   no number, which is why `estimated_cost` is `None` and always will be.
 * A **ceiling** is a falsifiable claim: *"this run cost no more than $0.0412,
-  priced against snapshot `sha256:...` dated 2026-09-03."* You can check it
+  priced against snapshot `sha256:...` dated 2026-09-04."* You can check it
   against your invoice.
 
 ```bash
@@ -562,16 +562,25 @@ ceiling possible at all. Both caps must be finite positive numbers: `--max-spend
 rejects every spelling of `NaN`/`Infinity` and PEP-515 underscore literals
 (`0_5` reads as `5`, not `0.5`) with exit code `2` before ever constructing a
 `Decimal`, and `--max-output-tokens` requires a value of at least `1`. The
-three refusal messages, verbatim:
+four refusal messages, verbatim (every one maps to exit code `4`):
 
 | Condition | Message |
 |---|---|
 | `--max-spend-usd` with no output cap | `cannot bound spend: no output cap (set --max-output-tokens or config max_output_tokens)` |
+| No price snapshot could be loaded at all | `cannot bound spend: price snapshot unavailable` |
 | A planned call's model has no snapshot entry | `cannot bound spend: no priced rate for <model_id> in snapshot <digest> (<date>)` |
 | The priced plan exceeds the cap | `refusing to run: reserved <X> USD for <N> calls exceeds the cap of <Y> USD` |
 
-It never falls back to a similar model's rate to dodge the second message —
-inventing a number to get past the gate would defeat the gate.
+It never falls back to a similar model's rate to dodge either unboundable
+message — inventing a number to get past the gate would defeat the gate.
+
+**Where the gate lives.** The spend cap is enforced at exactly one chokepoint —
+`ask`/`ask_stream` and the mode wrappers (`debate`, `adversarial`, `vote`,
+`elite`, their `_sync` variants, and the CLI) — so a caller reaching directly
+into a lower-level primitive (`Council.fan_out`, `Council.synthesize_blocks`,
+`Council.adjudicate`, `verdict_synthesis.extract_verdict`, or a `conclave.modes`
+`run_*` function called without going through the matching `Council` method)
+makes real provider calls without the cap ever being consulted.
 
 **All-or-nothing.** The prices are a hand-verified, dated file (`src/conclave/data/prices-*.json`),
 not a live feed. A model whose published price could not be verified is simply

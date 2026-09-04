@@ -81,6 +81,7 @@ from .models import (
     TokenUsage,
 )
 from .pricing import (
+    PriceRates,
     PriceSnapshot,
     SpendCapExceeded,
     SpendUnboundable,
@@ -376,6 +377,49 @@ class _PhaseSpec:
     message_count: int = 2
     contract: bool = False
 
+    def to_planned_call(
+        self,
+        *,
+        name: str,
+        model_id: str,
+        prompt_token_upper_bound: int,
+        max_output_tokens: int,
+    ) -> PlannedCall:
+        """Expand this row into one :class:`PlannedCall` for ``(name, model_id)`` (DSE-1514).
+
+        The template-bytes/framing-bytes arithmetic (a structured-output
+        contract's schema bytes live INSIDE ``template`` already; ``contract``
+        only adds the flat provider-side framing allowance for the schema
+        registration itself, never a second copy of the schema) is written
+        here exactly once and shared by two callers: :meth:`Council.plan_calls`
+        (expanding every target in ``self.targets``, BEFORE any call is made)
+        and :meth:`Council._price_manifest`'s phase-aware reservation (Round 4,
+        QA C1 -- pricing ONE already-made, usage-less receipt from the row
+        matching its phase).
+
+        Args:
+            name: Friendly member / candidate name for this specific call.
+            model_id: Resolved provider-prefixed model id for this call.
+            prompt_token_upper_bound: UTF-8 bytes of the exact known prompt
+                content this call sends.
+            max_output_tokens: The hard output cap this call would carry.
+
+        Returns:
+            The expanded :class:`PlannedCall`.
+        """
+        return PlannedCall(
+            phase=self.phase,
+            name=name,
+            model_id=model_id,
+            prompt_token_upper_bound=prompt_token_upper_bound,
+            prompt_template_token_allowance=len(self.template.encode("utf-8")),
+            provider_framing_token_allowance=(
+                64 + (16 * self.message_count) + (256 if self.contract else 0)
+            ),
+            upstream_output_call_count=self.upstream,
+            max_output_tokens=max_output_tokens,
+        )
+
 
 class Council:
     """A council of foundation models with an optional synthesizer.
@@ -440,15 +484,30 @@ class Council:
             ``--max-spend-usd``: see :meth:`plan_calls`.
         max_spend_usd: Opt-in pre-flight spend cap in USD (DSE-1514). When set,
             every deliberation call (:meth:`ask`/:meth:`ask_stream` and their
-            mode wrappers) first enumerates :meth:`plan_calls`, prices it via
-            :meth:`_reserve_plan`, and raises :class:`conclave.pricing.
-            SpendCapExceeded` -- BEFORE any provider call -- when the reserved
-            total exceeds this cap. Requires ``max_output_tokens`` (explicit or
-            via config): an unbounded output cannot be bounded in dollars, so
-            setting this without a cap raises :class:`conclave.pricing.
-            SpendUnboundable` at construction time rather than at the first
-            call. ``None`` (the default) installs no gate at all -- byte-
-            identical to today.
+            mode wrappers -- :meth:`debate`, :meth:`adversarial`, :meth:`vote`,
+            :meth:`elite`, and their ``_sync`` variants) first enumerates
+            :meth:`plan_calls`, prices it via :meth:`_reserve_plan`, and raises
+            :class:`conclave.pricing.SpendCapExceeded` -- BEFORE any provider
+            call -- when the reserved total exceeds this cap. Requires
+            ``max_output_tokens`` (explicit or via config): an unbounded output
+            cannot be bounded in dollars, so setting this without a cap raises
+            :class:`conclave.pricing.SpendUnboundable` at construction time
+            rather than at the first call. ``None`` (the default) installs no
+            gate at all -- byte-identical to today.
+
+            **The gate has exactly one chokepoint, :meth:`_cached_run` (plus
+            :meth:`ask_stream`'s own call to the same :meth:`_gate_live_run`),
+            and nothing routes around it implicitly.** A caller that reaches
+            into a lower-level primitive DIRECTLY -- :meth:`fan_out`,
+            :meth:`synthesize_blocks`, :meth:`adjudicate`,
+            :func:`conclave.verdict_synthesis.extract_verdict`, or any
+            :mod:`conclave.modes` ``run_*`` function called without going
+            through the matching :class:`Council` method -- makes real
+            provider calls WITHOUT ever consulting ``max_spend_usd``, however
+            large. This is a deliberate seam (those primitives are also used
+            to build the gate's own byte-accounting), not an oversight; a
+            caller composing a custom flow from them is responsible for its
+            own spend discipline.
 
     Example:
         >>> council = Council(models=["grok", "perplexity"], synthesizer="claude")
@@ -887,29 +946,16 @@ class Council:
         table = self._plan_table(
             mode, members=members, chain=chain, rounds=max(1, rounds), choices=choices
         )
-        calls: list[PlannedCall] = []
-        for spec in table:
-            # Fix A note: a structured-output contract's schema bytes are
-            # already INSIDE spec.template (the verdict probes are measured
-            # from the real message builders, schema included -- see
-            # conclave.verdict_synthesis). ``contract`` therefore only adds the
-            # flat provider-side framing allowance here, never a second copy
-            # of the schema on top of the prompt bound.
-            template_bytes = len(spec.template.encode("utf-8"))
-            framing = 64 + (16 * spec.message_count) + (256 if spec.contract else 0)
-            for name, model_id in spec.targets:
-                calls.append(
-                    PlannedCall(
-                        phase=spec.phase,
-                        name=name,
-                        model_id=model_id,
-                        prompt_token_upper_bound=prompt_bytes,
-                        prompt_template_token_allowance=template_bytes,
-                        provider_framing_token_allowance=framing,
-                        upstream_output_call_count=spec.upstream,
-                        max_output_tokens=cap,
-                    )
-                )
+        calls: list[PlannedCall] = [
+            spec.to_planned_call(
+                name=name,
+                model_id=model_id,
+                prompt_token_upper_bound=prompt_bytes,
+                max_output_tokens=cap,
+            )
+            for spec in table
+            for name, model_id in spec.targets
+        ]
 
         return CallPlan(
             mode=mode,
@@ -942,18 +988,39 @@ class Council:
                     f"cannot bound spend: no priced rate for {call.model_id} "
                     f"in snapshot {snapshot.digest()} ({snapshot.captured_at.isoformat()})"
                 )
-            total += reserve_cost(
-                rates,
-                prompt_token_upper_bound=call.prompt_token_upper_bound,
-                prompt_template_token_allowance=call.prompt_template_token_allowance,
-                provider_framing_token_allowance=call.provider_framing_token_allowance,
-                upstream_output_token_ceilings=(
-                    (call.max_output_tokens,) * call.upstream_output_call_count
-                ),
-                upstream_output_bytes_per_token=rates.max_output_bytes_per_token,
-                max_output_tokens=call.max_output_tokens,
-            ).reserved_cost_usd
+            total += self._reserve_call(rates, call)
         return total
+
+    @staticmethod
+    def _reserve_call(rates: PriceRates, call: PlannedCall) -> Decimal:
+        """Price one :class:`PlannedCall` against ``rates`` (DSE-1514).
+
+        The one place the reservation formula (input bound = prompt +
+        template + framing + upstream-output-as-bytes; output bound = the
+        call's own cap) is written, shared by :meth:`_reserve_plan` (pricing
+        an entire pre-flight :class:`CallPlan`, before any call is made) and
+        :meth:`_price_manifest` (Round 4, QA C1 -- pricing a single
+        already-made call's reservation when it reported no usable usage,
+        from the plan row matching its phase).
+
+        Args:
+            rates: The model's exact ceiling rates.
+            call: The planned (or reconstructed) call to price.
+
+        Returns:
+            The reserved cost in USD, quantized up.
+        """
+        return reserve_cost(
+            rates,
+            prompt_token_upper_bound=call.prompt_token_upper_bound,
+            prompt_template_token_allowance=call.prompt_template_token_allowance,
+            provider_framing_token_allowance=call.provider_framing_token_allowance,
+            upstream_output_token_ceilings=(
+                (call.max_output_tokens,) * call.upstream_output_call_count
+            ),
+            upstream_output_bytes_per_token=rates.max_output_bytes_per_token,
+            max_output_tokens=call.max_output_tokens,
+        ).reserved_cost_usd
 
     def _enforce_spend_cap(
         self,
@@ -1526,25 +1593,24 @@ class Council:
         * the provider reported a trustworthy, non-zero usage figure
           (:func:`_usage_is_reported`) -> ``reported_usage_cost`` at ceiling
           rates, basis ``"reported_usage"``;
-        * usage is not reported -> unpriced (``None``/``None``), counted in
-          ``unpriced_receipts``. This covers three shapes deliberately treated
-          alike: the call FAILED (no usage was ever produced); the call
-          SUCCEEDED but the provider omitted the usage field
-          (:mod:`conclave.adapters.openai_compat` returns ``usage=None`` in
-          that case, including for some streamed responses -- this is a normal
-          outcome on a clean call, not a failure signal); or the provider
-          reported an all-zero ``TokenUsage`` (QA I1 -- a technically-present
-          but empty usage is the same "nothing to price" shape as ``None``,
-          and pricing it at ``$0.000000`` would assert a false floor rather
-          than an honest bound). A receipt without reported usage is NEVER
-          estimated from a flat reservation in this round: the input a
-          synthesis/judge/verdict call embeds is bounded by which PHASE it
-          belongs to (member calls carry only the prompt; synthesis/judge/
-          verdict calls additionally embed one or more upstream answers), and
-          this round has no phase-aware call plan to reserve from -- pricing a
-          synthesis receipt from a flat member-sized allowance silently
-          under-counts it. See DSE-1514 Round 4 for the phase-aware
-          reservation that replaces this blanket "unpriced" rule.
+        * usage is not reported (the call FAILED; the call SUCCEEDED but the
+          provider omitted the usage field -- :mod:`conclave.adapters.
+          openai_compat` returns ``usage=None`` in that case, including for
+          some streamed responses, a normal outcome on a clean call, not a
+          failure signal; or the provider reported an all-zero ``TokenUsage``,
+          QA I1 -- a technically-present but empty usage is the same "nothing
+          to price" shape as ``None``, and pricing it at ``$0.000000`` would
+          assert a false floor rather than an honest bound) AND an output cap
+          is configured AND the receipt's ``phase`` maps onto a row of
+          :meth:`_plan_table` for this run's mode (:meth:`_reservation_row_for_phase`,
+          DSE-1514 Round 4, QA C1) -> that row's own pessimistic reservation --
+          its REAL template bytes and upstream-embedding count, never a flat
+          constant that cannot tell a bare member call from a synthesis call
+          embedding N upstream answers -- basis ``"reservation"``;
+        * no usage, no cap, or the phase has no plan row (currently: an
+          adversarial proposal/critique receipt, whose ``phase`` is ``None``
+          on both shapes and so cannot be told apart post hoc) -> unpriced.
+          Nothing is ever estimated from a guess.
 
         And at run level, ALL-OR-NOTHING: ``cost_ceiling_usd`` is the sum of
         every receipt ceiling only when ``unpriced_models`` is empty AND
@@ -1611,10 +1677,23 @@ class Council:
                 receipt.cost_basis = "reported_usage"
                 continue
             # No trustworthy usage: failed, successful-but-unreported, or
-            # all-zero. Unpriced -- see the docstring; never estimated.
-            receipt.cost_ceiling_usd = None
-            receipt.cost_basis = None
-            unpriced_receipts += 1
+            # all-zero. Reserve from the plan row matching this receipt's
+            # phase when a cap exists and one matches (DSE-1514 Round 4, QA
+            # C1); otherwise unpriced -- see the docstring, never estimated.
+            row = None if cap is None else self._reservation_row_for_phase(receipt.phase, result)
+            if row is None:
+                receipt.cost_ceiling_usd = None
+                receipt.cost_basis = None
+                unpriced_receipts += 1
+                continue
+            planned = row.to_planned_call(
+                name=receipt.name,
+                model_id=receipt.model_id,
+                prompt_token_upper_bound=len(result.prompt.encode("utf-8")),
+                max_output_tokens=cap,
+            )
+            receipt.cost_ceiling_usd = self._reserve_call(rates, planned)
+            receipt.cost_basis = "reservation"
 
         warnings: list[str] = []
         if unpriced_models:
@@ -1638,6 +1717,72 @@ class Council:
         )
         # Re-stamp: the ceiling fields were written after _build_manifest's scan.
         manifest.secret_safety = verified_secret_safety(manifest)
+
+    def _reservation_row_for_phase(
+        self, phase: str | None, result: CouncilResult
+    ) -> _PhaseSpec | None:
+        """Map a usage-less receipt's ``phase`` onto its :meth:`_plan_table` row (DSE-1514 Round 4, QA C1).
+
+        Rebuilds the SAME declarative phase table :meth:`plan_calls` would
+        enumerate for ``result.mode`` (down to the real vote choices and the
+        real round count, so the reconstructed row's template bytes match the
+        real call as closely as a post-hoc reconstruction can) and returns
+        the one row whose ``phase`` matches. The mapping is exact-string
+        equality, never a guess:
+
+        * ``None`` (an untagged member-shaped call -- raw/synthesize/vote
+          members, or an adversarial proposal/critique, which are NOT
+          distinguishable post hoc since both share ``phase=None``) is
+          looked up as ``"member"``: matches raw/synthesize/vote's single
+          member row; adversarial has no row named ``"member"`` (its
+          member-shaped calls split into ``"proposal"``/``"critique"`` rows a
+          receipt's phase cannot currently pick between), so an adversarial
+          proposal/critique receipt deliberately finds no row here and stays
+          unpriced -- never silently priced as the wrong shape;
+        * ``"initial"``/``"critique"``/``"revision"`` (elite) match the
+          identically named elite row;
+        * ``"synthesis"``/``"judge"``/``"debate_final"`` match the
+          identically named adjudication row;
+        * ``"verdict_extraction"``/``"verdict_repair"`` match the identically
+          named verdict row;
+        * ``"round-{n}"`` (debate) rebuilds the table with ``rounds=n`` (or
+          the number of rounds actually run, whichever is larger) so the
+          row for round ``n`` specifically exists, with its real ``upstream``
+          count (0 for round 1, every member for round 2+).
+
+        Args:
+            phase: The receipt's ``phase`` (``None`` for an untagged call).
+            result: The in-flight result -- read for ``mode`` (which table to
+                build), ``rounds`` (debate's real round count), and
+                ``vote.choices`` (the real vote template).
+
+        Returns:
+            The matching :class:`_PhaseSpec`, or ``None`` when this mode has
+            no row for ``phase`` -- the caller leaves the receipt unpriced.
+        """
+        key = phase or "member"
+        members, _skipped = self._available_members()
+        chain = self._keyed_chain()
+
+        if key.startswith("round-"):
+            try:
+                round_no = int(key.removeprefix("round-"))
+            except ValueError:
+                return None
+            rounds = max(round_no, len(result.rounds))
+            table = self._plan_table(
+                "debate", members=members, chain=chain, rounds=rounds, choices=None
+            )
+        elif result.mode not in _VALID_PLAN_MODES:
+            return None
+        else:
+            choices = result.vote.choices if result.vote is not None else None
+            rounds = max(1, len(result.rounds))
+            table = self._plan_table(
+                result.mode, members=members, chain=chain, rounds=rounds, choices=choices
+            )
+
+        return next((spec for spec in table if spec.phase == key), None)
 
     def _append_manifest_receipts(
         self,

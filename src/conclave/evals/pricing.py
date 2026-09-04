@@ -212,13 +212,25 @@ def reserve_call_cost(
     the product run path, while the eval-only ``CallReservation`` contract --
     including ``model_revision`` and the frozen eval ``schema_version`` that
     :func:`hash_price_entries` depends on -- is assembled here unchanged.
+
+    ``upstream_output_token_ceilings`` is materialized into a tuple ONCE,
+    before either use below (QA M3): a one-shot iterable (e.g. a generator
+    expression) passed by a caller would otherwise be fully consumed by
+    :func:`conclave.pricing.reserve_cost`'s own internal ``tuple(...)`` call,
+    leaving nothing for the second ``tuple(...)`` that used to build
+    ``CallReservation.upstream_output_token_ceilings`` here -- silently
+    recording an empty tuple on the reservation even though the real values
+    were correctly priced. Passing the SAME materialized tuple to both keeps
+    the recorded reservation and the priced amounts provably consistent
+    regardless of what kind of iterable the caller passed in.
     """
+    upstream_ceilings = tuple(upstream_output_token_ceilings)
     amounts = reserve_cost(
         price.as_rates(),
         prompt_token_upper_bound=prompt_token_upper_bound,
         prompt_template_token_allowance=prompt_template_token_allowance,
         provider_framing_token_allowance=provider_framing_token_allowance,
-        upstream_output_token_ceilings=upstream_output_token_ceilings,
+        upstream_output_token_ceilings=upstream_ceilings,
         upstream_output_bytes_per_token=upstream_output_bytes_per_token,
         max_output_tokens=max_output_tokens,
     )
@@ -229,7 +241,7 @@ def reserve_call_cost(
         prompt_token_upper_bound=prompt_token_upper_bound,
         prompt_template_token_allowance=prompt_template_token_allowance,
         provider_framing_token_allowance=provider_framing_token_allowance,
-        upstream_output_token_ceilings=tuple(upstream_output_token_ceilings),
+        upstream_output_token_ceilings=upstream_ceilings,
         upstream_output_bytes_per_token=upstream_output_bytes_per_token,
         input_token_upper_bound=amounts.input_token_upper_bound,
         output_token_upper_bound=amounts.output_token_upper_bound,

@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from conclave.council import Council
+from conclave.manifest import ModelHarnessManifest, ProviderExecutionReceipt
+from conclave.models import CouncilResult, DebateRound
+from conclave.pricing import reserve_cost
+from tests.test_pricing_receipts import _install_snapshot, _snapshot
 
 MEMBERS = ["grok", "gemini", "openai"]  # N = 3
 
@@ -317,3 +323,144 @@ def test_the_planned_byte_bound_never_falls_below_the_real_worst_case_message(ke
     assert real_bytes <= call.input_bytes_bound(
         upstream_output_bytes_per_token=MAX_OUTPUT_BYTES_PER_TOKEN
     )
+
+
+# --------------------------------------------------------------------------- #
+# DSE-1514 Round 4, QA C1: a usage-less RECEIPT's phase-aware reservation
+# (Council._price_manifest, via Council._reservation_row_for_phase) must never
+# price below the real worst-case message for its phase -- the regression that
+# makes the flat-constant bug (a synthesis/judge/verdict/revision receipt,
+# which embeds upstream output, priced 3-9x low) impossible to re-introduce.
+# --------------------------------------------------------------------------- #
+
+
+def _floor_reservation_usd(rates, real_bytes: int, cap: int) -> Decimal:
+    """The cheapest a phase's real worst-case message could possibly cost.
+
+    Treats ``real_bytes`` as pure prompt content with ZERO extra template/
+    framing allowance, so this is a floor: the real reservation
+    ``Council._price_manifest`` prices from a matched plan row can only be >=
+    this (its own template/framing/upstream terms are non-negative additions
+    on top of at least as many bytes), never below it.
+    """
+    return reserve_cost(
+        rates,
+        prompt_token_upper_bound=real_bytes,
+        prompt_template_token_allowance=0,
+        provider_framing_token_allowance=0,
+        upstream_output_token_ceilings=(),
+        upstream_output_bytes_per_token=MAX_OUTPUT_BYTES_PER_TOKEN,
+        max_output_tokens=cap,
+    ).reserved_cost_usd
+
+
+def _priced_receipt(council, *, mode: str, phase: str | None, model_id: str, rounds_count: int):
+    """Price ONE hand-built, usage-less receipt through the real pricing path.
+
+    Bypasses a full simulated council run (which would need a distinct
+    provider-mocking scenario per phase) by constructing the minimal
+    :class:`CouncilResult` + manifest ``_price_manifest`` actually reads:
+    ``mode`` (which plan table to rebuild), ``rounds`` (debate's real round
+    count), and one receipt of the phase under test carrying no usage.
+    """
+    receipt = ProviderExecutionReceipt(
+        name="target", provider=model_id.split("/", 1)[0], model_id=model_id, phase=phase
+    )
+    result = CouncilResult(
+        prompt=PROMPT,
+        mode=mode,
+        rounds=[DebateRound(round_number=n, answers=[]) for n in range(1, rounds_count + 1)],
+    )
+    result.manifest = ModelHarnessManifest(
+        request_id="r", conclave_version="0", mode=mode, model_ids=[model_id], receipts=[receipt]
+    )
+    council._price_manifest(result)
+    return result.manifest.receipts[0]
+
+
+# (label, receipt phase, mode, debate rounds run, model id, real-message builder)
+_PHASE_RESERVATION_CASES = [
+    ("member", None, "raw", 0, "xai/grok-4.3", lambda: [{"role": "user", "content": PROMPT}]),
+    ("round-2", "round-2", "debate", 2, "xai/grok-4.3", lambda: _debate_round2_case()[1]),
+    (
+        "synthesis",
+        "synthesis",
+        "synthesize",
+        0,
+        "anthropic/claude-sonnet-4-6",
+        lambda: _synthesis_case()[1],
+    ),
+    ("judge", "judge", "adversarial", 0, "anthropic/claude-sonnet-4-6", lambda: _judge_case()[1]),
+    (
+        "verdict_extraction",
+        "verdict_extraction",
+        "synthesize",
+        0,
+        "anthropic/claude-sonnet-4-6",
+        lambda: _verdict_extraction_case()[1],
+    ),
+    (
+        "verdict_repair",
+        "verdict_repair",
+        "synthesize",
+        0,
+        "anthropic/claude-sonnet-4-6",
+        lambda: _verdict_repair_case()[1],
+    ),
+    ("critique", "critique", "elite", 0, "xai/grok-4.3", lambda: _elite_critique_case()[1]),
+    ("revision", "revision", "elite", 0, "xai/grok-4.3", lambda: _elite_revision_case()[1]),
+]
+
+
+@pytest.mark.parametrize(
+    ("phase", "receipt_phase", "mode", "rounds_count", "model_id", "messages_builder"),
+    _PHASE_RESERVATION_CASES,
+    ids=[case[0] for case in _PHASE_RESERVATION_CASES],
+)
+def test_phase_aware_reservation_never_prices_below_the_real_worst_case_message(
+    monkeypatch, keys, phase, receipt_phase, mode, rounds_count, model_id, messages_builder
+):
+    """DSE-1514 Round 4, QA C1: the assertion that makes the regression impossible.
+
+    For every phase whose receipt can be usage-less and reservation-priced,
+    prices a manifest holding exactly one such receipt (``usage=None``,
+    ``phase=receipt_phase`` -- ``None`` for an untagged raw-mode member call)
+    and proves the reservation is >= the cost of the REAL worst-case message
+    for that phase (built via the actual mode/prompt builders in
+    ``tests.test_spend_plan``'s existing case functions, never a hand
+    re-derivation), priced at the input rate alone with zero extra allowance
+    -- a floor the real reservation's own non-negative template/framing/
+    upstream terms can only sit at or above. A flat, phase-blind constant
+    (the QA C1 bug) would fail this for every upstream-embedding phase
+    (synthesis, judge, verdict_extraction, verdict_repair, revision).
+    """
+    _install_snapshot(
+        monkeypatch,
+        _snapshot(
+            "xai/grok-4.3",
+            "gemini/gemini-2.5-pro",
+            "openai/gpt-4.1",
+            "anthropic/claude-sonnet-4-6",
+        ),
+    )
+    council = _council()
+    messages = messages_builder()
+    real_bytes = sum(len(m["content"].encode("utf-8")) for m in messages)
+
+    priced = _priced_receipt(
+        council,
+        mode=mode,
+        phase=receipt_phase,
+        model_id=model_id,
+        rounds_count=rounds_count,
+    )
+
+    assert priced.cost_basis == "reservation"
+    assert priced.cost_ceiling_usd is not None
+
+    import conclave.council as council_mod
+
+    snapshot = council_mod.load_default_price_snapshot()
+    rates = snapshot.rates_for(model_id)
+    floor = _floor_reservation_usd(rates, real_bytes, MAX_OUTPUT_TOKENS)
+    assert priced.cost_ceiling_usd >= floor

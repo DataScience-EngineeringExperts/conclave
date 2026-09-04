@@ -513,7 +513,19 @@ def test_pricing_fields_never_un_verify_the_stamp():
 
 
 def test_pricing_warnings_are_a_closed_vocabulary_in_the_code():
-    """No pricing warning may be built by interpolation."""
+    """No pricing warning may be built by interpolation.
+
+    Scans BOTH shapes ``Council._price_manifest`` uses to populate
+    ``pricing_warnings`` (DSE-1514 QA M5): the normal path's sequence of
+    ``warnings.append(...)`` calls, AND the missing-snapshot path's single
+    list-literal assignment (``manifest.pricing_warnings = [...]``) -- the
+    module's own top-of-file comment on :data:`conclave.council.
+    PRICING_WARNING_VOCABULARY` has claimed both are covered since the
+    vocabulary was introduced; this test previously only scanned the first.
+    The list-literal pattern requires a ``[`` immediately after ``=``, so it
+    does not match ``manifest.pricing_warnings = warnings`` (assigning the
+    already-scanned variable back onto the manifest) -- only a literal.
+    """
     import re
     from pathlib import Path
 
@@ -526,6 +538,15 @@ def test_pricing_warnings_are_a_closed_vocabulary_in_the_code():
         assert expression.startswith('"') and expression.endswith('"'), (
             f"pricing warning must be a literal, got {expression}"
         )
+
+    list_literals = re.findall(r"pricing_warnings\s*=\s*(\[[^\]]*\])", source)
+    assert list_literals, "the pricing_warnings list-literal assignment moved; update this guard"
+    for literal in list_literals:
+        elements = [item.strip() for item in literal.strip("[]").split(",") if item.strip()]
+        for element in elements:
+            assert element.startswith('"') and element.endswith('"'), (
+                f"pricing warning must be a literal, got {element}"
+            )
 
 
 async def test_a_fully_populated_priced_manifest_still_stamps_verified(

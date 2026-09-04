@@ -353,11 +353,12 @@ only unbounded term in a call's cost, so an uncapped run cannot be bounded in do
 `3N + C + 2CV`, with `C` the number of **keyed** synthesizer-chain candidates and the
 verdict's repair retry always counted — bounds each call's input by UTF-8 bytes (plus
 the sum of upstream output caps times `max_output_bytes_per_token` for calls that embed
-a prior model's output), and refuses before the first call with one of three exact
+a prior model's output), and refuses before the first call with one of four exact
 messages: `cannot bound spend: no output cap (set --max-output-tokens or config
-max_output_tokens)`; `cannot bound spend: no priced rate for <model_id> in snapshot
+max_output_tokens)`; `cannot bound spend: price snapshot unavailable` (no snapshot could
+be loaded at all); `cannot bound spend: no priced rate for <model_id> in snapshot
 <digest> (<date>)`; or `refusing to run: reserved <X> USD for <N> calls exceeds the cap
-of <Y> USD`. All three exit CLI code `4`. Refusing is the designed outcome for an
+of <Y> USD`. All four exit CLI code `4`. Refusing is the designed outcome for an
 unbounded plan: inventing a number to get past the gate would defeat the gate.
 
 **Adversarial's byte-worst-case shape (DSE-1514 review, Fix A):** `run_adversarial`
