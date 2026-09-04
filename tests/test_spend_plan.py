@@ -221,6 +221,39 @@ def _elite_revision_case():
     return call, messages
 
 
+def _judge_case():
+    """The adversarial judge: proposal + N-1 critiques, all at max length.
+
+    DSE-1514 review, re-review important: the original byte-lower-bound suite
+    omitted this phase (real 24,602 B vs planned 24,640 B -- 38 bytes of
+    margin, unverified). The default proposer is the first requested member
+    (``modes.run_adversarial``'s ``council.requested_models[0]``), so the
+    remaining N-1 members are the critics whose real names/model ids appear
+    inside the judge's ``critique_blocks``, exactly as ``_adversarial_judge``
+    builds it.
+    """
+    from conclave import prompts
+
+    plan = _council().plan_calls("adversarial", PROMPT)
+    call = _phase_call(plan, "judge")
+    members = _plan_members()
+    proposer_name = members[0][0]
+    answers = _max_len_answers()
+    proposal_text = answers[0].answer
+    critiques = answers[1:]
+    critique_blocks = "\n\n".join(
+        f"### Critique from {c.name} ({c.model_id})\n{c.answer}" for c in critiques
+    )
+    messages = [
+        {"role": "system", "content": prompts.JUDGE_SYSTEM},
+        {
+            "role": "user",
+            "content": prompts.judge_user(PROMPT, proposer_name, proposal_text, critique_blocks),
+        },
+    ]
+    return call, messages
+
+
 def _verdict_extraction_case():
     from conclave.verdict_synthesis import _build_messages
 
@@ -252,6 +285,7 @@ def _verdict_repair_case():
     "case_builder",
     [
         _critic_case,
+        _judge_case,
         _synthesis_case,
         _debate_round2_case,
         _elite_critique_case,
@@ -261,6 +295,7 @@ def _verdict_repair_case():
     ],
     ids=[
         "adversarial-critique",
+        "adversarial-judge",
         "synthesize-synthesis",
         "debate-round-2",
         "elite-critique",

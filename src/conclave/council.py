@@ -86,6 +86,7 @@ from .pricing import (
     SpendUnboundable,
     load_default_price_snapshot,
     reported_usage_cost,
+    reserve_cost,
 )
 from .prompts import ELITE_PROMPT_VERSION, SYNTHESIS_PROMPT_VERSION
 from .providers import call_model, receipt_from_answer
@@ -503,12 +504,33 @@ class Council:
         self.max_output_tokens = (
             self.config.max_output_tokens if max_output_tokens is None else max_output_tokens
         )
+        # A zero/negative cap is not a ceiling at all: it either bypasses the
+        # provider call entirely (max_tokens=0) or crashes downstream in
+        # pricing.py's token-bound arithmetic. Reject it here so every caller
+        # (library or CLI) gets the same clean failure at construction (DSE-1514
+        # review, F2). The CLI additionally enforces this with `min=1` on the
+        # typer option for a usage-error exit before Council is even reached.
+        if self.max_output_tokens is not None and self.max_output_tokens <= 0:
+            raise ValueError("max_output_tokens must be a positive integer")
         # A spend cap without an output cap is not enforceable: output is the
         # unbounded term. Refuse at construction rather than at the first call,
         # so a library caller cannot get halfway into a run before finding out.
         self.max_spend_usd = max_spend_usd
-        if max_spend_usd is not None and self.max_output_tokens is None:
-            raise SpendUnboundable(_NO_OUTPUT_CAP_MESSAGE)
+        if max_spend_usd is not None:
+            # Reject BEFORE any ordering comparison downstream (_reserve_plan's
+            # `reserved > self.max_spend_usd`): Decimal("NaN") raises
+            # InvalidOperation on any ordering comparison (an uncaught crash),
+            # and Decimal("Infinity") is finite-comparison-safe but silently
+            # disables the gate -- nothing can ever exceed it (DSE-1514 review,
+            # F1). `is_finite()` alone rejects both NaN and +/-Infinity without
+            # ever evaluating `<= 0` against a NaN, which would itself raise.
+            # This guards every library caller; the CLI applies its own
+            # stricter format check (rejecting non-finite spellings, signs, and
+            # underscore literals) before `Decimal(...)` is ever constructed.
+            if not max_spend_usd.is_finite() or max_spend_usd <= 0:
+                raise ValueError("max_spend_usd must be a finite positive Decimal")
+            if self.max_output_tokens is None:
+                raise SpendUnboundable(_NO_OUTPUT_CAP_MESSAGE)
 
     @staticmethod
     def _resolve_chain(spec: str | Sequence[str] | None, config: ConclaveConfig) -> list[str]:
@@ -1717,6 +1739,12 @@ class Council:
             hit = cache_mod.load(key)
             if hit is not None:
                 logger.info("cache hit for %s stream (%s)", mode, key[:12])
+                # Re-price on every hit, exactly like _cached_run (DSE-1514
+                # review, F3): the manifest was priced at STORE time, so a
+                # replay without this call would report a stale
+                # `priced_as_of` / `price_snapshot_stale` verdict rather than
+                # today's -- a wrong number in a receipt.
+                self._price_manifest(hit)
                 for event in self._replay_cached(hit):
                     yield event
                 return

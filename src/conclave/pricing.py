@@ -433,9 +433,22 @@ def load_default_price_snapshot() -> PriceSnapshot | None:
     try:
         with path.open(encoding="utf-8") as handle:
             payload = json.load(handle, parse_float=Decimal)
+        # A JSON payload that parses but is not an object (e.g. a bare `42` or a
+        # list) has no `.pop`, so it would otherwise crash the loader with an
+        # uncaught AttributeError -- violating the never-raises contract above
+        # (DSE-1514 review, F4). Non-finite/absurd rates inside a well-formed
+        # object are already rejected by `PriceRates`' `Field(gt=0)` (a Decimal
+        # field's pydantic-core validator requires a finite number), which
+        # raises `ValidationError` -- already in this except tuple -- before
+        # `PriceSnapshot.digest`/`_canonical_decimal` (which assumes a finite
+        # value) is ever reached from this loader.
+        if not isinstance(payload, dict):
+            raise TypeError(
+                f"price snapshot payload must be a JSON object, got {type(payload).__name__}"
+            )
         payload.pop("_note", None)
         return PriceSnapshot.model_validate(payload)
-    except (OSError, json.JSONDecodeError, ValidationError, TypeError) as exc:
+    except (OSError, json.JSONDecodeError, ValidationError, TypeError, AttributeError) as exc:
         logger.warning("price snapshot %s is unusable: %s; pricing disabled", path.name, exc)
         return None
 

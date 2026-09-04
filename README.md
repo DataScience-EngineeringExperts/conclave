@@ -558,7 +558,11 @@ snapshot committed to this repo, and **refuses** — exit code `4`, nothing ran,
 nothing was spent — if the total exceeds your cap. `--max-output-tokens` (or
 config `max_output_tokens`) is a **prerequisite**, not an option: output is the
 only unbounded term in a call's cost, so a cap on it is what makes a dollar
-ceiling possible at all. The three refusal messages, verbatim:
+ceiling possible at all. Both caps must be finite positive numbers: `--max-spend-usd`
+rejects every spelling of `NaN`/`Infinity` and PEP-515 underscore literals
+(`0_5` reads as `5`, not `0.5`) with exit code `2` before ever constructing a
+`Decimal`, and `--max-output-tokens` requires a value of at least `1`. The
+three refusal messages, verbatim:
 
 | Condition | Message |
 |---|---|

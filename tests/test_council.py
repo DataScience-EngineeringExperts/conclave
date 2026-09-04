@@ -7,6 +7,7 @@ required. Provider env vars are set/cleared explicitly per test.
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 
 import pytest
 
@@ -356,6 +357,31 @@ def test_council_constructor_arg_beats_config_chain():
     cfg = ConclaveConfig(synthesizer_chain=["grok", "gemini"])
     c = Council(models=["claude"], synthesizer="claude", config=cfg)
     assert c.synthesizer_chain == ["claude"]
+
+
+# --------------------------------------------------------------------------- #
+# max_spend_usd / max_output_tokens constructor validation (DSE-1514 review,
+# F1/F2): a library caller that bypasses the CLI's own format check must get
+# the identical rejection at construction, never a crash or a silently
+# disabled gate deeper in the call.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad_cap", [Decimal("NaN"), Decimal("Infinity"), Decimal("0")])
+def test_a_non_finite_or_non_positive_spend_cap_is_a_value_error(bad_cap):
+    with pytest.raises(ValueError, match="max_spend_usd must be a finite positive Decimal"):
+        Council(
+            models=["grok"],
+            config=ConclaveConfig(),
+            max_output_tokens=1_000,
+            max_spend_usd=bad_cap,
+        )
+
+
+@pytest.mark.parametrize("bad_output_cap", [0, -1])
+def test_a_non_positive_output_cap_is_a_value_error(bad_output_cap):
+    with pytest.raises(ValueError, match="max_output_tokens must be a positive integer"):
+        Council(models=["grok"], config=ConclaveConfig(), max_output_tokens=bad_output_cap)
 
 
 # --------------------------------------------------------------------------- #

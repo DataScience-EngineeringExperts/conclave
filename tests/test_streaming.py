@@ -578,6 +578,51 @@ async def test_ask_stream_cache_hit_replays_one_shot(monkeypatch, tmp_path):
     assert len(member_deltas) == 2
 
 
+async def test_ask_stream_cache_hit_reprices_and_reports_current_staleness(monkeypatch, tmp_path):
+    """DSE-1514 review, F3: a replayed cache hit must be priced NOW, not at store time.
+
+    Without ``Council._price_manifest(hit)`` before ``_replay_cached(hit)``, a
+    replayed run reports the ``priced_as_of`` / ``price_snapshot_stale`` verdict
+    computed when the run was FIRST stored, not the current one -- a wrong
+    number in a receipt. Store a run against a fresh snapshot, then swap in a
+    stale one (mirroring the staleness clock advancing) before replaying the
+    identical prompt; the replayed ``done`` result must reflect the now-stale
+    snapshot, exactly like a live run would.
+    """
+    from datetime import date
+
+    import conclave.streaming as streaming_mod
+    from tests.test_pricing_receipts import _install_snapshot, _snapshot
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("XAI_API_KEY", "dummy-key")
+
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
+        yield "x"
+        yield ModelAnswer(name=name, model_id=model_id, answer="x")
+
+    monkeypatch.setattr(streaming_mod, "call_model_stream", fake_stream)
+
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3", captured_at=date.today()))
+    council = Council(models=["grok"], config=_config(), cache=True)
+    first = [e async for e in council.ask_stream("hi", synthesize=False)]
+    assert first[-1].result.cached is False
+    assert "price_snapshot_stale" not in first[-1].result.manifest.pricing_warnings
+
+    # The staleness clock has now "advanced": swap in a snapshot dated well
+    # past PRICE_SNAPSHOT_MAX_AGE_DAYS, exactly as it would look if the packaged
+    # snapshot simply aged past the 90-day threshold between the two calls.
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3", captured_at=date(2026, 1, 1)))
+
+    second = [e async for e in council.ask_stream("hi", synthesize=False)]
+    done = second[-1]
+    assert done.type == "done"
+    assert done.result.cached is True
+    assert "price_snapshot_stale" in done.result.manifest.pricing_warnings
+
+
 def test_stream_event_done_carries_full_result_shape():
     """StreamEvent('done') carries a CouncilResult that serializes secret-free."""
     from conclave.models import CouncilResult

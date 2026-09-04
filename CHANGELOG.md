@@ -68,6 +68,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call** with the reserved total, the cap, and the call count. New exit code **4**. A plan that
   cannot be bounded — no output cap, no snapshot, or an unpriced model — refuses with a distinct
   message rather than guessing.
+- **Cap validation (DSE-1514 review).** `--max-spend-usd` and `Council(max_spend_usd=...)` now
+  reject `NaN` (every spelling: `NaN`, `-NaN`, `sNaN`, case-insensitive), `Infinity`/`inf`
+  (signed), and PEP-515 underscore literals (`0_5` reads as `5`, not `0.5`) — previously `NaN`
+  crashed uncaught at the cap comparison and `Infinity` silently disabled the gate. The CLI
+  applies a strict format allow-list before `Decimal(...)` ever runs (usage error, exit `2`,
+  names `--max-spend-usd`); `Council.__init__` enforces `is_finite()` and `> 0` independently for
+  library callers. `1e999999` is a deliberate exception: it is finite, just enormous, and stays
+  accepted. `--max-output-tokens 0`/negative now fails the same way (`min=1` on the CLI option,
+  plus a `ValueError` in `Council.__init__`) instead of reaching a provider as `max_tokens: 0` or
+  crashing inside `pricing.py`.
+- `typer.Typer(..., pretty_exceptions_show_locals=False)` is now explicit rather than relying on
+  the installed typer version's default: `typer>=0.12.0` (this package's own floor) defaults that
+  flag `True`, which would render local variables — including the user's prompt — into an
+  unhandled exception's stderr traceback.
 
 ### Changed
 

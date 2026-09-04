@@ -1181,3 +1181,87 @@ def test_the_json_payload_carries_the_ceiling_as_an_exact_string(
     assert isinstance(manifest["cost_ceiling_usd"], str)
     assert manifest["priced_as_of"] == "2026-09-03"
     assert manifest["price_snapshot_digest"].startswith("sha256:")
+
+
+"""DSE-1514 review (Round 5): F1/F2/F5 -- non-finite/non-positive caps and locals."""
+
+
+def test_a_nan_spend_cap_is_a_usage_error_not_a_crash(keys):
+    from conclave.cli import app
+
+    result = runner.invoke(app, ["ask", "q", "--council", "grok", "--max-spend-usd", "NaN"])
+    assert result.exit_code == 2
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "--max-spend-usd" in result.output + (result.stderr or "")
+
+
+@pytest.mark.parametrize("cap", ["NaN", "-NaN", "sNaN", "snan", "nan"])
+def test_every_nan_spelling_is_rejected(keys, cap):
+    from conclave.cli import app
+
+    result = runner.invoke(app, ["ask", "q", "--council", "grok", "--max-spend-usd", cap])
+    assert result.exit_code == 2
+
+
+@pytest.mark.parametrize("cap", ["Infinity", "inf", "-Infinity", "-inf"])
+def test_an_infinite_spend_cap_is_rejected(keys, cap):
+    from conclave.cli import app
+
+    result = runner.invoke(app, ["ask", "q", "--council", "grok", "--max-spend-usd", cap])
+    assert result.exit_code == 2
+
+
+def test_an_underscored_spend_cap_is_rejected(keys):
+    """Decimal("0_5") is 5, not 0.5 -- a 10x cap the operator did not type."""
+    from conclave.cli import app
+
+    result = runner.invoke(app, ["ask", "q", "--council", "grok", "--max-spend-usd", "0_5"])
+    assert result.exit_code == 2
+
+
+@pytest.mark.parametrize("cap", ["0", "-5"])
+def test_a_non_positive_output_cap_is_a_usage_error(keys, cap):
+    from conclave.cli import app
+
+    result = runner.invoke(
+        app, ["ask", "q", "--council", "grok", "--max-output-tokens", cap, "--max-spend-usd", "5"]
+    )
+    assert result.exit_code == 2
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_the_cli_never_renders_locals_in_a_traceback():
+    assert cli.app.pretty_exceptions_show_locals is False
+
+
+def test_an_absurdly_large_but_finite_spend_cap_is_accepted(monkeypatch, keys, patch_call_model):
+    """Documents the deliberate boundary: is_finite() does NOT reject 1e999999.
+
+    A cap this large never refuses (nothing could exceed it), so the run
+    proceeds past the gate to a real (mocked, no-network) member call --
+    proving the value was accepted as a valid Decimal, not merely that
+    parsing didn't crash.
+    """
+    from conclave.cli import app
+    from tests.conftest import make_response
+    from tests.test_pricing_receipts import _install_snapshot, _snapshot
+
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3"))
+    patch_call_model(lambda model_id, messages: make_response("ok"))
+    result = runner.invoke(
+        app,
+        [
+            "ask",
+            "q",
+            "--council",
+            "grok",
+            "--mode",
+            "raw",
+            "--max-output-tokens",
+            "100",
+            "--max-spend-usd",
+            "1e999999",
+        ],
+    )
+    assert result.exit_code == 0
+    assert result.exit_code != 1

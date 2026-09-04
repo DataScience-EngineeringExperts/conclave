@@ -137,3 +137,59 @@ def test_a_missing_snapshot_directory_degrades_to_none(monkeypatch, tmp_path):
         assert pricing.load_default_price_snapshot() is None
     finally:
         pricing.load_default_price_snapshot.cache_clear()
+
+
+def test_a_scalar_json_payload_degrades_to_none_not_an_attribute_error(monkeypatch, tmp_path):
+    """DSE-1514 review, F4: a JSON payload that parses but is not an object.
+
+    ``payload.pop("_note", None)`` on an ``int`` raises an uncaught
+    ``AttributeError``, breaking the loader's documented never-raises contract.
+    """
+    import json
+
+    from conclave import pricing
+
+    (tmp_path / "prices-2099-01-01.json").write_text(json.dumps(42))
+    pricing.load_default_price_snapshot.cache_clear()
+    monkeypatch.setattr(pricing, "_price_data_dir", lambda: tmp_path)
+    try:
+        assert pricing.load_default_price_snapshot() is None
+    finally:
+        pricing.load_default_price_snapshot.cache_clear()
+
+
+def test_a_non_finite_rate_in_the_file_degrades_to_none(monkeypatch, tmp_path):
+    """DSE-1514 review, F4: a ``"NaN"``/``"Infinity"`` rate must never raise.
+
+    ``PriceRates``' ``Field(gt=0)`` on a ``Decimal`` already rejects a
+    non-finite value with a ``ValidationError`` (already in the loader's
+    except tuple) before ``PriceSnapshot.digest``/``_canonical_decimal`` --
+    which assumes a finite value -- is ever reached from this loader. This
+    pins that existing safety net so it can never silently regress.
+    """
+    payload = {
+        "snapshot_id": "conclave-default-prices-2099-01-01",
+        "captured_at": "2099-01-01",
+        "currency": "USD",
+        "entries": [
+            {
+                "provider_id": "x",
+                "model_id": "x/y",
+                "input_ceiling_usd_per_million_tokens": "NaN",
+                "output_ceiling_usd_per_million_tokens": 1,
+                "max_output_bytes_per_token": 4,
+                "source_url": "https://example.test/pricing",
+            }
+        ],
+    }
+    import json
+
+    from conclave import pricing
+
+    (tmp_path / "prices-2099-01-01.json").write_text(json.dumps(payload))
+    pricing.load_default_price_snapshot.cache_clear()
+    monkeypatch.setattr(pricing, "_price_data_dir", lambda: tmp_path)
+    try:
+        assert pricing.load_default_price_snapshot() is None
+    finally:
+        pricing.load_default_price_snapshot.cache_clear()

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -35,10 +36,28 @@ from .registry import DEFAULT_MODELS, key_present, key_source
 app = typer.Typer(
     add_completion=False,
     help="Bring-your-own-keys multi-model council. Fan a prompt to N models.",
+    # Explicit, not the version default (DSE-1514 review, F5): typer 0.12.0
+    # (allowed by this package's own `typer>=0.12.0` floor) defaults this to
+    # True, which renders local variables -- including the user's PROMPT --
+    # into an unhandled exception's stderr traceback. The installed 0.27.2
+    # happens to default False, but that is version luck, not a guarantee.
+    pretty_exceptions_show_locals=False,
 )
 app.add_typer(eval_app, name="eval")
 console = Console()
 err_console = Console(stderr=True)
+
+# Strict allow-list for --max-spend-usd, applied BEFORE Decimal() ever runs
+# (DSE-1514 review, F1). Requires a leading digit (no sign, so "-5" and
+# "+5" are rejected the same way as any other malformed input), an optional
+# fractional part, and an optional exponent. This rejects every spelling of
+# non-finite input (`NaN`, `-NaN`, `sNaN`, `Infinity`, `inf`, case-insensitive
+# and signed) and PEP-515 underscore grouping (`Decimal("0_5")` is `5`, not
+# `0.5` -- a silent 10x cap the operator did not type) that `Decimal(...)`
+# would otherwise accept outright. `1e999999` matches and is deliberately
+# still accepted: it is an enormous but perfectly finite Decimal, and
+# `Council.__init__`'s `is_finite()` check does not reject it either.
+_SPEND_CAP_PATTERN = re.compile(r"^\d+(\.\d+)?([eE][+-]?\d+)?$")
 
 
 def _result_to_dict(result: CouncilResult) -> dict:
@@ -647,6 +666,7 @@ def ask(
             "Defers to config `max_output_tokens` when unset. Required by "
             "--max-spend-usd: unbounded output cannot be bounded in dollars."
         ),
+        min=1,
     ),
     max_spend_usd: str | None = typer.Option(
         None,
@@ -738,6 +758,18 @@ def ask(
     # destroy the exactness the whole cap rests on (Decimal(0.4) != Decimal("0.4")).
     spend_cap: Decimal | None = None
     if max_spend_usd is not None:
+        # A strict format allow-list runs BEFORE Decimal() (DSE-1514 review,
+        # F1): Decimal("NaN") is silently accepted by Decimal() and crashes
+        # uncaught at an ordering comparison; Decimal("Infinity") is accepted
+        # too and permanently disables the gate (nothing can ever exceed it);
+        # Decimal("0_5") is 5, not 0.5, via PEP-515 underscore grouping -- a
+        # silent 10x cap the operator did not type. Rejecting the spelling
+        # before conversion turns all three into the same clean usage error.
+        if not _SPEND_CAP_PATTERN.fullmatch(max_spend_usd):
+            err_console.print(
+                f"[red]--max-spend-usd must be an exact decimal amount, got '{max_spend_usd}'.[/red]"
+            )
+            raise typer.Exit(code=2)
         try:
             spend_cap = Decimal(max_spend_usd)
         except InvalidOperation:
@@ -745,8 +777,12 @@ def ask(
                 f"[red]--max-spend-usd must be an exact decimal amount, got '{max_spend_usd}'.[/red]"
             )
             raise typer.Exit(code=2) from None
-        if spend_cap <= 0:
-            err_console.print("[red]--max-spend-usd must be greater than zero.[/red]")
+        # Belt-and-suspenders on top of the format check: Council.__init__
+        # enforces this identically for library callers who bypass the CLI.
+        if not spend_cap.is_finite() or spend_cap <= 0:
+            err_console.print(
+                "[red]--max-spend-usd must be a finite amount greater than zero.[/red]"
+            )
             raise typer.Exit(code=2)
 
     cfg = load_config()
