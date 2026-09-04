@@ -27,9 +27,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .logging import get_logger
 from .registry import DEFAULT_MODELS, DEFAULT_SYNTHESIZER
@@ -53,6 +54,22 @@ class CustomEndpoint(BaseModel):
 
     completions_url: str
     env_var: str
+
+    @field_validator("completions_url")
+    @classmethod
+    def _reject_userinfo(cls, value: str) -> str:
+        """Refuse a URL with embedded credentials (DSE-1517 / CSO F2).
+
+        ``user:pass@host`` userinfo would otherwise flow straight into a
+        decision-record tape's endpoint fingerprint/disclosure path. The key
+        belongs in ``env_var``, never in the URL.
+        """
+        if "@" in urlsplit(value).netloc:
+            raise ValueError(
+                "completions_url must not embed credentials in the URL (userinfo); "
+                "use env_var instead"
+            )
+        return value
 
 
 class ConclaveConfig(BaseModel):

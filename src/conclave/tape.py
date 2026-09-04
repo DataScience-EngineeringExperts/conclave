@@ -12,6 +12,20 @@ stores a live credential: the URL, headers, and body are hashed for a stable
 request key and every credential-shaped name or value is stripped or replaced
 with ``[REDACTED]`` before anything is written down. This module MUST NOT
 import from :mod:`conclave.evals` -- the dependency runs the other way.
+
+Hardening (DSE-1517 Task 1b, closing CSO findings F2/F3/F15):
+
+* ``_sanitize_url`` strips URL userinfo (``user:pass@host``) from the netloc --
+  a bare :func:`urllib.parse.urlsplit` keeps it, so a credential embedded in a
+  custom endpoint URL would otherwise reach a published tape verbatim (F2).
+* ``_sanitize_url`` also drops the union of this module's own credential names
+  and :mod:`conclave.cache`'s wider ``_SECRET_QUERY_KEYS`` /
+  ``_SECRET_QUERY_PARTS`` / ``_SECRET_VALUE_MARKERS`` sets, so a tape's query
+  scrubbing is never narrower than the cache's endpoint-fingerprint scrubbing
+  (F3).
+* :class:`RecordingTransport` sanitizes the response body with
+  ``body_root=True``, dropping ambiguous top-level keys (``key`` / ``token``)
+  from provider responses the same way request bodies already are (F15).
 """
 
 from __future__ import annotations
@@ -21,11 +35,12 @@ import json
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Annotated, Any, Literal
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .adapters.base import redact
+from .cache import _SECRET_QUERY_KEYS, _SECRET_QUERY_PARTS, _SECRET_VALUE_MARKERS
 
 TAPE_SCHEMA_VERSION = "conclave_tape_v1"
 
@@ -172,25 +187,76 @@ def _sanitize(value: Any, credentials: tuple[str, ...], *, body_root: bool = Fal
     return _redact_exact(str(value), credentials)
 
 
-def _sanitize_url(url: str, credentials: tuple[str, ...] = ()) -> str:
-    """Return ``url`` with every credential-named or credential-shaped query param removed.
+def _safe_netloc(parts: SplitResult) -> str:
+    """Return ``host[:port]`` from a split URL with userinfo stripped (F2).
+
+    A bare ``urlsplit(...).netloc`` keeps ``user:pass@`` verbatim -- this is
+    the only safe way to render a netloc into a tape or a sanitized endpoint
+    disclosure.
 
     Args:
-        url: The request URL, possibly containing secret query parameters.
+        parts: The result of ``urlsplit(url)``.
+
+    Returns:
+        ``hostname`` or ``hostname:port``; empty string if there is no host.
+        A malformed port is dropped rather than raised, matching
+        ``cache._endpoint_fingerprint``'s tolerance of a bad configured port.
+    """
+    hostname = parts.hostname or ""
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return f"{hostname}:{port}" if port is not None else hostname
+
+
+def _is_secret_query_name(name: str) -> bool:
+    """True if a query-parameter name is credential-shaped by any known rule.
+
+    Unions this module's own name/ambiguous-name rules with
+    ``cache._SECRET_QUERY_KEYS`` (exact match) and ``cache._SECRET_QUERY_PARTS``
+    (substring match), so a tape's URL scrubbing is never narrower than the
+    cache's endpoint-fingerprint scrubbing (F3).
+    """
+    normalized = name.lower().replace("-", "_")
+    if _is_sensitive_name(name) or normalized in _AMBIGUOUS_CREDENTIAL_NAMES:
+        return True
+    lowered = name.lower()
+    if lowered in _SECRET_QUERY_KEYS:
+        return True
+    return any(part in lowered for part in _SECRET_QUERY_PARTS)
+
+
+def _is_secret_query_value(value: str) -> bool:
+    """True if a query-parameter value contains one of ``cache._SECRET_VALUE_MARKERS``."""
+    lowered = value.lower()
+    return any(marker in lowered for marker in _SECRET_VALUE_MARKERS)
+
+
+def _sanitize_url(url: str, credentials: tuple[str, ...] = ()) -> str:
+    """Return ``url`` with userinfo and every credential-shaped query param removed.
+
+    Args:
+        url: The request URL, possibly containing userinfo and/or secret
+            query parameters.
         credentials: Exact known credential values to redact from any
             surviving query value.
 
     Returns:
-        The sanitized URL.
+        The sanitized URL: no userinfo in the netloc, no credential-named or
+        credential-shaped-valued query parameters.
+
+    Example:
+        >>> _sanitize_url("https://svc:hunter2@litellm.internal:4000/v1/chat?access_key=S&alt=json")
+        'https://litellm.internal:4000/v1/chat?alt=json'
     """
     parts = urlsplit(url)
     safe_query = [
         (name, _redact_exact(value, credentials))
         for name, value in parse_qsl(parts.query, keep_blank_values=True)
-        if not _is_sensitive_name(name)
-        and name.lower().replace("-", "_") not in _AMBIGUOUS_CREDENTIAL_NAMES
+        if not _is_secret_query_name(name) and not _is_secret_query_value(value)
     ]
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(safe_query), ""))
+    return urlunsplit((parts.scheme, _safe_netloc(parts), parts.path, urlencode(safe_query), ""))
 
 
 def _string_values(value: Any) -> list[str]:
@@ -292,7 +358,7 @@ class RecordingTransport:
                 occurrence_index=occurrence,
                 request=safe_request,
                 status=status,
-                response=_sanitize(response, credentials),
+                response=_sanitize(response, credentials, body_root=True),
             )
         )
         return status, response

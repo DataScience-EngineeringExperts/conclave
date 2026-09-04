@@ -18,6 +18,7 @@ import json
 
 import pytest
 
+from conclave.config import CustomEndpoint
 from conclave.evals import replay as evals_replay
 from conclave.tape import (
     _AMBIGUOUS_CREDENTIAL_NAMES,
@@ -172,3 +173,51 @@ async def test_replaying_transport_raises_on_leftover_records():
     replay = ReplayingTransport(tape, run_identity_hash=RUN_HASH)
     with pytest.raises(ReplayMismatchError, match="unconsumed record"):
         replay.assert_consumed()
+
+
+# --- Task 1b: hardening (CSO F2, F3, F15) ---------------------------------
+
+
+def test_urlsplit_keeps_userinfo_in_netloc_and_sanitize_url_must_strip_it():
+    from urllib.parse import urlsplit
+
+    assert urlsplit("https://u:p@h/x").netloc == "u:p@h"
+    assert _sanitize_url("https://svc:hunter2@litellm.internal:4000/v1/chat?x=1") == (
+        "https://litellm.internal:4000/v1/chat?x=1"
+    )
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["access_key=S", "code=S", "sig=S", "auth=S", "passwd=S", "signature=S", "credential=S"],
+)
+def test_sanitize_url_drops_the_cache_secret_query_set(query):
+    assert "S" not in _sanitize_url(f"https://h/v1?{query}&alt=json")
+    assert "alt=json" in _sanitize_url(f"https://h/v1?{query}&alt=json")
+
+
+def test_sanitize_url_drops_secret_shaped_query_values():
+    assert "sk-abc" not in _sanitize_url("https://h/v1?whatever=sk-abc123")
+
+
+def test_response_root_ambiguous_names_are_dropped():
+    out = _sanitize(
+        {"token": "T", "choices": [{"message": {"content": "token"}}]}, (), body_root=True
+    )
+    assert "token" not in out and out["choices"][0]["message"]["content"] == "token"
+
+
+async def test_recording_transport_scrubs_ambiguous_root_keys_from_the_response():
+    async def network(url, headers, body, timeout):
+        return 200, {"token": "T", "choices": [{"message": {"content": "token budgeting"}}]}
+
+    transport = RecordingTransport(network, run_identity_hash=RUN_HASH)
+    await transport("https://example.test/v1", {}, {"prompt": "safe"}, 10)
+    record = transport.tape().records[0]
+    assert "token" not in record.response
+    assert record.response["choices"][0]["message"]["content"] == "token budgeting"
+
+
+def test_custom_endpoint_rejects_userinfo():
+    with pytest.raises(ValueError):
+        CustomEndpoint(completions_url="https://u:p@h/v1/chat/completions", env_var="X")
