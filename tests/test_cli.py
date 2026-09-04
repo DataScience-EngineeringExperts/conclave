@@ -1032,7 +1032,10 @@ def test_an_over_budget_run_exits_four_and_names_reserved_cap_and_count(monkeypa
 
     _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3", "anthropic/claude-sonnet-4-6"))
 
+    calls: list[str] = []
+
     async def tripwire(name, model_id, messages, **kwargs):
+        calls.append(name)
         raise AssertionError("the CLI gate must refuse before any provider call")
 
     monkeypatch.setattr(council_mod, "call_model", tripwire)
@@ -1052,6 +1055,45 @@ def test_an_over_budget_run_exits_four_and_names_reserved_cap_and_count(monkeypa
     combined = result.output + (result.stderr or "")
     assert result.exit_code == 4
     assert "reserved" in combined and "0.000001" in combined and "calls" in combined
+    # DSE-1514 review, Fix A/minors: the gate seam itself must never be reached.
+    assert calls == []
+
+
+def test_json_refusal_emits_no_stdout_payload_and_puts_the_message_on_stderr(monkeypatch, keys):
+    """DSE-1514 review minors: a refused --json run has nothing to serialize.
+
+    The mode dispatch that would build the JSON payload never runs -- the gate
+    raises before it -- so stdout must be completely empty (not even
+    ``null``/``{}``) and the refusal message must land on stderr, exactly like
+    the non-JSON path. See the `ask` docstring's exit-code-4 note.
+    """
+    import conclave.council as council_mod
+    from conclave.cli import app
+    from tests.test_pricing_receipts import _install_snapshot, _snapshot
+
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3", "anthropic/claude-sonnet-4-6"))
+
+    async def tripwire(name, model_id, messages, **kwargs):
+        raise AssertionError("the CLI gate must refuse before any provider call")
+
+    monkeypatch.setattr(council_mod, "call_model", tripwire)
+    result = runner.invoke(
+        app,
+        [
+            "ask",
+            "q",
+            "--council",
+            "grok",
+            "--max-output-tokens",
+            "100000",
+            "--max-spend-usd",
+            "0.000001",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 4
+    assert result.stdout == ""
+    assert "reserved" in result.stderr and "0.000001" in result.stderr
 
 
 def test_an_unboundable_plan_exits_four_with_a_distinct_message(monkeypatch, keys):

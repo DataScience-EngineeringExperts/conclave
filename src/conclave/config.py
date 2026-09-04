@@ -83,7 +83,7 @@ class ConclaveConfig(BaseModel):
             reaches the threshold. ``None`` keeps the historic fixed-rounds
             behavior exactly. A ``--converge-threshold`` / ``--converge/--no-converge``
             CLI flag overrides this per invocation. See :func:`conclave.modes.run_debate`.
-           max_output_tokens: opt-in hard ceiling on output tokens for EVERY call a
+        max_output_tokens: opt-in hard ceiling on output tokens for EVERY call a
             council makes -- members, synthesis, judge, verdict extraction and
             its repair retry, and the streaming paths. ``None`` (the default)
             leaves each provider's own default in place, exactly as today. It is

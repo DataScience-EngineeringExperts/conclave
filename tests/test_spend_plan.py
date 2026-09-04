@@ -76,7 +76,13 @@ def test_downstream_phases_declare_their_upstream_dependencies(keys):
 
     assert all(c.upstream_output_call_count == 0 for c in by_phase["initial"])
     assert all(c.upstream_output_call_count == 3 for c in by_phase["critique"])  # N initials
-    assert all(c.upstream_output_call_count == 6 for c in by_phase["revision"])  # N + N
+    # DSE-1514 review, Fix A: N (initial panel) + N (critique panel) + 1 -- every
+    # reviser's OWN initial answer is embedded a second time as its standalone
+    # "original answer" (modes._elite_revision_messages_for), not just inside
+    # the anonymized panel. Was asserted as 6 (2N); corrected to 7 (2N+1) after
+    # the byte-lower-bound regression test proved 2N alone undercounts the real
+    # message.
+    assert all(c.upstream_output_call_count == 7 for c in by_phase["revision"])
     assert by_phase["synthesis"][0].upstream_output_call_count == 3  # N revisions
     assert by_phase["verdict_extraction"][0].upstream_output_call_count == 3
     assert by_phase["verdict_repair"][0].upstream_output_call_count == 4  # + its own attempt
@@ -90,3 +96,189 @@ def test_an_unknown_mode_is_a_value_error(keys):
 def test_planning_without_an_output_cap_is_refused(keys):
     with pytest.raises(ValueError, match="cannot bound spend: no output cap"):
         Council(models=MEMBERS, synthesizer="claude").plan_calls("synthesize", "q")
+
+
+# --- DSE-1514 Round 4 review, Fix A: the adversarial byte-worst-case shape ---
+# and a general byte-lower-bound regression covering every phase whose input
+# embeds a prior call's output. The ticket's guarantee is "never below the
+# real request bytes"; these tests hold every phase to it using the REAL
+# message-building functions (never a hand re-derivation of their output).
+
+MAX_OUTPUT_TOKENS = 1_000
+MAX_OUTPUT_BYTES_PER_TOKEN = 8
+MAX_LEN_TEXT = "x" * (MAX_OUTPUT_TOKENS * MAX_OUTPUT_BYTES_PER_TOKEN)
+PROMPT = "q"
+
+
+def _plan_members() -> list[tuple[str, str]]:
+    """The exact (name, model_id) pairs _council() resolves, N=3."""
+    return _council()._available_members()[0]
+
+
+def _max_len_answers():
+    from conclave.council import _ANSWER_ID_PROBE
+    from conclave.models import ModelAnswer
+
+    return [
+        ModelAnswer(name=name, model_id=model_id, answer=MAX_LEN_TEXT, answer_id=_ANSWER_ID_PROBE)
+        for name, model_id in _plan_members()
+    ]
+
+
+def _phase_call(plan, phase: str):
+    return next(c for c in plan.calls if c.phase == phase)
+
+
+def test_adversarial_byte_worst_case_is_one_proposer_and_n_minus_one_critics(keys):
+    """1 proposer (upstream=0) + N-1 critics (upstream=1 each); judge upstream=N."""
+    plan = _council().plan_calls("adversarial", PROMPT)
+    proposals = [c for c in plan.calls if c.phase == "proposal"]
+    critiques = [c for c in plan.calls if c.phase == "critique"]
+    judges = [c for c in plan.calls if c.phase == "judge"]
+
+    assert len(proposals) == 1
+    assert proposals[0].upstream_output_call_count == 0
+    assert len(critiques) == 2
+    assert all(c.upstream_output_call_count == 1 for c in critiques)
+    assert len(judges) == 1
+    assert judges[0].upstream_output_call_count == 3
+
+
+def test_a_critic_call_has_a_strictly_larger_input_bound_than_the_proposal(keys):
+    plan = _council().plan_calls("adversarial", PROMPT)
+    proposal = _phase_call(plan, "proposal")
+    critique = _phase_call(plan, "critique")
+    bound_kwargs = {"upstream_output_bytes_per_token": MAX_OUTPUT_BYTES_PER_TOKEN}
+    assert critique.input_bytes_bound(**bound_kwargs) > proposal.input_bytes_bound(**bound_kwargs)
+
+
+def _critic_case():
+    from conclave.modes import _critic_messages_for
+
+    plan = _council().plan_calls("adversarial", PROMPT)
+    call = _phase_call(plan, "critique")
+    messages = _critic_messages_for(PROMPT, MAX_LEN_TEXT)("critic", "x/x")
+    return call, messages
+
+
+def _synthesis_case():
+    import conclave.council as council_mod
+
+    plan = _council().plan_calls("synthesize", PROMPT)
+    call = _phase_call(plan, "synthesis")
+    content = council_mod._synth_user_content(PROMPT, _max_len_answers())
+    messages = [
+        {"role": "system", "content": council_mod._SYNTH_SYSTEM},
+        {"role": "user", "content": content},
+    ]
+    return call, messages
+
+
+def _debate_round2_case():
+    from conclave import prompts
+
+    plan = _council().plan_calls("debate", PROMPT, rounds=2)
+    call = _phase_call(plan, "round-2")
+    members = _plan_members()
+    answers = _max_len_answers()
+    letters = {name: prompts.LETTERS[i] for i, (name, _mid) in enumerate(members)}
+    prior = {name: answer for (name, _mid), answer in zip(members, answers, strict=True)}
+    self_name = members[0][0]
+    peer_block = prompts.anonymized_peer_block(self_name, letters[self_name], prior, letters)
+    messages = [
+        {"role": "system", "content": prompts.DEBATE_SYSTEM},
+        {"role": "user", "content": prompts.debate_round_user(PROMPT, 2, 2, peer_block)},
+    ]
+    return call, messages
+
+
+def _elite_critique_case():
+    from conclave import prompts
+
+    plan = _council().plan_calls("elite", PROMPT)
+    call = _phase_call(plan, "critique")
+    messages = [
+        {"role": "system", "content": prompts.ELITE_CRITIC_SYSTEM},
+        {"role": "user", "content": prompts.elite_critic_user(PROMPT, _max_len_answers())},
+    ]
+    return call, messages
+
+
+def _elite_revision_case():
+    from conclave import prompts
+
+    plan = _council().plan_calls("elite", PROMPT)
+    call = _phase_call(plan, "revision")
+    answers = _max_len_answers()
+    critiques = _max_len_answers()
+    messages = [
+        {"role": "system", "content": prompts.ELITE_REVISION_SYSTEM},
+        {
+            "role": "user",
+            "content": prompts.elite_revision_user(PROMPT, answers[0], answers, critiques),
+        },
+    ]
+    return call, messages
+
+
+def _verdict_extraction_case():
+    from conclave.verdict_synthesis import _build_messages
+
+    plan = _council().plan_calls("synthesize", PROMPT)
+    call = _phase_call(plan, "verdict_extraction")
+    messages = _build_messages(PROMPT, _max_len_answers())
+    return call, messages
+
+
+def _verdict_repair_case():
+    from conclave.verdict_synthesis import (
+        VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES,
+        _build_messages,
+        _repair_instruction,
+    )
+
+    plan = _council().plan_calls("synthesize", PROMPT)
+    call = _phase_call(plan, "verdict_repair")
+    messages = _build_messages(PROMPT, _max_len_answers()) + [
+        {
+            "role": "user",
+            "content": _repair_instruction("e" * VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES),
+        }
+    ]
+    return call, messages
+
+
+@pytest.mark.parametrize(
+    "case_builder",
+    [
+        _critic_case,
+        _synthesis_case,
+        _debate_round2_case,
+        _elite_critique_case,
+        _elite_revision_case,
+        _verdict_extraction_case,
+        _verdict_repair_case,
+    ],
+    ids=[
+        "adversarial-critique",
+        "synthesize-synthesis",
+        "debate-round-2",
+        "elite-critique",
+        "elite-revision",
+        "verdict-extraction",
+        "verdict-repair",
+    ],
+)
+def test_the_planned_byte_bound_never_falls_below_the_real_worst_case_message(keys, case_builder):
+    """DSE-1514 review, Fix A: "never below the real request bytes", every phase.
+
+    Builds the REAL message list for each phase (via the actual mode/prompt
+    builders, never a hand-derived approximation) with worst-case-length
+    (``max_output_tokens * max_output_bytes_per_token``) upstream text, and
+    proves the planned call's byte bound covers it.
+    """
+    call, messages = case_builder()
+    real_bytes = sum(len(m["content"].encode("utf-8")) for m in messages)
+    assert real_bytes <= call.input_bytes_bound(
+        upstream_output_bytes_per_token=MAX_OUTPUT_BYTES_PER_TOKEN
+    )

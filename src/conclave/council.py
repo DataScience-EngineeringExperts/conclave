@@ -90,8 +90,6 @@ from .pricing import (
 from .prompts import ELITE_PROMPT_VERSION, SYNTHESIS_PROMPT_VERSION
 from .providers import call_model, receipt_from_answer
 from .registry import key_present
-from .verdict_synthesis import VERDICT_CONTRACT_BYTES as _VERDICT_CONTRACT_BYTES
-from .verdict_synthesis import VERDICT_TEMPLATE_PROBE as _VERDICT_TEMPLATE_PROBE
 
 if TYPE_CHECKING:  # avoid an import cycle at runtime; only needed for typing
     from .verdict_synthesis import VerdictSynthesisResult
@@ -118,6 +116,63 @@ _SYNTH_SYSTEM = (
     "and adjudicate disagreements, and note any answer that is clearly wrong. "
     "Do not invent a model's position; rely only on the answers provided."
 )
+
+
+def _synth_user_content(prompt: str, answers: Sequence[ModelAnswer]) -> str:
+    """Build the synthesizer's user-message content from prompt + member answers.
+
+    Extracted from :meth:`Council._synthesize` (unchanged behavior, same
+    string) so :meth:`Council._plan_table` can measure the EXACT fixed
+    wrapper/label bytes a real synthesis call embeds -- via
+    :func:`_placeholder_answers`, empty-text answers with the real names this
+    run would use -- instead of a hand-duplicated approximation that could
+    silently drift from the real prompt (DSE-1514 review, Fix A).
+    """
+    blocks = "\n\n".join(
+        f"### Answer from {a.name} ({a.model_id})"
+        f"{f' (Answer ID: {a.answer_id})' if a.answer_id else ''}\n{a.answer}"
+        for a in answers
+    )
+    return (
+        f"Original prompt:\n{prompt}\n\n"
+        f"Council answers:\n\n{blocks}\n\n"
+        "Now produce the consolidated answer."
+    )
+
+
+# Conservative byte allowance for an optional answer_id in a template probe
+# (DSE-1514 review, Fix A). A real id is "ca_" + 24 hex chars (27 bytes), or,
+# for a phase-derived artifact (:func:`conclave.models.derive_phase_answer_id`),
+# "ca_<phase>_" + 24 hex chars -- a few bytes longer for any phase name
+# conclave uses today. A placeholder at least this long makes a template
+# probe's label byte count an upper bound of BOTH the with-id and the
+# without-id (positional-fallback) real cases, never an under-count.
+_ANSWER_ID_PROBE = "ca_" + ("f" * 45)
+
+
+def _placeholder_answers(members: Sequence[tuple[str, str]]) -> list[ModelAnswer]:
+    """Zero-length, worst-case-id answers for measuring a template's real fixed bytes.
+
+    Used only by :meth:`Council._plan_table` to measure a phase's fixed
+    per-item label overhead (member name, model id, and/or an optional answer
+    id) EXACTLY -- using the real names/ids the run would actually use --
+    rather than approximating it with a guessed constant. The answer TEXT is
+    deliberately left empty: that variable part is bounded separately by the
+    per-call ``upstream_output_call_count`` times the output cap.
+
+    Args:
+        members: The ``(friendly_name, model_id)`` pairs a template needs one
+            placeholder answer per.
+
+    Returns:
+        One placeholder :class:`~conclave.models.ModelAnswer` per member, in
+        the same order.
+    """
+    return [
+        ModelAnswer(name=name, model_id=model_id, answer="", answer_id=_ANSWER_ID_PROBE)
+        for name, model_id in members
+    ]
+
 
 # The modes Council.plan_calls knows how to enumerate (DSE-1514). Kept as its own
 # frozenset (rather than re-deriving from _RENDERERS or similar) so the planner's
@@ -219,6 +274,38 @@ class PlannedCall:
     upstream_output_call_count: int
     max_output_tokens: int
 
+    def input_bytes_bound(self, *, upstream_output_bytes_per_token: int) -> int:
+        """Total planned input-byte bound for one candidate rate (DSE-1514 review, Fix A).
+
+        Mirrors the input-side arithmetic :meth:`Council._reserve_plan` feeds
+        into :func:`conclave.pricing.reserve_cost` byte for byte, so a test can
+        assert a real, unplanned message list never exceeds what this call was
+        priced for without duplicating (and risking drifting from) the pricing
+        module's own formula.
+
+        Args:
+            upstream_output_bytes_per_token: The priced model's attested
+                upper bound on one output token's UTF-8 byte length (a
+                :class:`conclave.pricing.PriceRates` field) -- the same value
+                :meth:`Council._reserve_plan` reads off the snapshot entry.
+
+        Returns:
+            The upper bound, in bytes, on everything this call's input could
+            contain: the exact known prompt, the fixed template wording, the
+            provider framing allowance, and every upstream call's output cap
+            converted to bytes.
+        """
+        return (
+            self.prompt_token_upper_bound
+            + self.prompt_template_token_allowance
+            + self.provider_framing_token_allowance
+            + (
+                self.upstream_output_call_count
+                * self.max_output_tokens
+                * upstream_output_bytes_per_token
+            )
+        )
+
 
 @dataclass(frozen=True)
 class CallPlan:
@@ -228,6 +315,47 @@ class CallPlan:
     calls: tuple[PlannedCall, ...]
     member_count: int
     chain_count: int
+
+
+@dataclass(frozen=True)
+class _PhaseSpec:
+    """One declarative row of a mode's worst-case call table (DSE-1514 review, Fix B).
+
+    :meth:`Council._plan_table` returns one of these per phase a mode could
+    run; :meth:`Council.plan_calls` expands each row into one
+    :class:`PlannedCall` per target, using the exact prompt bytes and the
+    output cap (the two values every row needs but none of them determine).
+    ``targets`` is the literal slice of keyed members or keyed chain
+    candidates this row calls -- a plain list, not a count -- so the SAME row
+    shape covers both a uniform "every member" phase (``targets`` is every
+    keyed member) and adversarial's split single-proposer /
+    ``(N-1)``-critics shape (two rows, each a different slice of ``members``).
+
+    Attributes:
+        phase: The manifest phase this call would be recorded under.
+        targets: The exact ``(name, model_id)`` pairs this row calls.
+        template: The fixed system + user template wording that will
+            surround the exact prompt bytes.
+        upstream: How many upstream calls' not-yet-produced output this
+            call's input embeds.
+        message_count: Messages this call sends, feeding the provider framing
+            allowance (``64 + 16 * message_count``, mirroring the eval
+            runner). Member-shaped phases send 2 (system + user); chain-shaped
+            phases send 3 (system + user + the assembled upstream material).
+        contract: Whether a structured-output contract is attached. Adds a
+            flat 256-byte provider framing allowance for the schema
+            registration itself; the schema's own byte cost is measured as
+            part of ``template`` (built via
+            :func:`conclave.verdict_synthesis._build_messages`, real member
+            placeholders, in :meth:`Council._plan_table`), never added twice.
+    """
+
+    phase: str
+    targets: Sequence[tuple[str, str]]
+    template: str
+    upstream: int
+    message_count: int = 2
+    contract: bool = False
 
 
 class Council:
@@ -433,6 +561,240 @@ class Council:
         pairs = [(name, self.config.resolve_model_id(name)) for name in self.synthesizer_chain]
         return [(name, model_id) for name, model_id in pairs if key_present(model_id)]
 
+    def _plan_table(
+        self,
+        mode: str,
+        *,
+        members: list[tuple[str, str]],
+        chain: list[tuple[str, str]],
+        rounds: int,
+        choices: list[str] | None,
+    ) -> list[_PhaseSpec]:
+        """Return the declarative worst-case phase table for ``mode`` (DSE-1514 review, Fix B).
+
+        Pure data assembly: no byte arithmetic and no :class:`PlannedCall`
+        construction happens here -- see :meth:`plan_calls`, which expands
+        every row with the one piece of run-specific data every row shares
+        (the exact prompt bytes and the output cap). That split is what lets
+        all six modes share a single expansion loop instead of the two
+        parallel if/elif chains this table replaces.
+
+        With ``N`` keyed members, ``C`` keyed chain candidates, ``R`` debate
+        rounds, and ``V`` = 1 when verdict extraction is on, the row counts
+        reproduce exactly:
+
+        * ``raw`` -- ``N``: one member-phase row, no chain row.
+        * ``synthesize`` -- ``N + C + 2CV``: the same member-phase row, plus a
+          chain synthesis row and (when verdict extraction is on) extraction
+          + repair chain rows.
+        * ``vote`` -- ``N``: one member-phase row; no chain row.
+        * ``debate`` -- ``N*R + C``: a round-1 row plus one row per round
+          2..R (each worst case at full membership; drop-out only shrinks a
+          real run), plus a chain consolidation row.
+        * ``adversarial`` -- ``N + C``: two member-phase rows -- one
+          proposer (``upstream=0``) and ``N-1`` critics (``upstream=1``
+          each, embedding the proposal) -- whose target counts always sum to
+          ``N`` regardless of how many real proposer attempts fail, plus a
+          chain judge row whose ``upstream=N`` (it embeds the proposal and
+          every critique). This is the DSE-1514 review Fix A shape: byte
+          worst case is 1 proposer succeeding immediately, maximizing the
+          number of upstream-embedding critic calls.
+        * ``elite`` -- ``3N + C + 2CV``: three member-phase rows (initial,
+          critique, revision), plus the synthesis/verdict chain rows shared
+          with ``synthesize``.
+
+        Args:
+            mode: One of ``raw``/``synthesize``/``vote``/``debate``/
+                ``adversarial``/``elite``. Already validated by the caller.
+            members: The keyed council members.
+            chain: The keyed synthesizer-chain candidates.
+            rounds: Debate rounds, already normalized to at least 1.
+            choices: Vote choices, which enlarge the vote prompt template.
+
+        Returns:
+            The ordered phase rows for ``mode``.
+        """
+        n = len(members)
+        table: list[_PhaseSpec] = []
+        # Placeholder answers (real names/model ids, empty text) for measuring
+        # a downstream phase's EXACT fixed per-item label overhead -- DSE-1514
+        # review, Fix A. Built once per call since every downstream phase that
+        # embeds the full membership needs the identical N-sized placeholder
+        # list; the debate peer block additionally needs per-member letter
+        # aliases, computed separately below where it is used.
+        member_placeholders = _placeholder_answers(members)
+
+        if mode in ("raw", "synthesize"):
+            table.append(_PhaseSpec("member", members, "", 0))
+        elif mode == "vote":
+            table.append(
+                _PhaseSpec(
+                    "member",
+                    members,
+                    prompts.VOTE_SYSTEM + prompts.vote_user("", choices or []),
+                    0,
+                )
+            )
+        elif mode == "debate":
+            table.append(_PhaseSpec("round-1", members, "", 0))
+            # A worst-case peer block: every member's PRIOR answer anonymized
+            # by letter, text left empty (bounded separately via ``upstream``)
+            # so only the real, N-exact "Model X (peer) previous answer" /
+            # "Your previous answer" label overhead is measured here.
+            letters = {name: prompts.LETTERS[i] for i, (name, _mid) in enumerate(members)}
+            prior = {
+                name: answer
+                for (name, _mid), answer in zip(members, member_placeholders, strict=True)
+            }
+            self_name = members[0][0] if members else ""
+            peer_block = (
+                prompts.anonymized_peer_block(self_name, letters.get(self_name, ""), prior, letters)
+                if members
+                else ""
+            )
+            for round_no in range(2, rounds + 1):
+                table.append(
+                    _PhaseSpec(
+                        f"round-{round_no}",
+                        members,
+                        prompts.DEBATE_SYSTEM
+                        + prompts.debate_round_user("", round_no, rounds, peer_block),
+                        n,
+                    )
+                )
+        elif mode == "adversarial":
+            # Byte-worst-case (DSE-1514 review, Fix A): 1 proposer succeeds
+            # immediately (upstream=0); every OTHER member critiques it, each
+            # embedding the proposal's answer text (upstream=1). A real run's
+            # k proposer attempts + (N-k) critics always equals N; k=1
+            # maximizes the number of upstream-embedding critic calls, which
+            # is the pessimistic shape a spend ceiling must plan against.
+            if members:
+                table.append(_PhaseSpec("proposal", members[:1], "", 0))
+                table.append(
+                    _PhaseSpec(
+                        "critique",
+                        members[1:],
+                        prompts.CRITIC_SYSTEM + prompts.critic_user("", ""),
+                        1,
+                    )
+                )
+        elif mode == "elite":
+            table.append(_PhaseSpec("initial", members, "", 0))
+            table.append(
+                _PhaseSpec(
+                    "critique",
+                    members,
+                    prompts.ELITE_CRITIC_SYSTEM
+                    + prompts.elite_critic_user("", member_placeholders),
+                    n,
+                )
+            )
+            fallback_original = ModelAnswer(
+                name="", model_id="", answer="", answer_id=_ANSWER_ID_PROBE
+            )
+            original = member_placeholders[0] if member_placeholders else fallback_original
+            # DSE-1514 review, Fix A: modes._elite_revision_messages_for passes
+            # EVERY reviser its OWN initial answer as ``original_answer`` --
+            # which is ALSO one of the N entries already inside the initial
+            # panel. That answer's text is therefore embedded TWICE in a real
+            # revision call (once standalone, once inside the anonymized
+            # panel), so the byte-worst-case upstream count is N (initial
+            # panel) + N (critique panel) + 1 (the duplicate), not 2N -- an
+            # undercount the byte-lower-bound regression test below caught.
+            table.append(
+                _PhaseSpec(
+                    "revision",
+                    members,
+                    prompts.ELITE_REVISION_SYSTEM
+                    + prompts.elite_revision_user(
+                        "", original, member_placeholders, member_placeholders
+                    ),
+                    2 * n + 1,
+                )
+            )
+
+        if mode == "debate":
+            # Mirrors modes._debate_synthesize's real block format exactly
+            # ("### Final answer from {name} ({model_id})\n{answer}") using
+            # the real member names/model ids, text left empty.
+            debate_final_blocks = "\n\n".join(
+                f"### Final answer from {a.name} ({a.model_id})\n{a.answer}"
+                for a in member_placeholders
+            )
+            table.append(
+                _PhaseSpec(
+                    "debate_final",
+                    chain,
+                    prompts.DEBATE_FINAL_SYSTEM
+                    + prompts.debate_final_user("", rounds, debate_final_blocks),
+                    n,
+                    message_count=3,
+                )
+            )
+        elif mode == "adversarial":
+            # Judge upstream is ALWAYS N: it embeds the proposal (1) plus
+            # every critique the byte-worst-case shape produces (N-1).
+            table.append(
+                _PhaseSpec(
+                    "judge",
+                    chain,
+                    prompts.JUDGE_SYSTEM + prompts.judge_user("", "", "", ""),
+                    n,
+                    message_count=3,
+                )
+            )
+        elif mode in ("synthesize", "elite"):
+            table.append(
+                _PhaseSpec(
+                    "synthesis",
+                    chain,
+                    _SYNTH_SYSTEM + _synth_user_content("", member_placeholders),
+                    n,
+                    message_count=3,
+                )
+            )
+            if self.extract_verdict_enabled:
+                # DSE-1514 review, Fix A: the two templates below are the REAL
+                # extraction/repair message content -- schema included exactly
+                # as rendered, and one placeholder label per real member --
+                # measured via conclave.verdict_synthesis's own builders rather
+                # than a hand-summed approximation. The schema's bytes are
+                # therefore already IN the template, so ``contract=True`` here
+                # only adds the flat provider-side structured-output framing
+                # allowance, never a second copy of the schema on top of it.
+                from .verdict_synthesis import VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES
+                from .verdict_synthesis import _build_messages as _verdict_build_messages
+                from .verdict_synthesis import _repair_instruction as _verdict_repair_instruction
+
+                extraction_messages = _verdict_build_messages("", member_placeholders)
+                extraction_template = "".join(m["content"] for m in extraction_messages)
+                repair_template = extraction_template + _verdict_repair_instruction(
+                    "x" * VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES
+                )
+                table.append(
+                    _PhaseSpec(
+                        "verdict_extraction",
+                        chain,
+                        extraction_template,
+                        n,
+                        message_count=3,
+                        contract=True,
+                    )
+                )
+                table.append(
+                    _PhaseSpec(
+                        "verdict_repair",
+                        chain,
+                        repair_template,
+                        n + 1,
+                        message_count=3,
+                        contract=True,
+                    )
+                )
+
+        return table
+
     def plan_calls(
         self,
         mode: str,
@@ -445,20 +807,9 @@ class Council:
         """Enumerate every provider call this mode could make, worst case (DSE-1514).
 
         The counts are derived from :mod:`conclave.modes` and
-        :meth:`_apply_verdict`, not from a remembered formula. With ``N`` keyed
-        members, ``C`` keyed chain candidates, ``R`` debate rounds, and ``V`` = 1
-        when verdict extraction is on:
-
-        * ``raw`` -- ``N``: fan-out only.
-        * ``synthesize`` -- ``N + C + 2CV``: fan-out, the chain, then
-          extract+repair per candidate.
-        * ``vote`` -- ``N``: fan-out only; no adjudication.
-        * ``debate`` -- ``N*R + C``: every round at full membership (drop-out
-          only shrinks it), then the final consolidation chain.
-        * ``adversarial`` -- ``N + C``: ``k`` proposer attempts plus ``N - k``
-          critics is exactly ``N`` for every ``k``; then the judge chain.
-        * ``elite`` -- ``3N + C + 2CV``: three phases at full membership, then
-          synthesis and verdict extraction.
+        :meth:`_apply_verdict`, not from a remembered formula -- see
+        :meth:`_plan_table` for the exact per-mode row table and the
+        DSE-1514 review Fix A rationale for the adversarial shape.
 
         Convergence early-stop, member drop-out, and a proposer succeeding on the
         first try all make a real run CHEAPER than its plan. A plan is never an
@@ -470,7 +821,8 @@ class Council:
             prompt: The exact user prompt (bounded by its UTF-8 byte length).
             rounds: Debate rounds; ignored for other modes.
             proposer: Adversarial proposer. It does not change the COUNT (see
-                above) and is accepted only for signature parity with the modes.
+                :meth:`_plan_table`) and is accepted only for signature parity
+                with the modes.
             choices: Vote choices, which enlarge the vote prompt template.
 
         Returns:
@@ -491,101 +843,32 @@ class Council:
         chain = self._keyed_chain()
         n_members = len(members)
         prompt_bytes = len(prompt.encode("utf-8"))
-        calls: list[PlannedCall] = []
 
-        def member_calls(phase: str, *, template: str, upstream: int) -> None:
-            for name, model_id in members:
+        table = self._plan_table(
+            mode, members=members, chain=chain, rounds=max(1, rounds), choices=choices
+        )
+        calls: list[PlannedCall] = []
+        for spec in table:
+            # Fix A note: a structured-output contract's schema bytes are
+            # already INSIDE spec.template (the verdict probes are measured
+            # from the real message builders, schema included -- see
+            # conclave.verdict_synthesis). ``contract`` therefore only adds the
+            # flat provider-side framing allowance here, never a second copy
+            # of the schema on top of the prompt bound.
+            template_bytes = len(spec.template.encode("utf-8"))
+            framing = 64 + (16 * spec.message_count) + (256 if spec.contract else 0)
+            for name, model_id in spec.targets:
                 calls.append(
                     PlannedCall(
-                        phase=phase,
+                        phase=spec.phase,
                         name=name,
                         model_id=model_id,
                         prompt_token_upper_bound=prompt_bytes,
-                        prompt_template_token_allowance=len(template.encode("utf-8")),
-                        provider_framing_token_allowance=64 + (16 * 2),
-                        upstream_output_call_count=upstream,
+                        prompt_template_token_allowance=template_bytes,
+                        provider_framing_token_allowance=framing,
+                        upstream_output_call_count=spec.upstream,
                         max_output_tokens=cap,
                     )
-                )
-
-        def chain_calls(phase: str, *, template: str, upstream: int, contract: bool) -> None:
-            for name, model_id in chain:
-                calls.append(
-                    PlannedCall(
-                        phase=phase,
-                        name=name,
-                        model_id=model_id,
-                        prompt_token_upper_bound=(
-                            prompt_bytes + (_VERDICT_CONTRACT_BYTES if contract else 0)
-                        ),
-                        prompt_template_token_allowance=len(template.encode("utf-8")),
-                        provider_framing_token_allowance=(64 + (16 * 3) + (256 if contract else 0)),
-                        upstream_output_call_count=upstream,
-                        max_output_tokens=cap,
-                    )
-                )
-
-        if mode in ("raw", "synthesize"):
-            member_calls("member", template="", upstream=0)
-        elif mode == "vote":
-            member_calls(
-                "member",
-                template=prompts.VOTE_SYSTEM + prompts.vote_user("", choices or []),
-                upstream=0,
-            )
-        elif mode == "debate":
-            member_calls("round-1", template="", upstream=0)
-            for round_no in range(2, max(1, rounds) + 1):
-                member_calls(
-                    f"round-{round_no}",
-                    template=(
-                        prompts.DEBATE_SYSTEM
-                        + prompts.debate_round_user("", round_no, max(1, rounds), "")
-                    ),
-                    upstream=n_members,
-                )
-        elif mode == "adversarial":
-            # k proposer attempts + (N - k) critics == N, for every k.
-            member_calls("proposal", template="", upstream=0)
-        elif mode == "elite":
-            member_calls("initial", template="", upstream=0)
-            member_calls(
-                "critique",
-                template=prompts.ELITE_CRITIC_SYSTEM + prompts.elite_critic_user("", []),
-                upstream=n_members,
-            )
-            member_calls("revision", template=prompts.ELITE_REVISION_SYSTEM, upstream=2 * n_members)
-
-        if mode == "debate":
-            chain_calls(
-                "debate_final",
-                template=(
-                    prompts.DEBATE_FINAL_SYSTEM + prompts.debate_final_user("", max(1, rounds), "")
-                ),
-                upstream=n_members,
-                contract=False,
-            )
-        elif mode == "adversarial":
-            chain_calls(
-                "judge",
-                template=prompts.JUDGE_SYSTEM + prompts.judge_user("", "", "", ""),
-                upstream=n_members,
-                contract=False,
-            )
-        elif mode in ("synthesize", "elite"):
-            chain_calls("synthesis", template=_SYNTH_SYSTEM, upstream=n_members, contract=False)
-            if self.extract_verdict_enabled:
-                chain_calls(
-                    "verdict_extraction",
-                    template=_VERDICT_TEMPLATE_PROBE,
-                    upstream=n_members,
-                    contract=True,
-                )
-                chain_calls(
-                    "verdict_repair",
-                    template=_VERDICT_TEMPLATE_PROBE,
-                    upstream=n_members + 1,
-                    contract=True,
                 )
 
         return CallPlan(
@@ -669,6 +952,32 @@ class Council:
             len(plan.calls),
             self.max_spend_usd,
         )
+
+    def _gate_live_run(
+        self,
+        mode: str,
+        prompt: str,
+        *,
+        rounds: int | None = None,
+        proposer: str | None = None,
+        choices: list[str] | None = None,
+    ) -> None:
+        """THE single pre-flight spend-gate chokepoint (DSE-1514 review, Fix C).
+
+        :meth:`_cached_run` and :meth:`ask_stream` each call this exactly
+        once, always AFTER their cache-hit decision and always BEFORE the
+        first provider call -- a cache hit returns before reaching this
+        method entirely, since it makes no call and cannot exceed any cap.
+        Before this fix the same :meth:`_enforce_spend_cap` call was
+        duplicated at one site per cache branch (four call sites total, two
+        per entry point); collapsing them here means "does this run get
+        gated" has exactly one answer per entry point instead of two branches
+        that had to be kept in sync by hand.
+
+        A thin, behavior-preserving wrapper over :meth:`_enforce_spend_cap`,
+        which still owns the actual planning/pricing/raising.
+        """
+        self._enforce_spend_cap(mode, prompt, rounds=rounds, proposer=proposer, choices=choices)
 
     def _cache_key(
         self,
@@ -772,33 +1081,36 @@ class Council:
         A ``"terminal_failure"`` ledger entry (the model answered, just not
         usably) is unaffected and remains cacheable exactly as before --
         re-running would not produce a different, better answer.
+
+        **One gate chokepoint (DSE-1514 review, Fix C).** :meth:`_gate_live_run`
+        is called exactly once here, after the cache-hit decision above (a hit
+        returns before reaching it) and before ``run()`` -- regardless of
+        whether caching is enabled at all. This replaced two separate call
+        sites (one per cache branch) that had to make the identical call.
         """
-        if not self.cache_enabled:
-            self._enforce_spend_cap(mode, prompt, rounds=rounds, proposer=proposer, choices=choices)
-            result = await run()
-            self._ensure_manifest(result, mode)
-            self._price_manifest(result)
-            return result
+        key: str | None = None
+        if self.cache_enabled:
+            key = self._cache_key(
+                prompt,
+                mode,
+                rounds=rounds,
+                proposer=proposer,
+                converge_threshold=converge_threshold,
+                choices=choices,
+            )
+            hit = cache_mod.load(key)
+            if hit is not None:
+                logger.info("cache hit for %s run (%s)", mode, key[:12])
+                self._ensure_manifest(hit, mode)
+                self._price_manifest(hit)
+                return hit
 
-        key = self._cache_key(
-            prompt,
-            mode,
-            rounds=rounds,
-            proposer=proposer,
-            converge_threshold=converge_threshold,
-            choices=choices,
-        )
-        hit = cache_mod.load(key)
-        if hit is not None:
-            logger.info("cache hit for %s run (%s)", mode, key[:12])
-            self._ensure_manifest(hit, mode)
-            self._price_manifest(hit)
-            return hit
-
-        self._enforce_spend_cap(mode, prompt, rounds=rounds, proposer=proposer, choices=choices)
+        self._gate_live_run(mode, prompt, rounds=rounds, proposer=proposer, choices=choices)
         result = await run()
         self._ensure_manifest(result, mode)
         self._price_manifest(result)
+        if not self.cache_enabled:
+            return result
         if result.primary_failed_over:
             logger.info(
                 "not caching %s run (%s): primary adjudicator failed for an infrastructure reason",
@@ -1375,6 +1687,13 @@ class Council:
 
         mode = "synthesize" if synthesize else "raw"
 
+        # One gate chokepoint (DSE-1514 review, Fix C): a cache hit returns
+        # below before ``_gate_live_run`` is ever reached, since it makes no
+        # provider call and cannot exceed any cap. Everything past the hit
+        # check is a live run, so the gate call sits exactly once, right
+        # before the streaming driver starts -- previously duplicated at one
+        # site per cache branch.
+        key: str | None = None
         if self.cache_enabled:
             key = self._cache_key(prompt, mode)
             hit = cache_mod.load(key)
@@ -1384,29 +1703,30 @@ class Council:
                     yield event
                 return
 
-            # Live miss: stream, capture the terminal result, then store it
-            # (no-store on primary infrastructure failure -- see the docstring).
-            self._enforce_spend_cap(mode, prompt)
-            final: CouncilResult | None = None
+        self._gate_live_run(mode, prompt)
+
+        if not self.cache_enabled:
             async for event in stream_ask(self, prompt, synthesize=synthesize):
-                if event.type == "done" and event.result is not None:
-                    final = event.result
                 yield event
-            if final is not None:
-                if final.primary_failed_over:
-                    logger.info(
-                        "not caching %s run (%s): primary adjudicator failed for an "
-                        "infrastructure reason",
-                        mode,
-                        key[:12],
-                    )
-                else:
-                    cache_mod.store(key, final)
             return
 
-        self._enforce_spend_cap(mode, prompt)
+        # Live miss: stream, capture the terminal result, then store it
+        # (no-store on primary infrastructure failure -- see the docstring).
+        final: CouncilResult | None = None
         async for event in stream_ask(self, prompt, synthesize=synthesize):
+            if event.type == "done" and event.result is not None:
+                final = event.result
             yield event
+        if final is not None:
+            if final.primary_failed_over:
+                logger.info(
+                    "not caching %s run (%s): primary adjudicator failed for an "
+                    "infrastructure reason",
+                    mode,
+                    key[:12],
+                )
+            else:
+                cache_mod.store(key, final)
 
     @staticmethod
     def _replay_cached(result: CouncilResult) -> list[StreamEvent]:
@@ -1516,16 +1836,7 @@ class Council:
             )
             return None
 
-        blocks = "\n\n".join(
-            f"### Answer from {a.name} ({a.model_id})"
-            f"{f' (Answer ID: {a.answer_id})' if a.answer_id else ''}\n{a.answer}"
-            for a in usable
-        )
-        user_content = (
-            f"Original prompt:\n{result.prompt}\n\n"
-            f"Council answers:\n\n{blocks}\n\n"
-            "Now produce the consolidated answer."
-        )
+        user_content = _synth_user_content(result.prompt, usable)
         outcome = await self._adjudicate_and_record(
             result,
             "synthesis",

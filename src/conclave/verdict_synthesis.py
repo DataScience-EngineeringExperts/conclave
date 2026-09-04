@@ -171,19 +171,6 @@ _EXTRACTION_SYSTEM = (
     "clustering. Emit only the fields in the schema."
 )
 
-# DSE-1514: byte sizes the pre-flight spend planner needs without making a call.
-# The extraction schema and its system prompt are fixed, so their UTF-8 byte cost
-# is a constant of this module rather than a per-run guess.
-VERDICT_CONTRACT_BYTES = len(
-    json.dumps(
-        verdict_extraction_json_schema(),
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-)
-VERDICT_TEMPLATE_PROBE = _EXTRACTION_SYSTEM
-
 
 class VerdictSynthesisResult(BaseModel):
     """The outcome of one verdict-extraction run (CAC-05 engine return type).
@@ -397,6 +384,35 @@ def _build_messages(prompt: str, responders: list[ModelAnswer]) -> list[dict[str
         {"role": "system", "content": _EXTRACTION_SYSTEM},
         {"role": "user", "content": user},
     ]
+
+
+def _repair_instruction(errors: str) -> str:
+    """Build the fixed repair-retry instruction wrapping a bounded error detail.
+
+    Extracted into its own function (DSE-1514 review, Fix A) so a template
+    probe can measure the EXACT fixed wording :func:`extract_verdict` embeds
+    for real (with a placeholder error detail), rather than a hand-duplicated
+    copy that could silently drift from the real repair message.
+    :meth:`conclave.council.Council._plan_table` calls this directly -- see
+    that method's docstring for why the probe is computed per-call there
+    (using the run's real member count) rather than as a fixed module
+    constant here.
+
+    Args:
+        errors: The bounded validation-error detail from
+            :func:`_parse_and_validate` (already capped at
+            ``VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES``).
+
+    Returns:
+        The repair-retry user-message content.
+    """
+    return (
+        "Your previous response could not be used. It must be a single "
+        "valid JSON object matching the schema exactly, with no prose "
+        "and no consensus number. The problem was:\n"
+        f"{errors}\n\n"
+        "Return only the corrected JSON object."
+    )
 
 
 def _strip_code_fence(text: str) -> str:
@@ -695,18 +711,7 @@ async def extract_verdict(
     ]
     retry: ModelAnswer | None = None
     if extraction is None:
-        repair_messages = messages + [
-            {
-                "role": "user",
-                "content": (
-                    "Your previous response could not be used. It must be a single "
-                    "valid JSON object matching the schema exactly, with no prose "
-                    "and no consensus number. The problem was:\n"
-                    f"{errors}\n\n"
-                    "Return only the corrected JSON object."
-                ),
-            }
-        ]
+        repair_messages = messages + [{"role": "user", "content": _repair_instruction(errors)}]
         retry = await model_caller(
             synthesizer_name,
             synthesizer_model_id,
