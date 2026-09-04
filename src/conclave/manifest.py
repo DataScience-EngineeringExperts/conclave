@@ -217,7 +217,7 @@ class ProviderExecutionReceipt(BaseModel):
     name: str
     provider: str
     model_id: str
-    generation_settings: dict[str, float] = Field(default_factory=dict)
+    generation_settings: dict[str, float | int] = Field(default_factory=dict)
     latency_ms: float = 0.0
     usage: TokenUsage | None = None
     estimated_cost: float | None = None
@@ -315,7 +315,7 @@ class ModelHarnessManifest(BaseModel):
     model_ids: list[str] = Field(default_factory=list)
 
     # Settings + execution receipts + aggregate latency/usage.
-    generation_settings: dict[str, float] = Field(default_factory=dict)
+    generation_settings: dict[str, float | int] = Field(default_factory=dict)
     receipts: list[ProviderExecutionReceipt] = Field(default_factory=list)
     total_latency_ms: float = 0.0
     total_usage: TokenUsage | None = None

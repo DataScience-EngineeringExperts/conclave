@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import typer
@@ -28,15 +30,34 @@ from .config import load_config
 from .council import Council
 from .eval_cli import app as eval_app
 from .models import CouncilResult, StreamEvent
+from .pricing import SpendCapExceeded, SpendRefused
 from .registry import DEFAULT_MODELS, key_present, key_source
 
 app = typer.Typer(
     add_completion=False,
     help="Bring-your-own-keys multi-model council. Fan a prompt to N models.",
+    # Explicit, not the version default (DSE-1514 review, F5): typer 0.12.0
+    # (allowed by this package's own `typer>=0.12.0` floor) defaults this to
+    # True, which renders local variables -- including the user's PROMPT --
+    # into an unhandled exception's stderr traceback. The installed 0.27.2
+    # happens to default False, but that is version luck, not a guarantee.
+    pretty_exceptions_show_locals=False,
 )
 app.add_typer(eval_app, name="eval")
 console = Console()
 err_console = Console(stderr=True)
+
+# Strict allow-list for --max-spend-usd, applied BEFORE Decimal() ever runs
+# (DSE-1514 review, F1). Requires a leading digit (no sign, so "-5" and
+# "+5" are rejected the same way as any other malformed input), an optional
+# fractional part, and an optional exponent. This rejects every spelling of
+# non-finite input (`NaN`, `-NaN`, `sNaN`, `Infinity`, `inf`, case-insensitive
+# and signed) and PEP-515 underscore grouping (`Decimal("0_5")` is `5`, not
+# `0.5` -- a silent 10x cap the operator did not type) that `Decimal(...)`
+# would otherwise accept outright. `1e999999` matches and is deliberately
+# still accepted: it is an enormous but perfectly finite Decimal, and
+# `Council.__init__`'s `is_finite()` check does not reject it either.
+_SPEND_CAP_PATTERN = re.compile(r"^\d+(\.\d+)?([eE][+-]?\d+)?$")
 
 
 def _result_to_dict(result: CouncilResult) -> dict:
@@ -507,6 +528,14 @@ _DEFAULT_CONVERGE_THRESHOLD = 0.95
 # any exit code it already handles.
 _DEGRADED_EXIT_CODE = 3
 
+# Distinct exit code for a pre-flight spend REFUSAL (DSE-1514): the run was
+# never started because its worst-case cost could not be bounded, or was bounded
+# and exceeded --max-spend-usd. Kept apart from 1 (nothing usable came back), 2
+# (usage error), and 3 (degraded) because it is categorically different: nothing
+# ran, nothing was spent, and retrying with a higher cap or an output cap is the
+# fix. A caller doing `echo $?` adds one branch and reinterprets nothing.
+_SPEND_REFUSED_EXIT_CODE = 4
+
 
 def _resolve_converge_threshold(
     converge: bool | None,
@@ -628,6 +657,27 @@ def ask(
             "hit the cached text is rendered in one shot (no live token stream)."
         ),
     ),
+    max_output_tokens: int | None = typer.Option(
+        None,
+        "--max-output-tokens",
+        help=(
+            "Hard ceiling on output tokens for every call this run makes "
+            "(members, synthesizer, judge, verdict extraction and its repair). "
+            "Defers to config `max_output_tokens` when unset. Required by "
+            "--max-spend-usd: unbounded output cannot be bounded in dollars."
+        ),
+        min=1,
+    ),
+    max_spend_usd: str | None = typer.Option(
+        None,
+        "--max-spend-usd",
+        help=(
+            "Refuse the run BEFORE the first provider call if its worst-case "
+            "call plan reserves more than this many USD, priced against the "
+            "packaged dated snapshot at ceiling rates. Exits 4 on refusal. "
+            "Requires --max-output-tokens (or config max_output_tokens)."
+        ),
+    ),
 ) -> None:
     """Run one of six council modes over PROMPT: synthesize, raw, debate, adversarial, vote, or elite.
 
@@ -660,6 +710,13 @@ def ask(
       (DSE-1512), this now also means the WHOLE chain was exhausted -- every
       candidate failed for an infrastructure reason -- rather than just the
       lone synthesizer failing.
+    * 4 -- the run was REFUSED before any provider call (DSE-1514): either its
+      worst-case call plan reserved more than ``--max-spend-usd`` (the message
+      names the reserved total, the cap, and the call count), or the plan could
+      not be bounded at all -- no output cap, no price snapshot, or a model with
+      no snapshot entry. Nothing ran and nothing was spent. Distinct from 3
+      (degraded): a degraded run happened and produced partial output; a refused
+      run never started.
 
     ``--json`` also carries the top-level ``"primary_failed_over"`` field
     (DSE-1512, additive): ``true`` when, for any role, the declared primary
@@ -697,115 +754,171 @@ def ask(
         )
         raise typer.Exit(code=2)
 
+    # --max-spend-usd is typed str on purpose: typer's float coercion would
+    # destroy the exactness the whole cap rests on (Decimal(0.4) != Decimal("0.4")).
+    spend_cap: Decimal | None = None
+    if max_spend_usd is not None:
+        # A strict format allow-list runs BEFORE Decimal() (DSE-1514 review,
+        # F1): Decimal("NaN") is silently accepted by Decimal() and crashes
+        # uncaught at an ordering comparison; Decimal("Infinity") is accepted
+        # too and permanently disables the gate (nothing can ever exceed it);
+        # Decimal("0_5") is 5, not 0.5, via PEP-515 underscore grouping -- a
+        # silent 10x cap the operator did not type. Rejecting the spelling
+        # before conversion turns all three into the same clean usage error.
+        if not _SPEND_CAP_PATTERN.fullmatch(max_spend_usd):
+            err_console.print(
+                f"[red]--max-spend-usd must be an exact decimal amount, got '{max_spend_usd}'.[/red]"
+            )
+            raise typer.Exit(code=2)
+        try:
+            spend_cap = Decimal(max_spend_usd)
+        except InvalidOperation:
+            err_console.print(
+                f"[red]--max-spend-usd must be an exact decimal amount, got '{max_spend_usd}'.[/red]"
+            )
+            raise typer.Exit(code=2) from None
+        # Belt-and-suspenders on top of the format check: Council.__init__
+        # enforces this identically for library callers who bypass the CLI.
+        if not spend_cap.is_finite() or spend_cap <= 0:
+            err_console.print(
+                "[red]--max-spend-usd must be a finite amount greater than zero.[/red]"
+            )
+            raise typer.Exit(code=2)
+
     cfg = load_config()
     members = cfg.resolve_council(council)
     if not members:
         err_console.print(f"[red]No council members resolved from '{council}'.[/red]")
         raise typer.Exit(code=2)
 
-    c = Council(models=members, synthesizer=synthesizer, config=cfg, cache=cache)
+    try:
+        c = Council(
+            models=members,
+            synthesizer=synthesizer,
+            config=cfg,
+            cache=cache,
+            max_output_tokens=max_output_tokens,
+            max_spend_usd=spend_cap,
+        )
+    except SpendRefused as refusal:
+        err_console.print(f"[red]{refusal}[/red]")
+        raise typer.Exit(code=_SPEND_REFUSED_EXIT_CODE) from None
 
-    # Streaming path: live token output (synthesize/raw only, not with --json).
-    # It produces the same final CouncilResult, so the exit-code contract below
-    # applies identically.
-    if stream and not as_json:
-        result = _stream_to_terminal(c, prompt, synthesize=(mode_lower == "synthesize"))
-        _render_failover_note(result)
-        if not result.successful_answers:
+    # Refusal happens at construction (no output cap for a spend cap) or
+    # inside the mode dispatch below (an over-budget or unpriceable plan) --
+    # both map to the same exit code so a caller checking exit-code alone
+    # cannot mistake a refused run for a clean or degraded one.
+    try:
+        # Streaming path: live token output (synthesize/raw only, not with --json).
+        # It produces the same final CouncilResult, so the exit-code contract below
+        # applies identically.
+        if stream and not as_json:
+            result = _stream_to_terminal(c, prompt, synthesize=(mode_lower == "synthesize"))
+            _render_failover_note(result)
+            if not result.successful_answers:
+                err_console.print(
+                    "[red]No usable council answers. Run 'conclave providers' to check keys.[/red]"
+                )
+                raise typer.Exit(code=1)
+            if result.degraded:
+                # _stream_to_terminal already printed the "No synthesis: ..." warning
+                # (from synthesis_error) to stderr; only the exit code is new here.
+                raise typer.Exit(code=_DEGRADED_EXIT_CODE)
+            return
+
+        if mode_lower == "debate":
+            threshold = _resolve_converge_threshold(
+                converge, converge_threshold, cfg.converge_threshold
+            )
+            result = c.debate_sync(prompt, rounds=rounds, converge_threshold=threshold)
+        elif mode_lower == "adversarial":
+            result = c.adversarial_sync(prompt, proposer=proposer)
+        elif mode_lower == "vote":
+            choice_list = [ch.strip() for ch in (choices or "").split(",") if ch.strip()]
+            result = c.vote_sync(prompt, choices=choice_list)
+        elif mode_lower == "elite":
+            result = c.elite_sync(prompt)
+        else:
+            result = c.ask_sync(prompt, synthesize=(mode_lower == "synthesize"))
+
+        # A run that produced no usable member answers is a failure for scripting
+        # purposes regardless of output format. We compute this once and apply the
+        # same exit-code contract to both the JSON and human paths. A run that DID
+        # get usable member answers but whose judge/synthesizer step failed is a
+        # distinct, less severe failure (DSE-901): ``result.degraded`` (checked
+        # below, after the hard-failure/usage-error exits) drives exit code
+        # ``_DEGRADED_EXIT_CODE`` instead of silently returning 0.
+        no_usable_answers = not result.successful_answers
+        elite_not_ready = mode_lower == "elite" and (
+            result.elite is None or result.elite.decision_readiness != "ready"
+        )
+
+        payload = _result_to_dict(result) if as_json or json_output is not None else None
+        json_output_failed = False
+        if json_output is not None:
+            try:
+                _write_json_output(json_output, payload or {})
+            except Exception:
+                # The completed result must remain available on its normal stdout path
+                # even when the optional persistence side effect fails.
+                err_console.print("[red]Could not write --json-output.[/red]")
+                json_output_failed = True
+
+        if as_json:
+            # Always emit valid JSON to stdout so a consumer can parse the payload,
+            # then signal failure via the exit code if nothing usable came back.
+            console.print_json(json.dumps(payload))
+            if json_output_failed or no_usable_answers or elite_not_ready:
+                raise typer.Exit(code=1)
+            if result.degraded:
+                raise typer.Exit(code=_DEGRADED_EXIT_CODE)
+            return
+
+        if mode_lower == "elite":
+            if result.elite is None:
+                err_console.print("[red]Elite decision not ready: missing result[/red]")
+                raise typer.Exit(code=1)
+            _render_elite(result)
+            _render_failover_note(result)
+            if not result.elite.completed:
+                reason = result.elite.failure_reason or ", ".join(result.elite.readiness_reasons)
+                err_console.print(f"[red]Elite protocol incomplete: {reason}[/red]")
+                raise typer.Exit(code=1)
+            if result.elite.decision_readiness != "ready":
+                reasons = ", ".join(result.elite.readiness_reasons) or "no reason recorded"
+                err_console.print(
+                    "[red]Elite decision not ready: "
+                    f"{result.elite.decision_readiness} ({reasons})[/red]"
+                )
+                raise typer.Exit(code=1)
+            if json_output_failed:
+                raise typer.Exit(code=1)
+            return
+
+        if no_usable_answers:
             err_console.print(
                 "[red]No usable council answers. Run 'conclave providers' to check keys.[/red]"
             )
             raise typer.Exit(code=1)
-        if result.degraded:
-            # _stream_to_terminal already printed the "No synthesis: ..." warning
-            # (from synthesis_error) to stderr; only the exit code is new here.
-            raise typer.Exit(code=_DEGRADED_EXIT_CODE)
-        return
 
-    if mode_lower == "debate":
-        threshold = _resolve_converge_threshold(
-            converge, converge_threshold, cfg.converge_threshold
-        )
-        result = c.debate_sync(prompt, rounds=rounds, converge_threshold=threshold)
-    elif mode_lower == "adversarial":
-        result = c.adversarial_sync(prompt, proposer=proposer)
-    elif mode_lower == "vote":
-        choice_list = [ch.strip() for ch in (choices or "").split(",") if ch.strip()]
-        result = c.vote_sync(prompt, choices=choice_list)
-    elif mode_lower == "elite":
-        result = c.elite_sync(prompt)
-    else:
-        result = c.ask_sync(prompt, synthesize=(mode_lower == "synthesize"))
-
-    # A run that produced no usable member answers is a failure for scripting
-    # purposes regardless of output format. We compute this once and apply the
-    # same exit-code contract to both the JSON and human paths. A run that DID
-    # get usable member answers but whose judge/synthesizer step failed is a
-    # distinct, less severe failure (DSE-901): ``result.degraded`` (checked
-    # below, after the hard-failure/usage-error exits) drives exit code
-    # ``_DEGRADED_EXIT_CODE`` instead of silently returning 0.
-    no_usable_answers = not result.successful_answers
-    elite_not_ready = mode_lower == "elite" and (
-        result.elite is None or result.elite.decision_readiness != "ready"
-    )
-
-    payload = _result_to_dict(result) if as_json or json_output is not None else None
-    json_output_failed = False
-    if json_output is not None:
-        try:
-            _write_json_output(json_output, payload or {})
-        except Exception:
-            # The completed result must remain available on its normal stdout path
-            # even when the optional persistence side effect fails.
-            err_console.print("[red]Could not write --json-output.[/red]")
-            json_output_failed = True
-
-    if as_json:
-        # Always emit valid JSON to stdout so a consumer can parse the payload,
-        # then signal failure via the exit code if nothing usable came back.
-        console.print_json(json.dumps(payload))
-        if json_output_failed or no_usable_answers or elite_not_ready:
-            raise typer.Exit(code=1)
-        if result.degraded:
-            raise typer.Exit(code=_DEGRADED_EXIT_CODE)
-        return
-
-    if mode_lower == "elite":
-        if result.elite is None:
-            err_console.print("[red]Elite decision not ready: missing result[/red]")
-            raise typer.Exit(code=1)
-        _render_elite(result)
+        _RENDERERS[result.mode](result)
         _render_failover_note(result)
-        if not result.elite.completed:
-            reason = result.elite.failure_reason or ", ".join(result.elite.readiness_reasons)
-            err_console.print(f"[red]Elite protocol incomplete: {reason}[/red]")
-            raise typer.Exit(code=1)
-        if result.elite.decision_readiness != "ready":
-            reasons = ", ".join(result.elite.readiness_reasons) or "no reason recorded"
-            err_console.print(
-                "[red]Elite decision not ready: "
-                f"{result.elite.decision_readiness} ({reasons})[/red]"
-            )
-            raise typer.Exit(code=1)
         if json_output_failed:
             raise typer.Exit(code=1)
-        return
-
-    if no_usable_answers:
+        if result.degraded:
+            # The mode-specific renderer above already printed the "No synthesis: ..."
+            # / "No verdict: ..." warning (from synthesis_error / verdict_error) to
+            # stderr; only the exit code is new here (DSE-901).
+            raise typer.Exit(code=_DEGRADED_EXIT_CODE)
+    except SpendCapExceeded as refusal:
         err_console.print(
-            "[red]No usable council answers. Run 'conclave providers' to check keys.[/red]"
+            f"[red]{refusal}. Raise --max-spend-usd, lower --max-output-tokens, "
+            f"or shrink the council.[/red]"
         )
-        raise typer.Exit(code=1)
-
-    _RENDERERS[result.mode](result)
-    _render_failover_note(result)
-    if json_output_failed:
-        raise typer.Exit(code=1)
-    if result.degraded:
-        # The mode-specific renderer above already printed the "No synthesis: ..."
-        # / "No verdict: ..." warning (from synthesis_error / verdict_error) to
-        # stderr; only the exit code is new here (DSE-901).
-        raise typer.Exit(code=_DEGRADED_EXIT_CODE)
+        raise typer.Exit(code=_SPEND_REFUSED_EXIT_CODE) from None
+    except SpendRefused as refusal:
+        err_console.print(f"[red]{refusal}[/red]")
+        raise typer.Exit(code=_SPEND_REFUSED_EXIT_CODE) from None
 
 
 @app.command()

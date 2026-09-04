@@ -59,7 +59,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from . import cache as cache_mod
-from . import transport
+from . import prompts, transport
 from .adapters.base import redact
 from .config import ConclaveConfig, load_config, parse_synthesizer_chain
 from .logging import get_logger
@@ -81,9 +81,13 @@ from .models import (
     TokenUsage,
 )
 from .pricing import (
+    PriceRates,
     PriceSnapshot,
+    SpendCapExceeded,
+    SpendUnboundable,
     load_default_price_snapshot,
     reported_usage_cost,
+    reserve_cost,
 )
 from .prompts import ELITE_PROMPT_VERSION, SYNTHESIS_PROMPT_VERSION
 from .providers import call_model, receipt_from_answer
@@ -113,6 +117,94 @@ _SYNTH_SYSTEM = (
     "Produce one consolidated, accurate answer. Reconcile agreements, surface "
     "and adjudicate disagreements, and note any answer that is clearly wrong. "
     "Do not invent a model's position; rely only on the answers provided."
+)
+
+
+def _synth_user_content(prompt: str, answers: Sequence[ModelAnswer]) -> str:
+    """Build the synthesizer's user-message content from prompt + member answers.
+
+    Extracted from :meth:`Council._synthesize` (unchanged behavior, same
+    string) so :meth:`Council._plan_table` can measure the EXACT fixed
+    wrapper/label bytes a real synthesis call embeds -- via
+    :func:`_placeholder_answers`, empty-text answers with the real names this
+    run would use -- instead of a hand-duplicated approximation that could
+    silently drift from the real prompt (DSE-1514 review, Fix A).
+    """
+    blocks = "\n\n".join(
+        f"### Answer from {a.name} ({a.model_id})"
+        f"{f' (Answer ID: {a.answer_id})' if a.answer_id else ''}\n{a.answer}"
+        for a in answers
+    )
+    return (
+        f"Original prompt:\n{prompt}\n\n"
+        f"Council answers:\n\n{blocks}\n\n"
+        "Now produce the consolidated answer."
+    )
+
+
+# Conservative byte allowance for an optional answer_id in a template probe
+# (DSE-1514 review, Fix A). A real id is "ca_" + 24 hex chars (27 bytes), or,
+# for a phase-derived artifact (:func:`conclave.models.derive_phase_answer_id`),
+# "ca_<phase>_" + 24 hex chars -- a few bytes longer for any phase name
+# conclave uses today. A placeholder at least this long makes a template
+# probe's label byte count an upper bound of BOTH the with-id and the
+# without-id (positional-fallback) real cases, never an under-count.
+_ANSWER_ID_PROBE = "ca_" + ("f" * 45)
+
+
+def _placeholder_answers(members: Sequence[tuple[str, str]]) -> list[ModelAnswer]:
+    """Zero-length, worst-case-id answers for measuring a template's real fixed bytes.
+
+    Used only by :meth:`Council._plan_table` to measure a phase's fixed
+    per-item label overhead (member name, model id, and/or an optional answer
+    id) EXACTLY -- using the real names/ids the run would actually use --
+    rather than approximating it with a guessed constant. The answer TEXT is
+    deliberately left empty: that variable part is bounded separately by the
+    per-call ``upstream_output_call_count`` times the output cap.
+
+    Args:
+        members: The ``(friendly_name, model_id)`` pairs a template needs one
+            placeholder answer per.
+
+    Returns:
+        One placeholder :class:`~conclave.models.ModelAnswer` per member, in
+        the same order.
+    """
+    return [
+        ModelAnswer(name=name, model_id=model_id, answer="", answer_id=_ANSWER_ID_PROBE)
+        for name, model_id in members
+    ]
+
+
+# The modes Council.plan_calls knows how to enumerate (DSE-1514). Kept as its own
+# frozenset (rather than re-deriving from _RENDERERS or similar) so the planner's
+# contract is explicit and independent of any CLI-only vocabulary.
+_VALID_PLAN_MODES = frozenset({"raw", "synthesize", "vote", "debate", "adversarial", "elite"})
+
+# The exact refusal message when a spend cap is requested but output is
+# unbounded (DSE-1514): shared verbatim by Council.plan_calls, the Council
+# constructor's max_spend_usd guard, and the CLI so the message a library caller
+# sees and the message a CLI user sees are byte-identical.
+_NO_OUTPUT_CAP_MESSAGE = (
+    "cannot bound spend: no output cap (set --max-output-tokens or config max_output_tokens)"
+)
+
+# The closed vocabulary of pricing_warnings identifiers (DSE-1514). Every
+# append to the ``warnings`` list -- or the list-literal assignment on the
+# missing-snapshot path -- inside :meth:`Council._price_manifest` uses one of
+# these exact strings, never interpolated text, a provider name, or a count,
+# so a warning can never carry secret-shaped material. Tests in
+# tests/test_secret_safety_matrix.py assert both statically (scanning the
+# source for every append call) and dynamically (every reachable warning
+# shape across every mode) that nothing else is ever appended.
+PRICING_WARNING_VOCABULARY = frozenset(
+    {
+        "price_snapshot_stale",
+        "price_snapshot_unavailable",
+        "unpriced_models_present",
+        "unpriced_receipts_present",
+        "no_output_cap_configured",
+    }
 )
 
 # Re-exported for callers that want the version without importing prompts.
@@ -169,6 +261,166 @@ class AdjudicationOutcome:
         return self.answer.model_id if self.answer is not None else None
 
 
+@dataclass(frozen=True)
+class PlannedCall:
+    """One provider call a mode COULD make, bounded without making it.
+
+    Every field is knowable before the first call: the resolved model, the
+    output cap the call will be issued with, and a three-part input bound (exact
+    prompt bytes, fixed template bytes, provider framing) plus a count of
+    upstream calls whose not-yet-produced output this call's input will embed.
+
+    Attributes:
+        phase: The manifest phase this call would be recorded under.
+        name: Friendly member / candidate name.
+        model_id: Resolved provider-prefixed model id.
+        prompt_token_upper_bound: UTF-8 bytes of the exact known content.
+        prompt_template_token_allowance: UTF-8 bytes of the fixed system + user
+            template wording that will surround it.
+        provider_framing_token_allowance: ``64 + 16 * messages`` (+256 with a
+            structured-output contract), mirroring the eval runner.
+        upstream_output_call_count: How many upstream calls' outputs this call's
+            input embeds. Multiplied by the output cap and the snapshot's
+            ``max_output_bytes_per_token`` to bound them.
+        max_output_tokens: The hard output cap this call would carry.
+    """
+
+    phase: str
+    name: str
+    model_id: str
+    prompt_token_upper_bound: int
+    prompt_template_token_allowance: int
+    provider_framing_token_allowance: int
+    upstream_output_call_count: int
+    max_output_tokens: int
+
+    def input_bytes_bound(self, *, upstream_output_bytes_per_token: int) -> int:
+        """Total planned input-byte bound for one candidate rate (DSE-1514 review, Fix A).
+
+        Mirrors the input-side arithmetic :meth:`Council._reserve_plan` feeds
+        into :func:`conclave.pricing.reserve_cost` byte for byte, so a test can
+        assert a real, unplanned message list never exceeds what this call was
+        priced for without duplicating (and risking drifting from) the pricing
+        module's own formula.
+
+        Args:
+            upstream_output_bytes_per_token: The priced model's attested
+                upper bound on one output token's UTF-8 byte length (a
+                :class:`conclave.pricing.PriceRates` field) -- the same value
+                :meth:`Council._reserve_plan` reads off the snapshot entry.
+
+        Returns:
+            The upper bound, in bytes, on everything this call's input could
+            contain: the exact known prompt, the fixed template wording, the
+            provider framing allowance, and every upstream call's output cap
+            converted to bytes.
+        """
+        return (
+            self.prompt_token_upper_bound
+            + self.prompt_template_token_allowance
+            + self.provider_framing_token_allowance
+            + (
+                self.upstream_output_call_count
+                * self.max_output_tokens
+                * upstream_output_bytes_per_token
+            )
+        )
+
+
+@dataclass(frozen=True)
+class CallPlan:
+    """The complete worst-case call plan for one run of one mode."""
+
+    mode: str
+    calls: tuple[PlannedCall, ...]
+    member_count: int
+    chain_count: int
+
+
+@dataclass(frozen=True)
+class _PhaseSpec:
+    """One declarative row of a mode's worst-case call table (DSE-1514 review, Fix B).
+
+    :meth:`Council._plan_table` returns one of these per phase a mode could
+    run; :meth:`Council.plan_calls` expands each row into one
+    :class:`PlannedCall` per target, using the exact prompt bytes and the
+    output cap (the two values every row needs but none of them determine).
+    ``targets`` is the literal slice of keyed members or keyed chain
+    candidates this row calls -- a plain list, not a count -- so the SAME row
+    shape covers both a uniform "every member" phase (``targets`` is every
+    keyed member) and adversarial's split single-proposer /
+    ``(N-1)``-critics shape (two rows, each a different slice of ``members``).
+
+    Attributes:
+        phase: The manifest phase this call would be recorded under.
+        targets: The exact ``(name, model_id)`` pairs this row calls.
+        template: The fixed system + user template wording that will
+            surround the exact prompt bytes.
+        upstream: How many upstream calls' not-yet-produced output this
+            call's input embeds.
+        message_count: Messages this call sends, feeding the provider framing
+            allowance (``64 + 16 * message_count``, mirroring the eval
+            runner). Member-shaped phases send 2 (system + user); chain-shaped
+            phases send 3 (system + user + the assembled upstream material).
+        contract: Whether a structured-output contract is attached. Adds a
+            flat 256-byte provider framing allowance for the schema
+            registration itself; the schema's own byte cost is measured as
+            part of ``template`` (built via
+            :func:`conclave.verdict_synthesis._build_messages`, real member
+            placeholders, in :meth:`Council._plan_table`), never added twice.
+    """
+
+    phase: str
+    targets: Sequence[tuple[str, str]]
+    template: str
+    upstream: int
+    message_count: int = 2
+    contract: bool = False
+
+    def to_planned_call(
+        self,
+        *,
+        name: str,
+        model_id: str,
+        prompt_token_upper_bound: int,
+        max_output_tokens: int,
+    ) -> PlannedCall:
+        """Expand this row into one :class:`PlannedCall` for ``(name, model_id)`` (DSE-1514).
+
+        The template-bytes/framing-bytes arithmetic (a structured-output
+        contract's schema bytes live INSIDE ``template`` already; ``contract``
+        only adds the flat provider-side framing allowance for the schema
+        registration itself, never a second copy of the schema) is written
+        here exactly once and shared by two callers: :meth:`Council.plan_calls`
+        (expanding every target in ``self.targets``, BEFORE any call is made)
+        and :meth:`Council._price_manifest`'s phase-aware reservation (Round 4,
+        QA C1 -- pricing ONE already-made, usage-less receipt from the row
+        matching its phase).
+
+        Args:
+            name: Friendly member / candidate name for this specific call.
+            model_id: Resolved provider-prefixed model id for this call.
+            prompt_token_upper_bound: UTF-8 bytes of the exact known prompt
+                content this call sends.
+            max_output_tokens: The hard output cap this call would carry.
+
+        Returns:
+            The expanded :class:`PlannedCall`.
+        """
+        return PlannedCall(
+            phase=self.phase,
+            name=name,
+            model_id=model_id,
+            prompt_token_upper_bound=prompt_token_upper_bound,
+            prompt_template_token_allowance=len(self.template.encode("utf-8")),
+            provider_framing_token_allowance=(
+                64 + (16 * self.message_count) + (256 if self.contract else 0)
+            ),
+            upstream_output_call_count=self.upstream,
+            max_output_tokens=max_output_tokens,
+        )
+
+
 class Council:
     """A council of foundation models with an optional synthesizer.
 
@@ -223,6 +475,39 @@ class Council:
             When supplied, it participates in cache identity so grounded and
             ungrounded Elite runs cannot collide. The value is re-hashed before
             entering the canonical identity document.
+        max_output_tokens: Opt-in hard ceiling on output tokens for EVERY call
+            this council makes -- members, synthesis, judge, verdict extraction
+            and its repair retry, and the streaming paths (DSE-1514). ``None``
+            (the default) defers to ``config.max_output_tokens`` (itself
+            ``None`` unless set), leaving each provider's own default in place
+            exactly as before this flag existed. A cap is the precondition for
+            ``--max-spend-usd``: see :meth:`plan_calls`.
+        max_spend_usd: Opt-in pre-flight spend cap in USD (DSE-1514). When set,
+            every deliberation call (:meth:`ask`/:meth:`ask_stream` and their
+            mode wrappers -- :meth:`debate`, :meth:`adversarial`, :meth:`vote`,
+            :meth:`elite`, and their ``_sync`` variants) first enumerates
+            :meth:`plan_calls`, prices it via :meth:`_reserve_plan`, and raises
+            :class:`conclave.pricing.SpendCapExceeded` -- BEFORE any provider
+            call -- when the reserved total exceeds this cap. Requires
+            ``max_output_tokens`` (explicit or via config): an unbounded output
+            cannot be bounded in dollars, so setting this without a cap raises
+            :class:`conclave.pricing.SpendUnboundable` at construction time
+            rather than at the first call. ``None`` (the default) installs no
+            gate at all -- byte-identical to today.
+
+            **The gate has exactly one chokepoint, :meth:`_cached_run` (plus
+            :meth:`ask_stream`'s own call to the same :meth:`_gate_live_run`),
+            and nothing routes around it implicitly.** A caller that reaches
+            into a lower-level primitive DIRECTLY -- :meth:`fan_out`,
+            :meth:`synthesize_blocks`, :meth:`adjudicate`,
+            :func:`conclave.verdict_synthesis.extract_verdict`, or any
+            :mod:`conclave.modes` ``run_*`` function called without going
+            through the matching :class:`Council` method -- makes real
+            provider calls WITHOUT ever consulting ``max_spend_usd``, however
+            large. This is a deliberate seam (those primitives are also used
+            to build the gate's own byte-accounting), not an oversight; a
+            caller composing a custom flow from them is responsible for its
+            own spend discipline.
 
     Example:
         >>> council = Council(models=["grok", "perplexity"], synthesizer="claude")
@@ -241,6 +526,8 @@ class Council:
         extract_verdict: bool = True,
         allow_transport_debug_logging: bool = False,
         source_bundle_digest: str | None = None,
+        max_output_tokens: int | None = None,
+        max_spend_usd: Decimal | None = None,
     ) -> None:
         self.config = config or load_config()
         self.requested_models = list(models)
@@ -270,10 +557,39 @@ class Council:
         # that DEBUG band and accept the responsibility.
         if not allow_transport_debug_logging:
             transport.guard_transport_logging()
-        # Replaced by the real config/argument resolution in the output-cap task
-        # (DSE-1514 Task 9). Needed already by `_price_manifest` (Task 7), which
-        # reads it to decide whether a failed call's reservation can be priced.
-        self.max_output_tokens: int | None = None
+        # Explicit override wins; otherwise defer to config (off by default).
+        # A cap is what makes a run's output -- and therefore its spend --
+        # boundable at all; see Council.plan_calls and the --max-spend-usd gate.
+        self.max_output_tokens = (
+            self.config.max_output_tokens if max_output_tokens is None else max_output_tokens
+        )
+        # A zero/negative cap is not a ceiling at all: it either bypasses the
+        # provider call entirely (max_tokens=0) or crashes downstream in
+        # pricing.py's token-bound arithmetic. Reject it here so every caller
+        # (library or CLI) gets the same clean failure at construction (DSE-1514
+        # review, F2). The CLI additionally enforces this with `min=1` on the
+        # typer option for a usage-error exit before Council is even reached.
+        if self.max_output_tokens is not None and self.max_output_tokens <= 0:
+            raise ValueError("max_output_tokens must be a positive integer")
+        # A spend cap without an output cap is not enforceable: output is the
+        # unbounded term. Refuse at construction rather than at the first call,
+        # so a library caller cannot get halfway into a run before finding out.
+        self.max_spend_usd = max_spend_usd
+        if max_spend_usd is not None:
+            # Reject BEFORE any ordering comparison downstream (_reserve_plan's
+            # `reserved > self.max_spend_usd`): Decimal("NaN") raises
+            # InvalidOperation on any ordering comparison (an uncaught crash),
+            # and Decimal("Infinity") is finite-comparison-safe but silently
+            # disables the gate -- nothing can ever exceed it (DSE-1514 review,
+            # F1). `is_finite()` alone rejects both NaN and +/-Infinity without
+            # ever evaluating `<= 0` against a NaN, which would itself raise.
+            # This guards every library caller; the CLI applies its own
+            # stricter format check (rejecting non-finite spellings, signs, and
+            # underscore literals) before `Decimal(...)` is ever constructed.
+            if not max_spend_usd.is_finite() or max_spend_usd <= 0:
+                raise ValueError("max_spend_usd must be a finite positive Decimal")
+            if self.max_output_tokens is None:
+                raise SpendUnboundable(_NO_OUTPUT_CAP_MESSAGE)
 
     @staticmethod
     def _resolve_chain(spec: str | Sequence[str] | None, config: ConclaveConfig) -> list[str]:
@@ -318,6 +634,457 @@ class Council:
                 logger.warning("skipping %s (%s): no API key in environment", name, model_id)
                 skipped.append(name)
         return members, skipped
+
+    def _generation_settings(self) -> dict[str, float | int]:
+        """The generation settings actually used, for the manifest and receipts.
+
+        ``max_output_tokens`` appears ONLY when a cap is configured, so an
+        uncapped run's manifest is byte-identical to v1.3.0's.
+        """
+        settings: dict[str, float | int] = {
+            "temperature": self.temperature,
+            "timeout": self.timeout,
+        }
+        if self.max_output_tokens is not None:
+            settings["max_output_tokens"] = self.max_output_tokens
+        return settings
+
+    def _keyed_chain(self) -> list[tuple[str, str]]:
+        """Resolve the synthesizer chain to the candidates that could be CALLED.
+
+        :meth:`adjudicate` skips an unkeyed candidate without making a call, so
+        an unkeyed candidate cannot cost anything and is excluded from the plan.
+        ``registry.key_present`` returns ``True`` for an unknown provider prefix,
+        which errs toward INCLUDING the call -- the safe direction for a ceiling.
+        """
+        pairs = [(name, self.config.resolve_model_id(name)) for name in self.synthesizer_chain]
+        return [(name, model_id) for name, model_id in pairs if key_present(model_id)]
+
+    def _plan_table(
+        self,
+        mode: str,
+        *,
+        members: list[tuple[str, str]],
+        chain: list[tuple[str, str]],
+        rounds: int,
+        choices: list[str] | None,
+    ) -> list[_PhaseSpec]:
+        """Return the declarative worst-case phase table for ``mode`` (DSE-1514 review, Fix B).
+
+        Pure data assembly: no byte arithmetic and no :class:`PlannedCall`
+        construction happens here -- see :meth:`plan_calls`, which expands
+        every row with the one piece of run-specific data every row shares
+        (the exact prompt bytes and the output cap). That split is what lets
+        all six modes share a single expansion loop instead of the two
+        parallel if/elif chains this table replaces.
+
+        With ``N`` keyed members, ``C`` keyed chain candidates, ``R`` debate
+        rounds, and ``V`` = 1 when verdict extraction is on, the row counts
+        reproduce exactly:
+
+        * ``raw`` -- ``N``: one member-phase row, no chain row.
+        * ``synthesize`` -- ``N + C + 2CV``: the same member-phase row, plus a
+          chain synthesis row and (when verdict extraction is on) extraction
+          + repair chain rows.
+        * ``vote`` -- ``N``: one member-phase row; no chain row.
+        * ``debate`` -- ``N*R + C``: a round-1 row plus one row per round
+          2..R (each worst case at full membership; drop-out only shrinks a
+          real run), plus a chain consolidation row.
+        * ``adversarial`` -- ``N + C``: two member-phase rows -- one
+          proposer (``upstream=0``) and ``N-1`` critics (``upstream=1``
+          each, embedding the proposal) -- whose target counts always sum to
+          ``N`` regardless of how many real proposer attempts fail, plus a
+          chain judge row whose ``upstream=N`` (it embeds the proposal and
+          every critique). This is the DSE-1514 review Fix A shape: byte
+          worst case is 1 proposer succeeding immediately, maximizing the
+          number of upstream-embedding critic calls.
+        * ``elite`` -- ``3N + C + 2CV``: three member-phase rows (initial,
+          critique, revision), plus the synthesis/verdict chain rows shared
+          with ``synthesize``.
+
+        Args:
+            mode: One of ``raw``/``synthesize``/``vote``/``debate``/
+                ``adversarial``/``elite``. Already validated by the caller.
+            members: The keyed council members.
+            chain: The keyed synthesizer-chain candidates.
+            rounds: Debate rounds, already normalized to at least 1.
+            choices: Vote choices, which enlarge the vote prompt template.
+
+        Returns:
+            The ordered phase rows for ``mode``.
+        """
+        n = len(members)
+        table: list[_PhaseSpec] = []
+        # Placeholder answers (real names/model ids, empty text) for measuring
+        # a downstream phase's EXACT fixed per-item label overhead -- DSE-1514
+        # review, Fix A. Built once per call since every downstream phase that
+        # embeds the full membership needs the identical N-sized placeholder
+        # list; the debate peer block additionally needs per-member letter
+        # aliases, computed separately below where it is used.
+        member_placeholders = _placeholder_answers(members)
+
+        if mode in ("raw", "synthesize"):
+            table.append(_PhaseSpec("member", members, "", 0))
+        elif mode == "vote":
+            table.append(
+                _PhaseSpec(
+                    "member",
+                    members,
+                    prompts.VOTE_SYSTEM + prompts.vote_user("", choices or []),
+                    0,
+                )
+            )
+        elif mode == "debate":
+            table.append(_PhaseSpec("round-1", members, "", 0))
+            # A worst-case peer block: every member's PRIOR answer anonymized
+            # by letter, text left empty (bounded separately via ``upstream``)
+            # so only the real, N-exact "Model X (peer) previous answer" /
+            # "Your previous answer" label overhead is measured here.
+            letters = {name: prompts.LETTERS[i] for i, (name, _mid) in enumerate(members)}
+            prior = {
+                name: answer
+                for (name, _mid), answer in zip(members, member_placeholders, strict=True)
+            }
+            self_name = members[0][0] if members else ""
+            peer_block = (
+                prompts.anonymized_peer_block(self_name, letters.get(self_name, ""), prior, letters)
+                if members
+                else ""
+            )
+            for round_no in range(2, rounds + 1):
+                table.append(
+                    _PhaseSpec(
+                        f"round-{round_no}",
+                        members,
+                        prompts.DEBATE_SYSTEM
+                        + prompts.debate_round_user("", round_no, rounds, peer_block),
+                        n,
+                    )
+                )
+        elif mode == "adversarial":
+            # Byte-worst-case (DSE-1514 review, Fix A): 1 proposer succeeds
+            # immediately (upstream=0); every OTHER member critiques it, each
+            # embedding the proposal's answer text (upstream=1). A real run's
+            # k proposer attempts + (N-k) critics always equals N; k=1
+            # maximizes the number of upstream-embedding critic calls, which
+            # is the pessimistic shape a spend ceiling must plan against.
+            if members:
+                table.append(_PhaseSpec("proposal", members[:1], "", 0))
+                table.append(
+                    _PhaseSpec(
+                        "critique",
+                        members[1:],
+                        prompts.CRITIC_SYSTEM + prompts.critic_user("", ""),
+                        1,
+                    )
+                )
+        elif mode == "elite":
+            table.append(_PhaseSpec("initial", members, "", 0))
+            table.append(
+                _PhaseSpec(
+                    "critique",
+                    members,
+                    prompts.ELITE_CRITIC_SYSTEM
+                    + prompts.elite_critic_user("", member_placeholders),
+                    n,
+                )
+            )
+            fallback_original = ModelAnswer(
+                name="", model_id="", answer="", answer_id=_ANSWER_ID_PROBE
+            )
+            original = member_placeholders[0] if member_placeholders else fallback_original
+            # DSE-1514 review, Fix A: modes._elite_revision_messages_for passes
+            # EVERY reviser its OWN initial answer as ``original_answer`` --
+            # which is ALSO one of the N entries already inside the initial
+            # panel. That answer's text is therefore embedded TWICE in a real
+            # revision call (once standalone, once inside the anonymized
+            # panel), so the byte-worst-case upstream count is N (initial
+            # panel) + N (critique panel) + 1 (the duplicate), not 2N -- an
+            # undercount the byte-lower-bound regression test below caught.
+            table.append(
+                _PhaseSpec(
+                    "revision",
+                    members,
+                    prompts.ELITE_REVISION_SYSTEM
+                    + prompts.elite_revision_user(
+                        "", original, member_placeholders, member_placeholders
+                    ),
+                    2 * n + 1,
+                )
+            )
+
+        if mode == "debate":
+            # Mirrors modes._debate_synthesize's real block format exactly
+            # ("### Final answer from {name} ({model_id})\n{answer}") using
+            # the real member names/model ids, text left empty.
+            debate_final_blocks = "\n\n".join(
+                f"### Final answer from {a.name} ({a.model_id})\n{a.answer}"
+                for a in member_placeholders
+            )
+            table.append(
+                _PhaseSpec(
+                    "debate_final",
+                    chain,
+                    prompts.DEBATE_FINAL_SYSTEM
+                    + prompts.debate_final_user("", rounds, debate_final_blocks),
+                    n,
+                    message_count=3,
+                )
+            )
+        elif mode == "adversarial":
+            # Judge upstream is ALWAYS N: it embeds the proposal (1) plus
+            # every critique the byte-worst-case shape produces (N-1).
+            table.append(
+                _PhaseSpec(
+                    "judge",
+                    chain,
+                    prompts.JUDGE_SYSTEM + prompts.judge_user("", "", "", ""),
+                    n,
+                    message_count=3,
+                )
+            )
+        elif mode in ("synthesize", "elite"):
+            table.append(
+                _PhaseSpec(
+                    "synthesis",
+                    chain,
+                    _SYNTH_SYSTEM + _synth_user_content("", member_placeholders),
+                    n,
+                    message_count=3,
+                )
+            )
+            if self.extract_verdict_enabled:
+                # DSE-1514 review, Fix A: the two templates below are the REAL
+                # extraction/repair message content -- schema included exactly
+                # as rendered, and one placeholder label per real member --
+                # measured via conclave.verdict_synthesis's own builders rather
+                # than a hand-summed approximation. The schema's bytes are
+                # therefore already IN the template, so ``contract=True`` here
+                # only adds the flat provider-side structured-output framing
+                # allowance, never a second copy of the schema on top of it.
+                from .verdict_synthesis import VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES
+                from .verdict_synthesis import _build_messages as _verdict_build_messages
+                from .verdict_synthesis import _repair_instruction as _verdict_repair_instruction
+
+                extraction_messages = _verdict_build_messages("", member_placeholders)
+                extraction_template = "".join(m["content"] for m in extraction_messages)
+                repair_template = extraction_template + _verdict_repair_instruction(
+                    "x" * VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES
+                )
+                table.append(
+                    _PhaseSpec(
+                        "verdict_extraction",
+                        chain,
+                        extraction_template,
+                        n,
+                        message_count=3,
+                        contract=True,
+                    )
+                )
+                table.append(
+                    _PhaseSpec(
+                        "verdict_repair",
+                        chain,
+                        repair_template,
+                        n + 1,
+                        message_count=3,
+                        contract=True,
+                    )
+                )
+
+        return table
+
+    def plan_calls(
+        self,
+        mode: str,
+        prompt: str,
+        *,
+        rounds: int = 2,
+        proposer: str | None = None,
+        choices: list[str] | None = None,
+    ) -> CallPlan:
+        """Enumerate every provider call this mode could make, worst case (DSE-1514).
+
+        The counts are derived from :mod:`conclave.modes` and
+        :meth:`_apply_verdict`, not from a remembered formula -- see
+        :meth:`_plan_table` for the exact per-mode row table and the
+        DSE-1514 review Fix A rationale for the adversarial shape.
+
+        Convergence early-stop, member drop-out, and a proposer succeeding on the
+        first try all make a real run CHEAPER than its plan. A plan is never an
+        under-count, which is what makes it usable as a spend gate.
+
+        Args:
+            mode: One of ``raw``/``synthesize``/``vote``/``debate``/
+                ``adversarial``/``elite``.
+            prompt: The exact user prompt (bounded by its UTF-8 byte length).
+            rounds: Debate rounds; ignored for other modes.
+            proposer: Adversarial proposer. It does not change the COUNT (see
+                :meth:`_plan_table`) and is accepted only for signature parity
+                with the modes.
+            choices: Vote choices, which enlarge the vote prompt template.
+
+        Returns:
+            The :class:`CallPlan`.
+
+        Raises:
+            ValueError: ``mode`` is not a known deliberation mode, or
+                ``max_output_tokens`` is not configured (an unbounded output
+                cannot be planned).
+        """
+        if mode not in _VALID_PLAN_MODES:
+            raise ValueError(f"unknown mode for call planning: {mode}")
+        cap = self.max_output_tokens
+        if cap is None:
+            raise ValueError(_NO_OUTPUT_CAP_MESSAGE)
+
+        members, _skipped = self._available_members()
+        chain = self._keyed_chain()
+        n_members = len(members)
+        prompt_bytes = len(prompt.encode("utf-8"))
+
+        table = self._plan_table(
+            mode, members=members, chain=chain, rounds=max(1, rounds), choices=choices
+        )
+        calls: list[PlannedCall] = [
+            spec.to_planned_call(
+                name=name,
+                model_id=model_id,
+                prompt_token_upper_bound=prompt_bytes,
+                max_output_tokens=cap,
+            )
+            for spec in table
+            for name, model_id in spec.targets
+        ]
+
+        return CallPlan(
+            mode=mode,
+            calls=tuple(calls),
+            member_count=n_members,
+            chain_count=len(chain),
+        )
+
+    def _reserve_plan(self, plan: CallPlan) -> Decimal:
+        """Price a :class:`CallPlan` pessimistically against the snapshot.
+
+        Args:
+            plan: The worst-case plan from :meth:`plan_calls`.
+
+        Returns:
+            The reserved total in USD -- an upper bound on what the run can cost.
+
+        Raises:
+            SpendUnboundable: No snapshot, or any planned call's model has no
+                snapshot entry. Never falls back to a similar model's rate.
+        """
+        snapshot = load_default_price_snapshot()
+        if snapshot is None:
+            raise SpendUnboundable("cannot bound spend: price snapshot unavailable")
+        total = Decimal("0")
+        for call in plan.calls:
+            rates = snapshot.rates_for(call.model_id)
+            if rates is None:
+                raise SpendUnboundable(
+                    f"cannot bound spend: no priced rate for {call.model_id} "
+                    f"in snapshot {snapshot.digest()} ({snapshot.captured_at.isoformat()})"
+                )
+            total += self._reserve_call(rates, call)
+        return total
+
+    @staticmethod
+    def _reserve_call(rates: PriceRates, call: PlannedCall) -> Decimal:
+        """Price one :class:`PlannedCall` against ``rates`` (DSE-1514).
+
+        The one place the reservation formula (input bound = prompt +
+        template + framing + upstream-output-as-bytes; output bound = the
+        call's own cap) is written, shared by :meth:`_reserve_plan` (pricing
+        an entire pre-flight :class:`CallPlan`, before any call is made) and
+        :meth:`_price_manifest` (Round 4, QA C1 -- pricing a single
+        already-made call's reservation when it reported no usable usage,
+        from the plan row matching its phase).
+
+        Args:
+            rates: The model's exact ceiling rates.
+            call: The planned (or reconstructed) call to price.
+
+        Returns:
+            The reserved cost in USD, quantized up.
+        """
+        return reserve_cost(
+            rates,
+            prompt_token_upper_bound=call.prompt_token_upper_bound,
+            prompt_template_token_allowance=call.prompt_template_token_allowance,
+            provider_framing_token_allowance=call.provider_framing_token_allowance,
+            upstream_output_token_ceilings=(
+                (call.max_output_tokens,) * call.upstream_output_call_count
+            ),
+            upstream_output_bytes_per_token=rates.max_output_bytes_per_token,
+            max_output_tokens=call.max_output_tokens,
+        ).reserved_cost_usd
+
+    def _enforce_spend_cap(
+        self,
+        mode: str,
+        prompt: str,
+        *,
+        rounds: int | None = None,
+        proposer: str | None = None,
+        choices: list[str] | None = None,
+    ) -> None:
+        """Refuse an over-budget or unboundable run BEFORE any provider call.
+
+        A no-op when ``max_spend_usd`` is unset, so a run with no spend flags is
+        byte-identical to today. Deliberately NOT applied to a cache hit: a hit
+        makes no provider call and therefore cannot exceed any cap.
+
+        Raises:
+            SpendUnboundable: The plan cannot be priced.
+            SpendCapExceeded: The priced plan exceeds the cap.
+        """
+        if self.max_spend_usd is None:
+            return
+        plan = self.plan_calls(
+            mode,
+            prompt,
+            rounds=2 if rounds is None else rounds,
+            proposer=proposer,
+            choices=choices,
+        )
+        reserved = self._reserve_plan(plan)
+        if reserved > self.max_spend_usd:
+            raise SpendCapExceeded(reserved, self.max_spend_usd, len(plan.calls))
+        logger.info(
+            "spend gate: reserved %s USD for %d calls, under the %s USD cap",
+            reserved,
+            len(plan.calls),
+            self.max_spend_usd,
+        )
+
+    def _gate_live_run(
+        self,
+        mode: str,
+        prompt: str,
+        *,
+        rounds: int | None = None,
+        proposer: str | None = None,
+        choices: list[str] | None = None,
+    ) -> None:
+        """THE single pre-flight spend-gate chokepoint (DSE-1514 review, Fix C).
+
+        :meth:`_cached_run` and :meth:`ask_stream` each call this exactly
+        once, always AFTER their cache-hit decision and always BEFORE the
+        first provider call -- a cache hit returns before reaching this
+        method entirely, since it makes no call and cannot exceed any cap.
+        Before this fix the same :meth:`_enforce_spend_cap` call was
+        duplicated at one site per cache branch (four call sites total, two
+        per entry point); collapsing them here means "does this run get
+        gated" has exactly one answer per entry point instead of two branches
+        that had to be kept in sync by hand.
+
+        A thin, behavior-preserving wrapper over :meth:`_enforce_spend_cap`,
+        which still owns the actual planning/pricing/raising.
+        """
+        self._enforce_spend_cap(mode, prompt, rounds=rounds, proposer=proposer, choices=choices)
 
     def _cache_key(
         self,
@@ -421,31 +1188,36 @@ class Council:
         A ``"terminal_failure"`` ledger entry (the model answered, just not
         usably) is unaffected and remains cacheable exactly as before --
         re-running would not produce a different, better answer.
+
+        **One gate chokepoint (DSE-1514 review, Fix C).** :meth:`_gate_live_run`
+        is called exactly once here, after the cache-hit decision above (a hit
+        returns before reaching it) and before ``run()`` -- regardless of
+        whether caching is enabled at all. This replaced two separate call
+        sites (one per cache branch) that had to make the identical call.
         """
-        if not self.cache_enabled:
-            result = await run()
-            self._ensure_manifest(result, mode)
-            self._price_manifest(result)
-            return result
+        key: str | None = None
+        if self.cache_enabled:
+            key = self._cache_key(
+                prompt,
+                mode,
+                rounds=rounds,
+                proposer=proposer,
+                converge_threshold=converge_threshold,
+                choices=choices,
+            )
+            hit = cache_mod.load(key)
+            if hit is not None:
+                logger.info("cache hit for %s run (%s)", mode, key[:12])
+                self._ensure_manifest(hit, mode)
+                self._price_manifest(hit)
+                return hit
 
-        key = self._cache_key(
-            prompt,
-            mode,
-            rounds=rounds,
-            proposer=proposer,
-            converge_threshold=converge_threshold,
-            choices=choices,
-        )
-        hit = cache_mod.load(key)
-        if hit is not None:
-            logger.info("cache hit for %s run (%s)", mode, key[:12])
-            self._ensure_manifest(hit, mode)
-            self._price_manifest(hit)
-            return hit
-
+        self._gate_live_run(mode, prompt, rounds=rounds, proposer=proposer, choices=choices)
         result = await run()
         self._ensure_manifest(result, mode)
         self._price_manifest(result)
+        if not self.cache_enabled:
+            return result
         if result.primary_failed_over:
             logger.info(
                 "not caching %s run (%s): primary adjudicator failed for an infrastructure reason",
@@ -538,6 +1310,7 @@ class Council:
                 config=self.config,
                 temperature=self.temperature,
                 timeout=self.timeout,
+                max_output_tokens=self.max_output_tokens,
             )
             for name, model_id in members
         ]
@@ -622,7 +1395,12 @@ class Council:
         from . import __version__
 
         receipts = [
-            receipt_from_answer(a, temperature=self.temperature, timeout=self.timeout)
+            receipt_from_answer(
+                a,
+                temperature=self.temperature,
+                timeout=self.timeout,
+                max_output_tokens=self.max_output_tokens,
+            )
             for a in answers
         ]
         manifest = ModelHarnessManifest(
@@ -635,7 +1413,7 @@ class Council:
                 ProviderSkip(name=name, reason="no API key in environment") for name in skipped
             ],
             model_ids=[model_id for _name, model_id in members],
-            generation_settings={"temperature": self.temperature, "timeout": self.timeout},
+            generation_settings=self._generation_settings(),
             receipts=receipts,
         )
         self._recompute_manifest_accounting(manifest)
@@ -696,6 +1474,7 @@ class Council:
                 answer,
                 temperature=self.temperature,
                 timeout=self.timeout,
+                max_output_tokens=self.max_output_tokens,
                 phase=f"round-{debate_round.round_number}",
             )
             for debate_round in result.rounds
@@ -711,7 +1490,7 @@ class Council:
                 ProviderSkip(name=name, reason="no API key in environment") for name in skipped
             ],
             model_ids=[model_id for _name, model_id in members],
-            generation_settings={"temperature": self.temperature, "timeout": self.timeout},
+            generation_settings=self._generation_settings(),
             receipts=receipts,
         )
         self._recompute_manifest_accounting(manifest)
@@ -752,6 +1531,7 @@ class Council:
                 phase=phase,
                 protocol_version=ELITE_PROTOCOL_VERSION,
                 prompt_version=None if phase == "initial" else ELITE_PROMPT_VERSION,
+                max_output_tokens=self.max_output_tokens,
             )
             for phase, answers in phase_artifacts
             for answer in answers
@@ -766,7 +1546,7 @@ class Council:
                 ProviderSkip(name=name, reason="no API key in environment") for name in skipped
             ],
             model_ids=list(dict.fromkeys(model_id for _name, model_id in members)),
-            generation_settings={"temperature": self.temperature, "timeout": self.timeout},
+            generation_settings=self._generation_settings(),
             receipts=receipts,
         )
         self._recompute_manifest_accounting(manifest)
@@ -814,25 +1594,24 @@ class Council:
         * the provider reported a trustworthy, non-zero usage figure
           (:func:`_usage_is_reported`) -> ``reported_usage_cost`` at ceiling
           rates, basis ``"reported_usage"``;
-        * usage is not reported -> unpriced (``None``/``None``), counted in
-          ``unpriced_receipts``. This covers three shapes deliberately treated
-          alike: the call FAILED (no usage was ever produced); the call
-          SUCCEEDED but the provider omitted the usage field
-          (:mod:`conclave.adapters.openai_compat` returns ``usage=None`` in
-          that case, including for some streamed responses -- this is a normal
-          outcome on a clean call, not a failure signal); or the provider
-          reported an all-zero ``TokenUsage`` (QA I1 -- a technically-present
-          but empty usage is the same "nothing to price" shape as ``None``,
-          and pricing it at ``$0.000000`` would assert a false floor rather
-          than an honest bound). A receipt without reported usage is NEVER
-          estimated from a flat reservation in this round: the input a
-          synthesis/judge/verdict call embeds is bounded by which PHASE it
-          belongs to (member calls carry only the prompt; synthesis/judge/
-          verdict calls additionally embed one or more upstream answers), and
-          this round has no phase-aware call plan to reserve from -- pricing a
-          synthesis receipt from a flat member-sized allowance silently
-          under-counts it. See DSE-1514 Round 4 for the phase-aware
-          reservation that replaces this blanket "unpriced" rule.
+        * usage is not reported (the call FAILED; the call SUCCEEDED but the
+          provider omitted the usage field -- :mod:`conclave.adapters.
+          openai_compat` returns ``usage=None`` in that case, including for
+          some streamed responses, a normal outcome on a clean call, not a
+          failure signal; or the provider reported an all-zero ``TokenUsage``,
+          QA I1 -- a technically-present but empty usage is the same "nothing
+          to price" shape as ``None``, and pricing it at ``$0.000000`` would
+          assert a false floor rather than an honest bound) AND an output cap
+          is configured AND the receipt's ``phase`` maps onto a row of
+          :meth:`_plan_table` for this run's mode (:meth:`_reservation_row_for_phase`,
+          DSE-1514 Round 4, QA C1) -> that row's own pessimistic reservation --
+          its REAL template bytes and upstream-embedding count, never a flat
+          constant that cannot tell a bare member call from a synthesis call
+          embedding N upstream answers -- basis ``"reservation"``;
+        * no usage, no cap, or the phase has no plan row (currently: an
+          adversarial proposal/critique receipt, whose ``phase`` is ``None``
+          on both shapes and so cannot be told apart post hoc) -> unpriced.
+          Nothing is ever estimated from a guess.
 
         And at run level, ALL-OR-NOTHING: ``cost_ceiling_usd`` is the sum of
         every receipt ceiling only when ``unpriced_models`` is empty AND
@@ -899,10 +1678,23 @@ class Council:
                 receipt.cost_basis = "reported_usage"
                 continue
             # No trustworthy usage: failed, successful-but-unreported, or
-            # all-zero. Unpriced -- see the docstring; never estimated.
-            receipt.cost_ceiling_usd = None
-            receipt.cost_basis = None
-            unpriced_receipts += 1
+            # all-zero. Reserve from the plan row matching this receipt's
+            # phase when a cap exists and one matches (DSE-1514 Round 4, QA
+            # C1); otherwise unpriced -- see the docstring, never estimated.
+            row = None if cap is None else self._reservation_row_for_phase(receipt.phase, result)
+            if row is None:
+                receipt.cost_ceiling_usd = None
+                receipt.cost_basis = None
+                unpriced_receipts += 1
+                continue
+            planned = row.to_planned_call(
+                name=receipt.name,
+                model_id=receipt.model_id,
+                prompt_token_upper_bound=len(result.prompt.encode("utf-8")),
+                max_output_tokens=cap,
+            )
+            receipt.cost_ceiling_usd = self._reserve_call(rates, planned)
+            receipt.cost_basis = "reservation"
 
         warnings: list[str] = []
         if unpriced_models:
@@ -926,6 +1718,72 @@ class Council:
         )
         # Re-stamp: the ceiling fields were written after _build_manifest's scan.
         manifest.secret_safety = verified_secret_safety(manifest)
+
+    def _reservation_row_for_phase(
+        self, phase: str | None, result: CouncilResult
+    ) -> _PhaseSpec | None:
+        """Map a usage-less receipt's ``phase`` onto its :meth:`_plan_table` row (DSE-1514 Round 4, QA C1).
+
+        Rebuilds the SAME declarative phase table :meth:`plan_calls` would
+        enumerate for ``result.mode`` (down to the real vote choices and the
+        real round count, so the reconstructed row's template bytes match the
+        real call as closely as a post-hoc reconstruction can) and returns
+        the one row whose ``phase`` matches. The mapping is exact-string
+        equality, never a guess:
+
+        * ``None`` (an untagged member-shaped call -- raw/synthesize/vote
+          members, or an adversarial proposal/critique, which are NOT
+          distinguishable post hoc since both share ``phase=None``) is
+          looked up as ``"member"``: matches raw/synthesize/vote's single
+          member row; adversarial has no row named ``"member"`` (its
+          member-shaped calls split into ``"proposal"``/``"critique"`` rows a
+          receipt's phase cannot currently pick between), so an adversarial
+          proposal/critique receipt deliberately finds no row here and stays
+          unpriced -- never silently priced as the wrong shape;
+        * ``"initial"``/``"critique"``/``"revision"`` (elite) match the
+          identically named elite row;
+        * ``"synthesis"``/``"judge"``/``"debate_final"`` match the
+          identically named adjudication row;
+        * ``"verdict_extraction"``/``"verdict_repair"`` match the identically
+          named verdict row;
+        * ``"round-{n}"`` (debate) rebuilds the table with ``rounds=n`` (or
+          the number of rounds actually run, whichever is larger) so the
+          row for round ``n`` specifically exists, with its real ``upstream``
+          count (0 for round 1, every member for round 2+).
+
+        Args:
+            phase: The receipt's ``phase`` (``None`` for an untagged call).
+            result: The in-flight result -- read for ``mode`` (which table to
+                build), ``rounds`` (debate's real round count), and
+                ``vote.choices`` (the real vote template).
+
+        Returns:
+            The matching :class:`_PhaseSpec`, or ``None`` when this mode has
+            no row for ``phase`` -- the caller leaves the receipt unpriced.
+        """
+        key = phase or "member"
+        members, _skipped = self._available_members()
+        chain = self._keyed_chain()
+
+        if key.startswith("round-"):
+            try:
+                round_no = int(key.removeprefix("round-"))
+            except ValueError:
+                return None
+            rounds = max(round_no, len(result.rounds))
+            table = self._plan_table(
+                "debate", members=members, chain=chain, rounds=rounds, choices=None
+            )
+        elif result.mode not in _VALID_PLAN_MODES:
+            return None
+        else:
+            choices = result.vote.choices if result.vote is not None else None
+            rounds = max(1, len(result.rounds))
+            table = self._plan_table(
+                result.mode, members=members, chain=chain, rounds=rounds, choices=choices
+            )
+
+        return next((spec for spec in table if spec.phase == key), None)
 
     def _append_manifest_receipts(
         self,
@@ -1015,36 +1873,52 @@ class Council:
 
         mode = "synthesize" if synthesize else "raw"
 
+        # One gate chokepoint (DSE-1514 review, Fix C): a cache hit returns
+        # below before ``_gate_live_run`` is ever reached, since it makes no
+        # provider call and cannot exceed any cap. Everything past the hit
+        # check is a live run, so the gate call sits exactly once, right
+        # before the streaming driver starts -- previously duplicated at one
+        # site per cache branch.
+        key: str | None = None
         if self.cache_enabled:
             key = self._cache_key(prompt, mode)
             hit = cache_mod.load(key)
             if hit is not None:
                 logger.info("cache hit for %s stream (%s)", mode, key[:12])
+                # Re-price on every hit, exactly like _cached_run (DSE-1514
+                # review, F3): the manifest was priced at STORE time, so a
+                # replay without this call would report a stale
+                # `priced_as_of` / `price_snapshot_stale` verdict rather than
+                # today's -- a wrong number in a receipt.
+                self._price_manifest(hit)
                 for event in self._replay_cached(hit):
                     yield event
                 return
 
-            # Live miss: stream, capture the terminal result, then store it
-            # (no-store on primary infrastructure failure -- see the docstring).
-            final: CouncilResult | None = None
+        self._gate_live_run(mode, prompt)
+
+        if not self.cache_enabled:
             async for event in stream_ask(self, prompt, synthesize=synthesize):
-                if event.type == "done" and event.result is not None:
-                    final = event.result
                 yield event
-            if final is not None:
-                if final.primary_failed_over:
-                    logger.info(
-                        "not caching %s run (%s): primary adjudicator failed for an "
-                        "infrastructure reason",
-                        mode,
-                        key[:12],
-                    )
-                else:
-                    cache_mod.store(key, final)
             return
 
+        # Live miss: stream, capture the terminal result, then store it
+        # (no-store on primary infrastructure failure -- see the docstring).
+        final: CouncilResult | None = None
         async for event in stream_ask(self, prompt, synthesize=synthesize):
+            if event.type == "done" and event.result is not None:
+                final = event.result
             yield event
+        if final is not None:
+            if final.primary_failed_over:
+                logger.info(
+                    "not caching %s run (%s): primary adjudicator failed for an "
+                    "infrastructure reason",
+                    mode,
+                    key[:12],
+                )
+            else:
+                cache_mod.store(key, final)
 
     @staticmethod
     def _replay_cached(result: CouncilResult) -> list[StreamEvent]:
@@ -1154,16 +2028,7 @@ class Council:
             )
             return None
 
-        blocks = "\n\n".join(
-            f"### Answer from {a.name} ({a.model_id})"
-            f"{f' (Answer ID: {a.answer_id})' if a.answer_id else ''}\n{a.answer}"
-            for a in usable
-        )
-        user_content = (
-            f"Original prompt:\n{result.prompt}\n\n"
-            f"Council answers:\n\n{blocks}\n\n"
-            "Now produce the consolidated answer."
-        )
+        user_content = _synth_user_content(result.prompt, usable)
         outcome = await self._adjudicate_and_record(
             result,
             "synthesis",
@@ -1315,6 +2180,7 @@ class Council:
                 temperature=self.temperature,
                 timeout=self.timeout,
                 protocol_version=protocol_version,
+                max_output_tokens=self.max_output_tokens,
             )
             renumbered_receipts = [
                 receipt.model_copy(update={"attempt": verdict_receipts_so_far + offset})
@@ -1499,6 +2365,7 @@ class Council:
                 config=self.config,
                 temperature=self.temperature,
                 timeout=self.timeout,
+                max_output_tokens=self.max_output_tokens,
             )
             called.append(answer)
             is_last = index == len(chain)
@@ -1629,6 +2496,7 @@ class Council:
                     attempt=index,
                     protocol_version=protocol_version,
                     prompt_version=prompt_version,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 for index, answer in enumerate(called, start=1)
             )

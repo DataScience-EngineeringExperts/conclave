@@ -277,6 +277,7 @@ async def test_extract_verdict_passes_native_output_contract(monkeypatch):
         timeout=120.0,
         config=None,
         output_contract=None,
+        **kwargs,
     ):
         captured["output_contract"] = output_contract
         return ModelAnswer(name=name, model_id=model_id, answer="not json")
@@ -330,6 +331,7 @@ async def test_extract_verdict_still_degrades_gracefully_on_bad_json(monkeypatch
         timeout=120.0,
         config=None,
         output_contract=None,
+        **kwargs,
     ):
         return ModelAnswer(name=name, model_id=model_id, answer="not json")
 

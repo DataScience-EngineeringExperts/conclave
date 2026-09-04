@@ -133,7 +133,9 @@ def _patch_member_stream(monkeypatch, deltas_by_model, errors_by_model=None) -> 
 
     errors_by_model = errors_by_model or {}
 
-    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
         text_parts = deltas_by_model.get(model_id, ["x"])
         for part in text_parts:
             yield part

@@ -254,7 +254,9 @@ async def test_a_successful_call_with_no_reported_usage_is_unpriced_not_a_reserv
     reservation that ignores which phase the call belongs to would silently
     mis-price synthesis/judge/verdict calls (which embed upstream output) by
     3-9x. This round has no phase-aware plan to reserve from, so the honest
-    rule is: no reported usage -> unpriced, exactly like a failed call.
+    rule is: no reported usage -> unpriced, exactly like a failed call. A
+    real, phase-aware reservation basis is re-instated in Round 4 -- see
+    ``test_a_failed_call_with_no_usage_is_priced_as_a_reservation_when_capped``.
     """
     import conclave.council as council_mod
     from conclave.models import ModelAnswer
@@ -312,3 +314,65 @@ async def test_a_zero_usage_success_is_unpriced_not_free(monkeypatch, keys):
     assert manifest.cost_ceiling_usd is None
     assert manifest.cost_ceiling_usd != Decimal("0")
     assert "unpriced_receipts_present" in manifest.pricing_warnings
+
+
+async def test_a_failed_call_with_no_usage_is_priced_as_a_reservation_when_capped(
+    monkeypatch, keys
+):
+    """DSE-1514 Round 4: the phase-aware reservation basis, end to end.
+
+    Round 3 removed the flat-allowance reservation branch entirely (QA C1):
+    it silently mis-priced synthesis/judge/verdict calls, which embed
+    upstream output, by 3-9x, while never distinguishing a bare member call
+    from one embedding N upstream answers. Round 4 re-adds reservation
+    pricing for a usage-less receipt, now derived from the SAME plan-table
+    row :meth:`Council.plan_calls` would build for this receipt's phase (see
+    ``Council._reservation_row_for_phase``) -- never a flat constant. Proves
+    the two pricing paths (reported-usage and phase-aware reservation)
+    coexist cleanly in one manifest: an all-or-nothing ceiling sums BOTH
+    kinds of priced receipt, not just one.
+    """
+    import conclave.council as council_mod
+    from conclave.council import Council
+    from conclave.models import ModelAnswer, TokenUsage
+
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3", "gemini/gemini-2.5-pro"))
+
+    async def flaky(name, model_id, messages, **kwargs):
+        if model_id == "gemini/gemini-2.5-pro":
+            # call_model never raises; a provider 503 comes back as an error
+            # answer carrying no usage at all.
+            return ModelAnswer(name=name, model_id=model_id, error="503: service unavailable")
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            answer="ok",
+            usage=TokenUsage(prompt_tokens=5, completion_tokens=7, total_tokens=12),
+        )
+
+    monkeypatch.setattr(council_mod, "call_model", flaky)
+    council = Council(
+        models=["grok", "gemini"],
+        synthesizer="grok",
+        max_output_tokens=256,
+        extract_verdict=False,
+    )
+    manifest = (await council.ask("q", synthesize=False)).manifest
+
+    receipts_by_model = {r.model_id: r for r in manifest.receipts}
+    failed = receipts_by_model["gemini/gemini-2.5-pro"]
+    succeeded = receipts_by_model["xai/grok-4.3"]
+
+    assert failed.usage is None
+    assert failed.phase is None  # an untagged raw-mode member call -> the "member" row
+    assert failed.cost_basis == "reservation"
+    assert failed.cost_ceiling_usd is not None
+    assert succeeded.cost_basis == "reported_usage"
+
+    # All-or-nothing, but every receipt IS priced (one by usage, one by a
+    # phase-aware reservation), so the run-level ceiling is a real sum, not None.
+    assert manifest.unpriced_models == []
+    assert manifest.unpriced_receipts == 0
+    assert manifest.cost_ceiling_usd == sum(
+        (receipt.cost_ceiling_usd for receipt in manifest.receipts), Decimal("0")
+    )

@@ -162,6 +162,53 @@ def test_eval_reserve_call_cost_delegates_to_the_shared_arithmetic():
     assert reservation.schema_version == "conclave_eval_v1"
 
 
+def test_eval_reserve_call_cost_records_a_one_shot_generators_ceilings():
+    """QA M3: a generator passed for ``upstream_output_token_ceilings`` is not consumed twice.
+
+    ``reserve_call_cost`` used to hand the caller's iterable to
+    ``conclave.pricing.reserve_cost`` (which exhausts it via its own internal
+    ``tuple(...)``) and THEN call ``tuple(...)`` on the SAME iterable a second
+    time to build ``CallReservation.upstream_output_token_ceilings`` -- for a
+    one-shot iterable like a generator expression, the second ``tuple(...)``
+    silently produced ``()`` even though the values were correctly priced.
+    """
+    from conclave.evals.pricing import ModelPrice, reserve_call_cost
+
+    price = ModelPrice(
+        provider_id="fictional-provider-a",
+        model_id="fictional-model-a",
+        model_revision="fixture-r1",
+        input_ceiling_usd_per_million_tokens=Decimal("1.234567"),
+        output_ceiling_usd_per_million_tokens=Decimal("4.567891"),
+        max_output_bytes_per_token=4,
+    )
+    ceilings = (256, 512)
+
+    reservation = reserve_call_cost(
+        price,
+        prompt_token_upper_bound=900,
+        prompt_template_token_allowance=12,
+        provider_framing_token_allowance=96,
+        upstream_output_token_ceilings=(c for c in ceilings),  # one-shot generator
+        upstream_output_bytes_per_token=4,
+        max_output_tokens=1_024,
+    )
+
+    assert reservation.upstream_output_token_ceilings == ceilings
+    # The reservation was priced from the REAL ceilings too, not from an
+    # empty tuple -- confirms the fix isn't just re-recording a stale value.
+    tupled = reserve_call_cost(
+        price,
+        prompt_token_upper_bound=900,
+        prompt_template_token_allowance=12,
+        provider_framing_token_allowance=96,
+        upstream_output_token_ceilings=ceilings,
+        upstream_output_bytes_per_token=4,
+        max_output_tokens=1_024,
+    )
+    assert reservation.reserved_cost_usd == tupled.reserved_cost_usd
+
+
 def test_live_reported_usage_cost_delegates_to_the_shared_arithmetic():
     from conclave.evals.live import _reported_usage_cost
     from conclave.evals.pricing import ModelPrice

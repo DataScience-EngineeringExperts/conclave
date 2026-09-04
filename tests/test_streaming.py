@@ -371,7 +371,9 @@ def _patch_stream(monkeypatch, deltas_by_model):
     """Patch streaming.call_model_stream to emit canned deltas + a final answer."""
     import conclave.streaming as streaming_mod
 
-    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
         text_parts = deltas_by_model.get(model_id, ["x"])
         for part in text_parts:
             yield part
@@ -457,7 +459,9 @@ def test_cli_stream_smoke_exits_zero(monkeypatch, patch_cli_config):
     for var in ("XAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.setenv(var, "dummy-key")
 
-    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
         yield f"tok-{name} "
         yield ModelAnswer(name=name, model_id=model_id, answer=f"tok-{name} ")
 
@@ -478,7 +482,9 @@ def test_cli_stream_zero_usable_exits_one(monkeypatch, patch_cli_config):
     for var in ("XAI_API_KEY", "GEMINI_API_KEY"):
         monkeypatch.setenv(var, "dummy-key")
 
-    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
         yield ModelAnswer(name=name, model_id=model_id, error="provider down")
 
     monkeypatch.setattr(streaming_mod, "call_model_stream", fake_stream)
@@ -514,7 +520,9 @@ def test_cli_stream_cache_second_run_is_one_shot_hit(monkeypatch, patch_cli_conf
 
     calls = {"n": 0}
 
-    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
         calls["n"] += 1
         yield "live "
         yield ModelAnswer(name=name, model_id=model_id, answer="live answer")
@@ -544,7 +552,9 @@ async def test_ask_stream_cache_hit_replays_one_shot(monkeypatch, tmp_path):
 
     live_calls = {"n": 0}
 
-    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
         live_calls["n"] += 1
         yield "x"
         yield ModelAnswer(name=name, model_id=model_id, answer="x")
@@ -566,6 +576,51 @@ async def test_ask_stream_cache_hit_replays_one_shot(monkeypatch, tmp_path):
     # One member_delta per member (one-shot), each followed by a member_done.
     member_deltas = [e for e in second if e.type == "member_delta"]
     assert len(member_deltas) == 2
+
+
+async def test_ask_stream_cache_hit_reprices_and_reports_current_staleness(monkeypatch, tmp_path):
+    """DSE-1514 review, F3: a replayed cache hit must be priced NOW, not at store time.
+
+    Without ``Council._price_manifest(hit)`` before ``_replay_cached(hit)``, a
+    replayed run reports the ``priced_as_of`` / ``price_snapshot_stale`` verdict
+    computed when the run was FIRST stored, not the current one -- a wrong
+    number in a receipt. Store a run against a fresh snapshot, then swap in a
+    stale one (mirroring the staleness clock advancing) before replaying the
+    identical prompt; the replayed ``done`` result must reflect the now-stale
+    snapshot, exactly like a live run would.
+    """
+    from datetime import date
+
+    import conclave.streaming as streaming_mod
+    from tests.test_pricing_receipts import _install_snapshot, _snapshot
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("XAI_API_KEY", "dummy-key")
+
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
+        yield "x"
+        yield ModelAnswer(name=name, model_id=model_id, answer="x")
+
+    monkeypatch.setattr(streaming_mod, "call_model_stream", fake_stream)
+
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3", captured_at=date.today()))
+    council = Council(models=["grok"], config=_config(), cache=True)
+    first = [e async for e in council.ask_stream("hi", synthesize=False)]
+    assert first[-1].result.cached is False
+    assert "price_snapshot_stale" not in first[-1].result.manifest.pricing_warnings
+
+    # The staleness clock has now "advanced": swap in a snapshot dated well
+    # past PRICE_SNAPSHOT_MAX_AGE_DAYS, exactly as it would look if the packaged
+    # snapshot simply aged past the 90-day threshold between the two calls.
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3", captured_at=date(2026, 1, 1)))
+
+    second = [e async for e in council.ask_stream("hi", synthesize=False)]
+    done = second[-1]
+    assert done.type == "done"
+    assert done.result.cached is True
+    assert "price_snapshot_stale" in done.result.manifest.pricing_warnings
 
 
 def test_stream_event_done_carries_full_result_shape():
@@ -601,7 +656,9 @@ def _install_stream_script(monkeypatch, script: dict[str, list]) -> list[str]:
 
     calls: list[str] = []
 
-    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
         calls.append(name)
         for item in script[name]:
             yield item

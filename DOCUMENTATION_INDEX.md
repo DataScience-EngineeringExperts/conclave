@@ -38,6 +38,7 @@ the canonical authority spec on top of those.
 | **H1 Live Runner Plan** | [`docs/plans/2026-07-18-h1-live-evaluation-runner.md`](docs/plans/2026-07-18-h1-live-evaluation-runner.md) | Exact TDD tasks for the six live conditions, dry-run estimator, replay fixtures, CLI gate, and correctness-only paid smoke. |
 | **Durable JSON Output Design** | [`docs/plans/2026-07-21-durable-json-output-design.md`](docs/plans/2026-07-21-durable-json-output-design.md) | Opt-in atomic user-private result persistence for long buffered council runs and detached supervisors. |
 | **Adjudication Succession** | [`docs/plans/2026-09-03-adjudication-succession.md`](docs/plans/2026-09-03-adjudication-succession.md) | DSE-1512 adjudication succession implementation plan (typed failure categories, synthesizer chain, succession ledger). |
+| **Bounded Cost Receipts** | [`docs/plans/2026-09-03-bounded-cost-receipts.md`](docs/plans/2026-09-03-bounded-cost-receipts.md) | DSE-1514 implementation plan: dated price snapshot + `cost_ceiling_usd` on every receipt/manifest (all-or-nothing, never an estimate), `max_output_tokens`, and the pre-flight `--max-spend-usd` spend gate with exit code `4`. |
 
 ---
 

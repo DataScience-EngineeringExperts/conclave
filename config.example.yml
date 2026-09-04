@@ -42,3 +42,11 @@ cache: false
 # `--converge` / `--no-converge`. A high value (e.g. 0.95) only stops on
 # near-identical successive answers.
 # converge_threshold: 0.95
+
+# Optional hard ceiling on OUTPUT tokens for every call a council makes -- members,
+# synthesizer, judge, verdict extraction and its repair retry, and both streaming
+# paths (OFF by default, unset). Override per invocation with --max-output-tokens.
+# This is also the precondition for --max-spend-usd: a run whose output is
+# unbounded cannot have its spend bounded, so the spend gate refuses (exit 4)
+# rather than inventing a number.
+# max_output_tokens: 4000

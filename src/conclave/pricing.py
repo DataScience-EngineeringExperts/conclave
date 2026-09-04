@@ -433,8 +433,58 @@ def load_default_price_snapshot() -> PriceSnapshot | None:
     try:
         with path.open(encoding="utf-8") as handle:
             payload = json.load(handle, parse_float=Decimal)
+        # A JSON payload that parses but is not an object (e.g. a bare `42` or a
+        # list) has no `.pop`, so it would otherwise crash the loader with an
+        # uncaught AttributeError -- violating the never-raises contract above
+        # (DSE-1514 review, F4). Non-finite/absurd rates inside a well-formed
+        # object are already rejected by `PriceRates`' `Field(gt=0)` (a Decimal
+        # field's pydantic-core validator requires a finite number), which
+        # raises `ValidationError` -- already in this except tuple -- before
+        # `PriceSnapshot.digest`/`_canonical_decimal` (which assumes a finite
+        # value) is ever reached from this loader.
+        if not isinstance(payload, dict):
+            raise TypeError(
+                f"price snapshot payload must be a JSON object, got {type(payload).__name__}"
+            )
         payload.pop("_note", None)
         return PriceSnapshot.model_validate(payload)
-    except (OSError, json.JSONDecodeError, ValidationError, TypeError) as exc:
+    except (OSError, json.JSONDecodeError, ValidationError, TypeError, AttributeError) as exc:
         logger.warning("price snapshot %s is unusable: %s; pricing disabled", path.name, exc)
         return None
+
+
+class SpendRefused(Exception):
+    """Base class for a pre-flight spend refusal.
+
+    Raised BEFORE any provider call. Every subclass maps to CLI exit code 4.
+    Refusing is the honest outcome when a run cannot be bounded: the alternative
+    is to invent a number, which is the exact failure this module exists to
+    prevent.
+    """
+
+
+class SpendUnboundable(SpendRefused):
+    """The call plan cannot be priced at all, so no cap can be enforced.
+
+    Causes: no output cap configured, no price snapshot available, or a model in
+    the plan with no snapshot entry. Never a fallback rate, never a guess.
+    """
+
+
+class SpendCapExceeded(SpendRefused):
+    """The fully-priced worst-case plan reserves more than the stated cap.
+
+    Attributes:
+        reserved: The pessimistic total for the whole plan, in USD.
+        cap: The operator's stated cap, in USD.
+        call_count: How many provider calls the plan enumerated.
+    """
+
+    def __init__(self, reserved: Decimal, cap: Decimal, call_count: int) -> None:
+        self.reserved = reserved
+        self.cap = cap
+        self.call_count = call_count
+        super().__init__(
+            f"refusing to run: reserved {reserved} USD for {call_count} calls "
+            f"exceeds the cap of {cap} USD"
+        )

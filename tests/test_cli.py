@@ -795,7 +795,7 @@ def test_cache_flag_serves_second_run_from_cache(monkeypatch, patch_cli_config, 
     counter = {"n": 0}
 
     async def fake_call_model(
-        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
     ):
         counter["n"] += 1
         return ModelAnswer(name=name, model_id=model_id, answer=f"ans-{model_id}")
@@ -1005,3 +1005,263 @@ def test_cli_providers_footer_shows_chain(monkeypatch, tmp_path):
     result = runner.invoke(cli.app, ["providers"])
     assert result.exit_code == 0
     assert "synthesizer chain: claude > grok" in result.output
+
+
+"""DSE-1514: --max-output-tokens / --max-spend-usd and the exit-code-4 refusal."""
+
+
+def test_spend_refusal_exit_code_is_four_and_distinct():
+    from conclave import cli
+
+    assert cli._SPEND_REFUSED_EXIT_CODE == 4
+    assert cli._SPEND_REFUSED_EXIT_CODE != cli._DEGRADED_EXIT_CODE
+
+
+def test_spend_cap_without_an_output_cap_exits_four(keys):
+    from conclave.cli import app
+
+    result = runner.invoke(app, ["ask", "q", "--council", "grok", "--max-spend-usd", "0.40"])
+    assert result.exit_code == 4
+    assert "cannot bound spend: no output cap" in result.output + (result.stderr or "")
+
+
+def test_an_over_budget_run_exits_four_and_names_reserved_cap_and_count(monkeypatch, keys):
+    import conclave.council as council_mod
+    from conclave.cli import app
+    from tests.test_pricing_receipts import _install_snapshot, _snapshot
+
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3", "anthropic/claude-sonnet-4-6"))
+
+    calls: list[str] = []
+
+    async def tripwire(name, model_id, messages, **kwargs):
+        calls.append(name)
+        raise AssertionError("the CLI gate must refuse before any provider call")
+
+    monkeypatch.setattr(council_mod, "call_model", tripwire)
+    result = runner.invoke(
+        app,
+        [
+            "ask",
+            "q",
+            "--council",
+            "grok",
+            "--max-output-tokens",
+            "100000",
+            "--max-spend-usd",
+            "0.000001",
+        ],
+    )
+    combined = result.output + (result.stderr or "")
+    assert result.exit_code == 4
+    assert "reserved" in combined and "0.000001" in combined and "calls" in combined
+    # DSE-1514 review, Fix A/minors: the gate seam itself must never be reached.
+    assert calls == []
+
+
+def test_json_refusal_emits_no_stdout_payload_and_puts_the_message_on_stderr(monkeypatch, keys):
+    """DSE-1514 review minors: a refused --json run has nothing to serialize.
+
+    The mode dispatch that would build the JSON payload never runs -- the gate
+    raises before it -- so stdout must be completely empty (not even
+    ``null``/``{}``) and the refusal message must land on stderr, exactly like
+    the non-JSON path. See the `ask` docstring's exit-code-4 note.
+    """
+    import conclave.council as council_mod
+    from conclave.cli import app
+    from tests.test_pricing_receipts import _install_snapshot, _snapshot
+
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3", "anthropic/claude-sonnet-4-6"))
+
+    async def tripwire(name, model_id, messages, **kwargs):
+        raise AssertionError("the CLI gate must refuse before any provider call")
+
+    monkeypatch.setattr(council_mod, "call_model", tripwire)
+    result = runner.invoke(
+        app,
+        [
+            "ask",
+            "q",
+            "--council",
+            "grok",
+            "--max-output-tokens",
+            "100000",
+            "--max-spend-usd",
+            "0.000001",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 4
+    assert result.stdout == ""
+    assert "reserved" in result.stderr and "0.000001" in result.stderr
+
+
+def test_an_unboundable_plan_exits_four_with_a_distinct_message(monkeypatch, keys):
+    from conclave.cli import app
+    from tests.test_pricing_receipts import _install_snapshot, _snapshot
+
+    # grok priced, the claude synthesizer is not.
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3"))
+    result = runner.invoke(
+        app,
+        [
+            "ask",
+            "q",
+            "--council",
+            "grok",
+            "--max-output-tokens",
+            "512",
+            "--max-spend-usd",
+            "10.00",
+        ],
+    )
+    combined = result.output + (result.stderr or "")
+    assert result.exit_code == 4
+    assert "no priced rate for anthropic/claude-sonnet-4-6" in combined
+    assert "reserved" not in combined
+
+
+def test_a_non_numeric_spend_cap_is_a_usage_error(keys):
+    from conclave.cli import app
+
+    result = runner.invoke(
+        app, ["ask", "q", "--council", "grok", "--max-spend-usd", "cheap-please"]
+    )
+    assert result.exit_code == 2
+    assert "--max-spend-usd" in result.output + (result.stderr or "")
+
+
+def test_the_spend_cap_is_parsed_as_an_exact_decimal_never_a_float(monkeypatch, keys):
+    """0.4 through a float is 0.4000000000000000222; the cap must be exact."""
+    from decimal import Decimal
+
+    import conclave.cli as cli_mod
+    from conclave.cli import app
+
+    seen: dict[str, object] = {}
+    real = cli_mod.Council
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(cli_mod, "Council", spy)
+    runner.invoke(
+        app,
+        [
+            "ask",
+            "q",
+            "--council",
+            "grok",
+            "--max-output-tokens",
+            "512",
+            "--max-spend-usd",
+            "0.4",
+        ],
+    )
+    assert seen["max_spend_usd"] == Decimal("0.4")
+    assert isinstance(seen["max_spend_usd"], Decimal)
+    assert seen["max_output_tokens"] == 512
+
+
+def test_the_json_payload_carries_the_ceiling_as_an_exact_string(
+    monkeypatch, keys, patch_call_model
+):
+    import json as json_mod
+
+    from conclave.cli import app
+    from tests.conftest import make_response
+    from tests.test_pricing_receipts import _install_snapshot, _snapshot
+
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3"))
+    patch_call_model(lambda model_id, messages: make_response("ok"))
+    result = runner.invoke(app, ["ask", "q", "--council", "grok", "--mode", "raw", "--json"])
+    manifest = json_mod.loads(result.output)["manifest"]
+    assert manifest["estimated_cost"] is None
+    assert isinstance(manifest["cost_ceiling_usd"], str)
+    assert manifest["priced_as_of"] == "2026-09-03"
+    assert manifest["price_snapshot_digest"].startswith("sha256:")
+
+
+"""DSE-1514 review (Round 5): F1/F2/F5 -- non-finite/non-positive caps and locals."""
+
+
+def test_a_nan_spend_cap_is_a_usage_error_not_a_crash(keys):
+    from conclave.cli import app
+
+    result = runner.invoke(app, ["ask", "q", "--council", "grok", "--max-spend-usd", "NaN"])
+    assert result.exit_code == 2
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "--max-spend-usd" in result.output + (result.stderr or "")
+
+
+@pytest.mark.parametrize("cap", ["NaN", "-NaN", "sNaN", "snan", "nan"])
+def test_every_nan_spelling_is_rejected(keys, cap):
+    from conclave.cli import app
+
+    result = runner.invoke(app, ["ask", "q", "--council", "grok", "--max-spend-usd", cap])
+    assert result.exit_code == 2
+
+
+@pytest.mark.parametrize("cap", ["Infinity", "inf", "-Infinity", "-inf"])
+def test_an_infinite_spend_cap_is_rejected(keys, cap):
+    from conclave.cli import app
+
+    result = runner.invoke(app, ["ask", "q", "--council", "grok", "--max-spend-usd", cap])
+    assert result.exit_code == 2
+
+
+def test_an_underscored_spend_cap_is_rejected(keys):
+    """Decimal("0_5") is 5, not 0.5 -- a 10x cap the operator did not type."""
+    from conclave.cli import app
+
+    result = runner.invoke(app, ["ask", "q", "--council", "grok", "--max-spend-usd", "0_5"])
+    assert result.exit_code == 2
+
+
+@pytest.mark.parametrize("cap", ["0", "-5"])
+def test_a_non_positive_output_cap_is_a_usage_error(keys, cap):
+    from conclave.cli import app
+
+    result = runner.invoke(
+        app, ["ask", "q", "--council", "grok", "--max-output-tokens", cap, "--max-spend-usd", "5"]
+    )
+    assert result.exit_code == 2
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_the_cli_never_renders_locals_in_a_traceback():
+    assert cli.app.pretty_exceptions_show_locals is False
+
+
+def test_an_absurdly_large_but_finite_spend_cap_is_accepted(monkeypatch, keys, patch_call_model):
+    """Documents the deliberate boundary: is_finite() does NOT reject 1e999999.
+
+    A cap this large never refuses (nothing could exceed it), so the run
+    proceeds past the gate to a real (mocked, no-network) member call --
+    proving the value was accepted as a valid Decimal, not merely that
+    parsing didn't crash.
+    """
+    from conclave.cli import app
+    from tests.conftest import make_response
+    from tests.test_pricing_receipts import _install_snapshot, _snapshot
+
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3"))
+    patch_call_model(lambda model_id, messages: make_response("ok"))
+    result = runner.invoke(
+        app,
+        [
+            "ask",
+            "q",
+            "--council",
+            "grok",
+            "--mode",
+            "raw",
+            "--max-output-tokens",
+            "100",
+            "--max-spend-usd",
+            "1e999999",
+        ],
+    )
+    assert result.exit_code == 0
+    assert result.exit_code != 1

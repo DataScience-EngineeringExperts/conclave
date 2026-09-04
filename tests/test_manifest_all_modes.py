@@ -600,3 +600,110 @@ async def test_cache_hit_carries_manifest(monkeypatch, patch_call_model, tmp_pat
     second = await run()
     assert second.cached is True
     _assert_verified_manifest(second, mode)
+
+
+# --------------------------------------------------------------------------- #
+# DSE-1514 Task 13: pricing runs at the same chokepoint the manifest
+# invariant runs at -- every mode's manifest carries a priced (or
+# all-or-nothing unpriced) ceiling, never a partial one.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("mode", ["synthesize", "raw", "debate", "adversarial", "vote", "elite"])
+async def test_every_mode_prices_its_manifest(monkeypatch, keys, patch_call_model, mode):
+    """Pricing runs at the same chokepoint the manifest invariant runs at."""
+    from decimal import Decimal
+
+    from conclave.council import Council
+    from tests.conftest import make_response
+    from tests.test_pricing_receipts import _install_snapshot, _snapshot
+
+    _install_snapshot(
+        monkeypatch, _snapshot("xai/grok-4.3", "gemini/gemini-2.5-pro", "openai/gpt-4.1")
+    )
+    patch_call_model(lambda model_id, messages: make_response("ok"))
+    council = Council(
+        models=["grok", "gemini", "openai"], synthesizer="openai", extract_verdict=False
+    )
+
+    if mode == "debate":
+        result = await council.debate("q", rounds=2)
+    elif mode == "adversarial":
+        result = await council.adversarial("q")
+    elif mode == "vote":
+        result = await council.vote("q", choices=["a", "b"])
+    elif mode == "elite":
+        result = await council.elite("q")
+    else:
+        result = await council.ask("q", synthesize=(mode == "synthesize"))
+
+    manifest = result.manifest
+    assert manifest.price_snapshot_digest is not None
+    assert manifest.priced_as_of is not None
+    assert manifest.estimated_cost is None
+    if manifest.receipts:
+        assert manifest.cost_ceiling_usd == sum(
+            (r.cost_ceiling_usd for r in manifest.receipts), Decimal("0")
+        )
+
+
+async def test_elite_prices_every_one_of_its_3n_plus_receipts(monkeypatch, keys, patch_call_model):
+    from conclave.council import Council
+    from tests.conftest import make_response
+    from tests.test_pricing_receipts import _install_snapshot, _snapshot
+
+    _install_snapshot(
+        monkeypatch, _snapshot("xai/grok-4.3", "gemini/gemini-2.5-pro", "openai/gpt-4.1")
+    )
+    patch_call_model(lambda model_id, messages: make_response("ok"))
+    council = Council(
+        models=["grok", "gemini", "openai"], synthesizer="openai", extract_verdict=False
+    )
+    manifest = (await council.elite("q")).manifest
+
+    # 3 phases x 3 members + 1 synthesis = 10; every one of them priced.
+    assert len(manifest.receipts) >= 3 * 3
+    assert all(r.cost_ceiling_usd is not None for r in manifest.receipts)
+    assert manifest.unpriced_receipts == 0
+
+
+# --------------------------------------------------------------------------- #
+# DSE-1514 QA I2: a configured output cap is recorded on EVERY mode's manifest
+# and on every one of its receipts -- including debate's per-round receipts,
+# which are built by ``_build_debate_manifest`` rather than ``_build_manifest``.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("mode", ["synthesize", "raw", "debate", "adversarial", "vote", "elite"])
+async def test_every_mode_records_the_output_cap_on_manifest_and_receipts(
+    monkeypatch, keys, patch_call_model, mode
+):
+    """The cap the calls were made with is what the receipts attest to."""
+    from conclave.council import Council
+    from tests.conftest import make_response
+
+    patch_call_model(lambda model_id, messages: make_response("ok"))
+    council = Council(
+        models=["grok", "gemini", "openai"],
+        synthesizer="openai",
+        extract_verdict=False,
+        max_output_tokens=512,
+    )
+
+    if mode == "debate":
+        result = await council.debate("q", rounds=2)
+    elif mode == "adversarial":
+        result = await council.adversarial("q")
+    elif mode == "vote":
+        result = await council.vote("q", choices=["a", "b"])
+    elif mode == "elite":
+        result = await council.elite("q")
+    else:
+        result = await council.ask("q", synthesize=(mode == "synthesize"))
+
+    manifest = result.manifest
+    assert manifest.receipts, mode
+    assert manifest.generation_settings["max_output_tokens"] == 512
+    assert [r.generation_settings.get("max_output_tokens") for r in manifest.receipts] == [
+        512
+    ] * len(manifest.receipts)

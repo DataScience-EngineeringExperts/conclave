@@ -105,6 +105,7 @@ async def _drive_member(
             temperature=council.temperature,
             timeout=council.timeout,
             config=council.config,
+            max_output_tokens=council.max_output_tokens,
         ):
             if isinstance(item, ModelAnswer):
                 await queue.put(("answer", item))
@@ -378,6 +379,7 @@ async def _stream_synthesis(council: Council, result: CouncilResult) -> AsyncIte
             temperature=council.temperature,
             timeout=council.timeout,
             config=council.config,
+            max_output_tokens=council.max_output_tokens,
         ):
             if isinstance(item, ModelAnswer):
                 candidate_final = item

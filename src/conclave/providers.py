@@ -44,6 +44,7 @@ def receipt_from_answer(
     protocol_version: str | None = None,
     prompt_version: str | None = None,
     schema_version: str | None = None,
+    max_output_tokens: int | None = None,
 ) -> ProviderExecutionReceipt:
     """Map a collected :class:`ModelAnswer` to a :class:`ProviderExecutionReceipt`.
 
@@ -66,6 +67,9 @@ def receipt_from_answer(
         temperature: The sampling temperature the council used for the call.
         timeout: The per-call timeout (seconds) the council used.
         phase: Optional protocol phase provenance for phased modes.
+        max_output_tokens: The hard output-token ceiling the call was issued
+            with, if any (DSE-1514). Recorded on ``generation_settings`` only
+            when set, so an uncapped receipt stays byte-identical to before.
 
     Returns:
         A :class:`ProviderExecutionReceipt` for this member.
@@ -73,6 +77,9 @@ def receipt_from_answer(
     has_error = answer.error is not None
     category = error_category or (_receipt_error_category(answer.error) if has_error else None)
     resolved_outcome = outcome or ("failed" if has_error else "success")
+    generation_settings: dict[str, float | int] = {"temperature": temperature, "timeout": timeout}
+    if max_output_tokens is not None:
+        generation_settings["max_output_tokens"] = max_output_tokens
     return ProviderExecutionReceipt(
         phase=phase,
         attempt=attempt,
@@ -80,7 +87,7 @@ def receipt_from_answer(
         name=answer.name,
         provider=provider_prefix(answer.model_id),
         model_id=answer.model_id,
-        generation_settings={"temperature": temperature, "timeout": timeout},
+        generation_settings=generation_settings,
         latency_ms=answer.latency_ms,
         usage=answer.usage,
         # Keep the compatibility field, but store only the bounded category. Raw
