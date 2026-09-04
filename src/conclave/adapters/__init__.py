@@ -75,7 +75,9 @@ def resolve_adapter(model_id: str, config: ConclaveConfig | None = None) -> Prov
 
     Raises:
         ProviderError: When the prefix is unknown and no custom endpoint declares
-            it. The message names the prefix and the remedy.
+            it. The message names the prefix and the remedy. ``category`` is
+            ``"unresolved"`` (DSE-1512) -- no call was ever made, so a failover
+            ladder treats it the same as any other infrastructure failure.
     """
     prefix = provider_prefix(model_id)
 
@@ -96,5 +98,6 @@ def resolve_adapter(model_id: str, config: ConclaveConfig | None = None) -> Prov
     raise ProviderError(
         f"unknown provider '{prefix}' for model '{model_id}': no built-in adapter "
         "and no custom OpenAI-compatible endpoint declared in config "
-        "(add it under 'endpoints:' in ~/.conclave/config.yml)"
+        "(add it under 'endpoints:' in ~/.conclave/config.yml)",
+        category="unresolved",
     )

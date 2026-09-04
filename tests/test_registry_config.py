@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from conclave.config import load_config
+from conclave.config import _load_config_uncached, load_config, parse_synthesizer_chain
 from conclave.registry import (
     DEFAULT_MODELS,
     NATIVE_PROVIDERS,
@@ -201,3 +201,34 @@ def test_consistency_check_detects_url_mismatch(monkeypatch):
 
     with pytest.raises(RegistryError, match="URL drift"):
         _assert_metadata_consistent()
+
+
+# --------------------------------------------------------------------------- #
+# synthesizer_chain ordered failover ladder (DSE-1512)
+# --------------------------------------------------------------------------- #
+
+
+def test_parse_synthesizer_chain_splits_and_dedupes():
+    assert parse_synthesizer_chain("claude>grok > gemini>claude") == ["claude", "grok", "gemini"]
+    assert parse_synthesizer_chain("claude") == ["claude"]
+    assert parse_synthesizer_chain("  ") == []
+
+
+def test_config_synthesizer_chain_from_yaml(tmp_path):
+    p = tmp_path / "c.yml"
+    p.write_text("synthesizer: claude\nsynthesizer_chain: [claude, grok]\n")
+    cfg = _load_config_uncached(p)
+    assert cfg.synthesizer == "claude"
+    assert cfg.synthesizer_chain == ["claude", "grok"]
+
+
+def test_config_synthesizer_chain_accepts_arrow_string(tmp_path):
+    p = tmp_path / "c.yml"
+    p.write_text("synthesizer_chain: 'claude>grok'\n")
+    assert _load_config_uncached(p).synthesizer_chain == ["claude", "grok"]
+
+
+def test_config_synthesizer_chain_bad_value_is_empty(tmp_path):
+    p = tmp_path / "c.yml"
+    p.write_text("synthesizer_chain: 42\n")
+    assert _load_config_uncached(p).synthesizer_chain == []

@@ -176,7 +176,13 @@ async def call_model(
     except ProviderError as exc:
         latency = time.perf_counter() - started
         logger.warning("%s (%s) unresolved: %s", name, model_id, exc)
-        return ModelAnswer(name=name, model_id=model_id, latency_s=latency, error=str(exc))
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            latency_s=latency,
+            error=str(exc),
+            failure_category=exc.category,
+        )
 
     api_key = _resolve_key(adapter)
     if api_key is None:
@@ -184,7 +190,13 @@ async def call_model(
         names = " or ".join(adapter.env_vars) or "(none)"
         msg = f"no API key in environment (set {names})"
         logger.warning("%s (%s) %s", name, model_id, msg)
-        return ModelAnswer(name=name, model_id=model_id, latency_s=latency, error=msg)
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            latency_s=latency,
+            error=msg,
+            failure_category="unkeyed",
+        )
 
     try:
         url, headers, body = adapter.build_request(
@@ -214,12 +226,25 @@ async def call_model(
         # transport message and any composed string.
         message = redact(str(exc))
         logger.warning("%s (%s) failed: %s", name, model_id, message)
-        return ModelAnswer(name=name, model_id=model_id, latency_s=latency, error=message)
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            latency_s=latency,
+            error=message,
+            failure_category=exc.category,
+            http_status=getattr(exc, "http_status", None),
+        )
     except Exception as exc:  # noqa: BLE001 -- never let an unexpected raise kill the run
         latency = time.perf_counter() - started
         message = redact(f"{type(exc).__name__}: {exc}")
         logger.warning("%s (%s) unexpected error: %s", name, model_id, message)
-        return ModelAnswer(name=name, model_id=model_id, latency_s=latency, error=message)
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            latency_s=latency,
+            error=message,
+            failure_category="unexpected",
+        )
 
 
 def _merge_usage(acc: TokenUsage | None, frame: TokenUsage | None) -> TokenUsage | None:
@@ -309,7 +334,13 @@ async def call_model_stream(
     except ProviderError as exc:
         latency = time.perf_counter() - started
         logger.warning("%s (%s) unresolved: %s", name, model_id, exc)
-        yield ModelAnswer(name=name, model_id=model_id, latency_s=latency, error=str(exc))
+        yield ModelAnswer(
+            name=name,
+            model_id=model_id,
+            latency_s=latency,
+            error=str(exc),
+            failure_category=exc.category,
+        )
         return
 
     # Providers without a streaming path degrade to a single-chunk render so the
@@ -336,7 +367,13 @@ async def call_model_stream(
         names = " or ".join(adapter.env_vars) or "(none)"
         msg = f"no API key in environment (set {names})"
         logger.warning("%s (%s) %s", name, model_id, msg)
-        yield ModelAnswer(name=name, model_id=model_id, latency_s=latency, error=msg)
+        yield ModelAnswer(
+            name=name,
+            model_id=model_id,
+            latency_s=latency,
+            error=msg,
+            failure_category="unkeyed",
+        )
         return
 
     parts: list[str] = []
@@ -370,6 +407,7 @@ async def call_model_stream(
                 model_id=model_id,
                 latency_s=latency,
                 error=f"{adapter.prefix}: empty response (no streamed content)",
+                failure_category="malformed_response",
             )
             return
         logger.info("%s (%s) streamed ok in %.2fs", name, model_id, latency)
@@ -394,6 +432,8 @@ async def call_model_stream(
             latency_s=latency,
             usage=usage,
             error=message,
+            failure_category=exc.category,
+            http_status=getattr(exc, "http_status", None),
         )
     except Exception as exc:  # noqa: BLE001 -- never let an unexpected raise kill the run
         latency = time.perf_counter() - started
@@ -406,4 +446,5 @@ async def call_model_stream(
             latency_s=latency,
             usage=usage,
             error=message,
+            failure_category="unexpected",
         )

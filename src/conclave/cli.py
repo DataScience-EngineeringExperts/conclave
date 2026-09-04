@@ -418,6 +418,68 @@ def _stream_to_terminal(council: Council, prompt: str, *, synthesize: bool) -> C
     return result
 
 
+def _format_adjudication_candidate(attempt) -> str:
+    """Format one succession-ledger attempt for the failover note (DSE-1512).
+
+    A terminal ``"success"`` attempt is shown bare (just the candidate name) --
+    it is the answer that shipped, not a failure worth annotating. An
+    ``"exhausted"`` attempt (the last candidate, still an infrastructure
+    failure) is marked ``(exhausted)`` with no category/status, matching the
+    ledger's own semantics: it is the chain running out, not one more
+    diagnosable failure. ``"failed_over"`` and a terminal ``"terminal_failure"``
+    ending (a successor answered, just not usably) both show the candidate's
+    bounded failure category, plus the HTTP status when one was recorded.
+    """
+    if attempt.outcome == "success":
+        return attempt.candidate
+    if attempt.outcome == "exhausted":
+        return f"{attempt.candidate} (exhausted)"
+    if attempt.failure_category:
+        detail = attempt.failure_category
+        if attempt.http_status:
+            detail += f", HTTP {attempt.http_status}"
+        return f"{attempt.candidate} ({detail})"
+    return attempt.candidate
+
+
+def _render_failover_note(result: CouncilResult) -> None:
+    """Print one dim stderr line per adjudication role that failed over (DSE-1512).
+
+    A no-op when the run has no manifest, or when no role's succession ledger
+    contains a ``"failed_over"`` attempt -- so a chain-of-one run (or a chain
+    that never needed to advance) prints nothing, keeping the human output
+    byte-identical to v1.3.0. Skipped-unkeyed attempts are omitted from the
+    line entirely; they are not part of the story of "who tried and failed".
+
+    Roles are rendered in the order they first appear in
+    ``manifest.adjudication_succession`` (synthesis before verdict_extraction
+    for a synthesize-mode run, for example), one line each:
+    ``adjudication failover: <role>: <c1> (<category>[, HTTP <status>]) → <c2> → <final>``.
+    Never called on the ``--json`` path -- the ledger is already in the
+    JSON payload's ``manifest``.
+    """
+    manifest = result.manifest
+    if manifest is None:
+        return
+
+    roles_seen: list[str] = []
+    by_role: dict[str, list] = {}
+    for attempt in manifest.adjudication_succession:
+        if attempt.role not in by_role:
+            by_role[attempt.role] = []
+            roles_seen.append(attempt.role)
+        by_role[attempt.role].append(attempt)
+
+    for role in roles_seen:
+        attempts = by_role[role]
+        if not any(a.outcome == "failed_over" for a in attempts):
+            continue
+        segments = [
+            _format_adjudication_candidate(a) for a in attempts if a.outcome != "skipped_unkeyed"
+        ]
+        err_console.print(f"[dim]adjudication failover: {role}: {' → '.join(segments)}[/dim]")
+
+
 # Mode name -> human renderer. JSON output bypasses this via model_dump.
 _RENDERERS = {
     "synthesize": _render_human,
@@ -490,7 +552,14 @@ def ask(
         help="Run mode: synthesize | raw | debate | adversarial | vote | elite.",
     ),
     synthesizer: str | None = typer.Option(
-        None, "--synthesizer", "-s", help="Override the synthesizer/judge model name."
+        None,
+        "--synthesizer",
+        "-s",
+        help=(
+            "Synthesizer/judge model name, or an ordered failover ladder "
+            "'claude>grok>gemini': the next candidate is tried only on missing-key, "
+            "unknown-provider, auth, quota, 5xx, timeout, or network failures (DSE-1512)."
+        ),
     ),
     rounds: int = typer.Option(
         2, "--rounds", "-r", help="Maximum number of debate rounds (debate mode only).", min=1
@@ -566,7 +635,10 @@ def ask(
 
     * 0 -- the run produced at least one usable member answer, the
       judge/synthesizer step (when attempted) succeeded, and for Elite,
-      ``decision_readiness`` is ``ready``.
+      ``decision_readiness`` is ``ready``. This now also covers a run
+      adjudicated by a successor after a ``--synthesizer``/``synthesizer_chain``
+      failover (DSE-1512): a successor answering is a clean pass, not a
+      degraded one -- see ``CouncilResult.primary_failed_over`` below.
     * 1 -- the run produced zero usable member answers (e.g. no council member
       had an API key, or every member failed), or an Elite result is missing or
       has ``decision_readiness`` ``not_ready``/``indeterminate``. Under ``--json``
@@ -584,7 +656,19 @@ def ask(
       credit failure took out the judge while 4/5 members still answered, and the
       run exited 0 with ``adversarial.verdict`` silently ``null``). Not raised for
       Elite (its own readiness gate above already covers a failed
-      synthesis/verdict step with exit code 1).
+      synthesis/verdict step with exit code 1). With a synthesizer chain
+      (DSE-1512), this now also means the WHOLE chain was exhausted -- every
+      candidate failed for an infrastructure reason -- rather than just the
+      lone synthesizer failing.
+
+    ``--json`` also carries the top-level ``"primary_failed_over"`` field
+    (DSE-1512, additive): ``true`` when, for any role, the declared primary
+    adjudicator did not itself adjudicate for an infrastructure reason (no key,
+    or an infrastructure failure) -- whether a successor then answered (exit 0),
+    the chain was exhausted (exit 3), or a chain of one simply had no key
+    (exit 3) -- see ``CouncilResult.primary_failed_over``. The human render path prints one
+    dim ``adjudication failover: ...`` line per role that failed over; a
+    chain-of-one run that never fails over prints nothing extra.
     """
     mode_lower = mode.lower()
     if mode_lower not in _VALID_MODES:
@@ -626,6 +710,7 @@ def ask(
     # applies identically.
     if stream and not as_json:
         result = _stream_to_terminal(c, prompt, synthesize=(mode_lower == "synthesize"))
+        _render_failover_note(result)
         if not result.successful_answers:
             err_console.print(
                 "[red]No usable council answers. Run 'conclave providers' to check keys.[/red]"
@@ -690,6 +775,7 @@ def ask(
             err_console.print("[red]Elite decision not ready: missing result[/red]")
             raise typer.Exit(code=1)
         _render_elite(result)
+        _render_failover_note(result)
         if not result.elite.completed:
             reason = result.elite.failure_reason or ", ".join(result.elite.readiness_reasons)
             err_console.print(f"[red]Elite protocol incomplete: {reason}[/red]")
@@ -712,6 +798,7 @@ def ask(
         raise typer.Exit(code=1)
 
     _RENDERERS[result.mode](result)
+    _render_failover_note(result)
     if json_output_failed:
         raise typer.Exit(code=1)
     if result.degraded:
@@ -739,6 +826,9 @@ def providers() -> None:
 
     console.print(table)
     console.print(f"[dim]synthesizer default: {cfg.synthesizer} · conclave {__version__}[/dim]")
+    if cfg.synthesizer_chain:
+        chain = " > ".join(cfg.synthesizer_chain)
+        console.print(f"[dim]synthesizer chain: {chain}[/dim]")
 
 
 def _builtin_default_note() -> str:

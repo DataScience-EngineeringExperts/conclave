@@ -20,6 +20,7 @@ import pytest
 
 import conclave.config as config_mod
 import conclave.providers as providers_mod
+from conclave import transport
 from conclave.adapters import ProviderError, resolve_adapter
 from conclave.adapters.anthropic import AnthropicAdapter
 from conclave.adapters.base import redact
@@ -519,3 +520,73 @@ def test_config_cache_invalidates_on_file_change(tmp_path):
 
     second = load_config(path=config_file)
     assert second.synthesizer == "gemini"
+
+
+# --------------------------------------------------------------------------- #
+# call_model carries a typed failure_category / http_status (DSE-1512)
+# --------------------------------------------------------------------------- #
+
+
+async def test_call_model_types_unkeyed(monkeypatch):
+    """No key in env -> failure_category is the typed 'unkeyed', no HTTP status."""
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.setenv("CONCLAVE_CONFIG", "/nonexistent/conclave.yml")
+
+    ans = await call_model("grok", "xai/grok-4.3", [{"role": "user", "content": "hi"}])
+    assert ans.error and ans.failure_category == "unkeyed" and ans.http_status is None
+
+
+async def test_call_model_types_http_status(monkeypatch):
+    """A non-2xx provider response carries its status-derived category + status."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
+    monkeypatch.setenv("CONCLAVE_CONFIG", "/nonexistent/conclave.yml")
+
+    async def fake_post(url, headers, body, timeout):
+        return 402, {"error": {"message": "insufficient credit"}}
+
+    monkeypatch.setattr(transport, "post_json", fake_post)
+
+    ans = await call_model(
+        "claude", "anthropic/claude-sonnet-4-6", [{"role": "user", "content": "hi"}]
+    )
+    assert ans.error and ans.failure_category == "quota" and ans.http_status == 402
+
+
+async def test_call_model_types_timeout(monkeypatch):
+    """A typed transport timeout propagates its category onto the ModelAnswer."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
+    monkeypatch.setenv("CONCLAVE_CONFIG", "/nonexistent/conclave.yml")
+
+    async def fake_post(url, headers, body, timeout):
+        raise transport.TransportError("request timed out after 1s", category="timeout")
+
+    monkeypatch.setattr(transport, "post_json", fake_post)
+
+    ans = await call_model(
+        "claude", "anthropic/claude-sonnet-4-6", [{"role": "user", "content": "hi"}]
+    )
+    assert ans.failure_category == "timeout"
+
+
+async def test_call_model_error_text_unchanged(monkeypatch):
+    """Additive-only guarantee: the error STRING is byte-identical to before."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
+    monkeypatch.setenv("CONCLAVE_CONFIG", "/nonexistent/conclave.yml")
+
+    async def fake_post(url, headers, body, timeout):
+        return 401, {"error": {"message": "bad key"}}
+
+    monkeypatch.setattr(transport, "post_json", fake_post)
+
+    ans = await call_model(
+        "claude", "anthropic/claude-sonnet-4-6", [{"role": "user", "content": "hi"}]
+    )
+    assert ans.error == "anthropic: HTTP 401: bad key"
+
+
+async def test_call_model_unresolved_is_typed():
+    """An unresolved provider prefix carries the typed 'unresolved' category."""
+    ans = await call_model(
+        "x", "nope/model", [{"role": "user", "content": "hi"}], config=ConclaveConfig()
+    )
+    assert ans.failure_category == "unresolved"

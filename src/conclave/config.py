@@ -11,6 +11,7 @@ key values. A typical config looks like::
       default: [grok, claude, perplexity]
       fast: [grok, perplexity]
     synthesizer: claude
+    synthesizer_chain: [claude, grok]  # optional: ordered failover ladder
     endpoints:                 # optional: custom OpenAI-compatible providers
       together:
         completions_url: https://api.together.xyz/v1/chat/completions
@@ -61,6 +62,15 @@ class ConclaveConfig(BaseModel):
         models: friendly name -> provider model id.
         councils: named lists of friendly names.
         synthesizer: friendly name of the default synthesizer model.
+        synthesizer_chain: ordered failover ladder for the synthesizer / judge /
+            verdict-extractor role (DSE-1512). Empty (the default) means "just
+            ``synthesizer``" -- a chain of one, identical to the historic
+            behavior. When non-empty, :class:`conclave.council.Council` tries
+            each candidate in order and only advances to the next one on an
+            INFRASTRUCTURE failure (auth/quota/5xx/timeout/network/no-key --
+            see :data:`conclave.models.FAILOVER_CATEGORIES`); any other failure
+            (a model that answered, even malformed, or a bad request) is
+            terminal for the role rather than triggering another vendor's call.
         endpoints: prefix -> custom OpenAI-compatible endpoint declaration.
         cache: opt-in result cache (off by default). When ``True`` an identical
             repeat run is served from the on-disk cache (see :mod:`conclave.cache`)
@@ -78,6 +88,7 @@ class ConclaveConfig(BaseModel):
     models: dict[str, str] = Field(default_factory=dict)
     councils: dict[str, list[str]] = Field(default_factory=dict)
     synthesizer: str = DEFAULT_SYNTHESIZER
+    synthesizer_chain: list[str] = Field(default_factory=list)
     endpoints: dict[str, CustomEndpoint] = Field(default_factory=dict)
     cache: bool = False
     converge_threshold: float | None = None
@@ -99,6 +110,45 @@ class ConclaveConfig(BaseModel):
         if name_or_csv in self.councils:
             return list(self.councils[name_or_csv])
         return [part.strip() for part in name_or_csv.split(",") if part.strip()]
+
+
+def parse_synthesizer_chain(spec: str) -> list[str]:
+    """Split ``"a>b>c"`` into an ordered, de-duplicated candidate list.
+
+    Whitespace around each name is stripped; empty segments (a leading/trailing
+    ``>`` or a blank string) are dropped; a repeated name keeps only its first
+    (highest-priority) position.
+
+    Args:
+        spec: An arrow-delimited chain spec, e.g. ``"claude>grok>gemini"``.
+
+    Returns:
+        The ordered, de-duplicated list of names (``[]`` for a blank ``spec``).
+    """
+    seen: list[str] = []
+    for part in spec.split(">"):
+        name = part.strip()
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
+def _coerce_chain(value: Any) -> list[str]:
+    """Coerce a config ``synthesizer_chain`` value to an ordered name list, or [].
+
+    Accepts a YAML list of strings or an arrow-delimited string (mirroring
+    :func:`parse_synthesizer_chain`). Any other shape degrades to ``[]`` with a
+    warning, matching this module's resilient-loading convention (a bad config
+    field never crashes a run, it just disables the optional feature).
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return parse_synthesizer_chain(value)
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        return parse_synthesizer_chain(">".join(value))
+    logger.warning("synthesizer_chain %r is not a list of names; ignoring", value)
+    return []
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -189,6 +239,7 @@ def _load_config_uncached(path: Path) -> ConclaveConfig:
     councils.setdefault("default", list(DEFAULT_MODELS.keys()))
 
     synthesizer = raw.get("synthesizer", DEFAULT_SYNTHESIZER)
+    synthesizer_chain = _coerce_chain(raw.get("synthesizer_chain"))
 
     endpoints = {
         prefix: CustomEndpoint(**spec)
@@ -207,6 +258,7 @@ def _load_config_uncached(path: Path) -> ConclaveConfig:
         models=merged_models,
         councils=councils,
         synthesizer=synthesizer,
+        synthesizer_chain=synthesizer_chain,
         endpoints=endpoints,
         cache=cache,
         converge_threshold=converge_threshold,

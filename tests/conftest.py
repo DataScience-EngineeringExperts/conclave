@@ -189,6 +189,86 @@ def clear_keys(monkeypatch) -> None:
 
 
 @pytest.fixture
+def keys(monkeypatch) -> None:
+    """Set every DSE-1512 adjudication-chain provider key to a dummy value.
+
+    Covers the five friendly names used across the ``Council.adjudicate``
+    succession tests (``claude``/``grok``/``gemini``/``openai``/``mistral``),
+    so a chain like ``"openai>mistral"`` (used by the Elite synthesis-failover
+    tests) is fully keyed without each test hand-rolling the env vars.
+    """
+    for var in (
+        "ANTHROPIC_API_KEY",
+        "XAI_API_KEY",
+        "GEMINI_API_KEY",
+        "OPENAI_API_KEY",
+        "MISTRAL_API_KEY",
+    ):
+        monkeypatch.setenv(var, "dummy")
+
+
+def make_failed_answer(
+    name: str, model_id: str, category: str, status: int | None = None
+) -> ModelAnswer:
+    """Build a failed :class:`~conclave.models.ModelAnswer` with a typed category.
+
+    Shared by the ``Council.adjudicate`` succession tests
+    (``tests/test_adjudication.py``, ``tests/test_council.py``,
+    ``tests/test_modes.py``, ``tests/test_elite_mode.py``) so every test drives
+    the failover rule from the same typed-failure shape rather than raising a
+    bare exception (which would carry no ``failure_category``).
+    """
+    return ModelAnswer(
+        name=name,
+        model_id=model_id,
+        error=f"{name} failed",
+        failure_category=category,
+        http_status=status,
+    )
+
+
+def make_ok_answer(name: str, model_id: str) -> ModelAnswer:
+    """Build a successful :class:`~conclave.models.ModelAnswer` for a member/candidate."""
+    return ModelAnswer(
+        name=name, model_id=model_id, answer=f"{name} says yes", answer_id=f"{name}-1"
+    )
+
+
+def install_council_script(monkeypatch, script: dict[str, ModelAnswer]) -> list[str]:
+    """Patch the council ``call_model`` seam to return a fixed answer per name.
+
+    Unlike :func:`make_response`/``patch_call_model`` (which drive a handler
+    keyed by model id + messages), this seam is keyed by the friendly
+    ``name`` and returns the SAME :class:`~conclave.models.ModelAnswer` object
+    every time that name is called -- exactly what the adjudication-succession
+    tests need, since a council member and an adjudication-chain candidate are
+    called through the identical ``conclave.council.call_model`` seam (a test
+    exercising a member fan-out plus a chain failover needs a script entry for
+    every name involved, members included). Only the council seam is patched
+    (not the verdict-extraction seam); callers exercising those tests pass
+    ``extract_verdict=False`` to keep the verdict path out of the picture.
+
+    Args:
+        monkeypatch: The pytest monkeypatch fixture.
+        script: Friendly name -> the fixed :class:`ModelAnswer` to return for
+            every call to that name.
+
+    Returns:
+        The call log: one friendly name appended per call, in call order.
+    """
+    import conclave.council as council_mod
+
+    calls: list[str] = []
+
+    async def fake(name, model_id, messages, **kwargs):
+        calls.append(name)
+        return script[name]
+
+    monkeypatch.setattr(council_mod, "call_model", fake)
+    return calls
+
+
+@pytest.fixture
 def conclave_caplog(caplog):
     """caplog that reliably captures the non-propagating ``conclave`` logger.
 

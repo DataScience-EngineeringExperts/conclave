@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Adjudication succession (DSE-1512).** The synthesizer, debate consolidator, adversarial
+  judge, and verdict extractor can now fail over along an operator-declared ladder:
+  `--synthesizer claude>grok>gemini` on the CLI, `synthesizer_chain: [claude, grok, gemini]` in
+  `~/.conclave/config.yml`, or `Council(synthesizer="claude>grok")` / a list in the library.
+  Candidates are tried strictly in declared order — no scoring, no health tracking, no routing.
+  Failover fires **only on infrastructure failures** (`unkeyed`, `unresolved`, `auth` 401/403,
+  `quota` 402/429, `unavailable` 5xx, `timeout`, `transport`). A candidate that *answered* —
+  even unusably (`bad_request`, `malformed_response`) — is terminal for that role, so
+  adjudication can never shop for a result. A run adjudicated by a successor is a clean run
+  (exit `0`); `degraded` / exit `3` now means the whole chain was exhausted. With no chain
+  configured, behaviour is unchanged.
+- **Typed failure categories.** `ModelAnswer.failure_category` and `ModelAnswer.http_status`
+  are derived at the raise site (`TransportError.category`, `ProviderError.category` /
+  `http_status`, `conclave.models.categorize_http_status`), never by inspecting error text.
+  `ModelAnswer.error` strings are byte-for-byte unchanged.
+- **Succession ledger on the manifest.** `ModelHarnessManifest.adjudication_succession`
+  records every candidate attempt per role (`synthesis`, `debate_final`, `judge`,
+  `verdict_extraction`) with `outcome` (`success` / `failed_over` / `exhausted` /
+  `terminal_failure` / `skipped_unkeyed`), `failure_category`, and `http_status` — bounded
+  values only, no free text, so the `secret_safety` stamp stays provably clean.
+  `result.synthesizer` / `result.adversarial.judge` now name the candidate that actually
+  adjudicated.
+- **Streaming parity.** `--stream` synthesis walks the same ladder but fails over only
+  **before the first token** is emitted; a failure after output has started is terminal
+  regardless of category (tokens cannot be un-shown).
+- `VerdictSynthesisResult.failure_category` / `http_status` (set on the extraction-failed
+  path only) and public `REASON_TOO_FEW` / `REASON_OPEN_ENDED` / `REASON_EXTRACTION_FAILED`.
+- `CouncilResult.primary_failed_over` (computed field, present in `model_dump(mode="json")`
+  and `--json`): `true` when, for any role, the primary adjudicator did not itself adjudicate
+  for an infrastructure reason (no key, auth, quota, 5xx, timeout, network) or the ladder was
+  exhausted. Independent of `degraded`; the cache never stores a `true` run.
+- A declared chain widens which vendors may receive the prompt (see README › Synthesizer
+  failover › Confidentiality).
+
+### Changed
+
+- `debate` and `adversarial` manifests now carry a receipt for the final-consolidation /
+  judge call, which they previously omitted; `total_latency_ms`, `total_usage`, and
+  `redacted_errors` for those modes include it. Every real call now has a receipt, matching
+  the Elite contract.
+- **Cache.** The full synthesizer chain is part of cache identity; `CACHE_FORMAT_VERSION`
+  `3` → `4` (old entries miss safely). A run whose primary adjudicator did not adjudicate for
+  an infrastructure reason — no key, auth, quota, 5xx, timeout, network — or whose ladder was
+  exhausted, is **never stored** (buffered or `--stream`); a cache hit must never pin a result
+  the primary did not produce, nor replay an outage after it ends. `terminal_failure` runs (the
+  model answered) remain cacheable. Chain-of-one consequence: a degraded run whose sole
+  synthesizer had no key or errored for an infrastructure reason used to be cached and now is
+  not.
+- `ProviderError` and `TransportError` accept keyword-only `category` (and `http_status`);
+  positional construction is unchanged.
+
+### Not changed (deliberately)
+
+- Verdict extraction's same-model repair retry is still attempted after an infrastructure
+  error; its outcome can never turn a content failure into a failover — the candidate's fate
+  is decided by whether it ever answered.
+- Member-level failover (members already degrade gracefully), transport-level retries, and
+  the substring-derived `ReceiptErrorCategory` on receipts.
+
 ## [1.3.0] - 2026-08-01
 
 ### Added

@@ -433,6 +433,65 @@ can compare it across runs to detect that the synthesis wording changed, instead
 of silently attributing the shift to model drift. The test suite pins both the
 prompt text and the version, so changing one without the other fails CI.
 
+### Synthesizer failover
+
+One vendor's outage should not strip a run of its synthesis, judge verdict, or structured
+verdict. Declare an ordered ladder and conclave tries the next candidate **only when the
+previous one failed for an infrastructure reason**:
+
+```bash
+conclave ask "Is a service mesh worth it for 8 services?" \
+  -c grok,gemini,claude,perplexity --synthesizer "claude>grok>gemini"
+```
+
+```yaml
+# ~/.conclave/config.yml
+synthesizer: claude
+synthesizer_chain: [claude, grok, gemini]   # optional; empty means just `synthesizer`
+```
+
+| Failure category | Trigger | Next candidate tried? |
+|---|---|---|
+| `unkeyed` / `unresolved` | no API key in the environment / unknown provider | yes (no network request is made) |
+| `auth` | HTTP 401 / 403 | yes |
+| `quota` | HTTP 402 / 429 | yes |
+| `unavailable` | HTTP 5xx | yes |
+| `timeout` / `transport` | deadline, DNS, connection | yes |
+| `bad_request` | other HTTP 4xx | **no** — the request was wrong, not the vendor |
+| `malformed_response` | 2xx with unusable content | **no** — the model answered |
+
+The rule is deliberately narrow: a model that answered is never second-guessed by another
+vendor, so a ladder cannot be used to shop for a verdict. The order is yours; conclave adds
+no scoring or health tracking. With `--stream`, failover happens only before the first token
+is shown.
+
+Verdict extraction attempts every candidate rather than pre-skipping unkeyed ones (those
+attempts fail before any network request), so its receipts stay complete; a candidate that
+produced any response — even unusable JSON — is terminal for that role.
+
+**Confidentiality.** A chain widens which vendors receive your prompt: on an infrastructure
+failure the same prompt and council answers are sent to the next declared candidate. Declare
+only vendors you are willing to have see the prompt.
+
+Every attempt is recorded on the manifest so the receipt answers *who adjudicated, and why
+not the primary?*:
+
+```json
+"adjudication_succession": [
+  {"role": "synthesis", "candidate": "claude", "model_id": "anthropic/claude-sonnet-4-6",
+   "attempt_index": 1, "outcome": "failed_over", "failure_category": "quota", "http_status": 429},
+  {"role": "synthesis", "candidate": "grok", "model_id": "xai/grok-4.3",
+   "attempt_index": 2, "outcome": "success", "failure_category": null, "http_status": null}
+]
+```
+
+`result.synthesizer` names the candidate that actually adjudicated. A run adjudicated by a
+successor exits `0`; exit `3` (`degraded`) now means the whole ladder was exhausted. A run
+whose primary adjudicator did not adjudicate for an infrastructure reason — no key, auth,
+quota, 5xx, timeout, network — or whose ladder was exhausted, is never written to the result
+cache (buffered or `--stream`) — a cache hit must never pin a result the primary did not
+produce, nor replay an outage after it ends.
+
 ## Config (optional)
 
 Create `~/.conclave/config.yml` to add models, define named councils, and set a
@@ -446,6 +505,7 @@ councils:
   default: [grok, gemini, claude, perplexity]
   fast: [grok, perplexity]
 synthesizer: claude
+synthesizer_chain: [claude, grok]   # optional: ordered failover ladder
 ```
 
 Then: `conclave ask "..." --council fast`.

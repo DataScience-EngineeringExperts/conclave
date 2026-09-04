@@ -1,8 +1,10 @@
 """Deliberation modes: multi-round debate and adversarial propose/refute/verdict.
 
 Both modes are built on :meth:`conclave.council.Council.fan_out` (the single
-concurrency + partial-failure primitive) and :meth:`Council.synthesize_blocks`
-(the single synthesizer call path). Keeping the logic here keeps ``council.py``
+concurrency + partial-failure primitive) and
+:meth:`Council._adjudicate_and_record` (the single adjudication path: it walks
+the synthesizer chain via :meth:`Council.adjudicate` and records the succession
+ledger + receipts, DSE-1512). Keeping the logic here keeps ``council.py``
 focused on the v0.1 surface while the deliberation algorithms live on their own.
 Prompt wording lives in :mod:`conclave.prompts`.
 
@@ -37,7 +39,6 @@ from .models import (
     VoteResult,
     derive_phase_answer_id,
 )
-from .registry import key_present
 
 if TYPE_CHECKING:  # avoid a circular import at runtime; only needed for typing
     from .council import Council
@@ -383,6 +384,13 @@ async def run_debate(
     if result.rounds:
         result.answers = list(result.rounds[-1].answers)
 
+    # Attach the manifest BEFORE the final consolidation so
+    # ``_debate_synthesize``'s ``_record_adjudication`` call (DSE-1512) has
+    # somewhere to land the succession ledger and per-call receipts.
+    # ``result.answers`` already mirrors the final round, so the manifest built
+    # here is identical to the one ``_cached_run`` would otherwise build after
+    # this function returns.
+    council._ensure_manifest(result, "debate")
     await _debate_synthesize(council, result)
     return result
 
@@ -489,33 +497,52 @@ def _debate_messages_for(
 
 
 async def _debate_synthesize(council: Council, result: CouncilResult) -> None:
-    """Consolidate the final round's surviving answers via the synthesizer."""
+    """Consolidate the final round's surviving answers via the synthesizer chain.
+
+    Mirrors :meth:`conclave.council.Council._synthesize` short-circuit for
+    short-circuit (DSE-1512): the "no surviving answers" gate is debate-specific
+    (there is nothing else to consolidate), but the keyed-chain check
+    (:meth:`Council._chain_unkeyed_error`) and the adjudicate-then-record tail
+    (:meth:`Council._adjudicate_and_record`) are the SAME shared methods
+    :meth:`Council._synthesize` and :func:`_adversarial_judge` call (DSE-1512
+    review, Unit C), so the chain-of-one/chain wording and the
+    succession-ledger bookkeeping can never drift between the three roles.
+    ``result.manifest`` is guaranteed non-``None`` here -- :func:`run_debate`
+    calls :meth:`Council._ensure_manifest` immediately before this function.
+    """
     final = result.rounds[-1].successful_answers if result.rounds else []
     if not final:
         result.synthesis_error = "no surviving member answers to synthesize"
         logger.warning(result.synthesis_error)
         return
 
-    synth_id = council.config.resolve_model_id(council.synthesizer)
+    primary_id = council.config.resolve_model_id(council.synthesizer)
     result.synthesizer = council.synthesizer
-    result.synthesizer_model_id = synth_id
-    if not key_present(synth_id):
-        result.synthesis_error = (
-            f"synthesizer '{council.synthesizer}' ({synth_id}) has no API key; "
-            "returning final-round answers only"
+    result.synthesizer_model_id = primary_id
+
+    err = council._chain_unkeyed_error("synthesizer", "returning final-round answers only")
+    if err is not None:
+        result.synthesis_error = err
+        logger.warning(err)
+        council._record_adjudication(
+            result, council._skipped_attempts("debate_final"), [], phase="debate_final"
         )
-        logger.warning(result.synthesis_error)
         return
 
     blocks = "\n\n".join(
         f"### Final answer from {a.name} ({a.model_id})\n{a.answer}" for a in final
     )
     user_content = prompts.debate_final_user(result.prompt, len(result.rounds), blocks)
-    answer = await council.synthesize_blocks(prompts.DEBATE_FINAL_SYSTEM, user_content)
-    if answer.ok:
-        result.synthesis = answer.answer
-    else:
-        result.synthesis_error = answer.error
+    outcome = await council._adjudicate_and_record(
+        result, "debate_final", prompts.DEBATE_FINAL_SYSTEM, user_content, phase="debate_final"
+    )
+    answer = outcome.answer
+    if answer is not None:
+        result.synthesizer, result.synthesizer_model_id = outcome.name, outcome.model_id
+        if answer.ok:
+            result.synthesis = answer.answer
+        else:
+            result.synthesis_error = answer.error
 
 
 async def run_adversarial(
@@ -600,7 +627,13 @@ async def run_adversarial(
         result.answers.extend(adv.critiques)
 
     # Step 4: the judge weighs proposal vs critiques and issues a verdict.
-    await _adversarial_judge(council, prompt, adv)
+    # Attach the manifest first so ``_adversarial_judge``'s ``_record_adjudication``
+    # call (DSE-1512) has somewhere to land the succession ledger and per-call
+    # receipts. ``result.answers`` already holds the proposal attempt(s) and
+    # critiques, so the manifest built here is identical to the one
+    # ``_cached_run`` would otherwise build after this function returns.
+    council._ensure_manifest(result, "adversarial")
+    await _adversarial_judge(council, prompt, adv, result)
     result.adversarial = adv
     result.synthesis = adv.verdict
     result.synthesis_error = adv.verdict_error
@@ -678,11 +711,27 @@ def _proposer_order(members: list[tuple[str, str]], requested: str) -> list[tupl
     return [requested_member, *rest]
 
 
-async def _adversarial_judge(council: Council, prompt: str, adv: AdversarialResult) -> None:
-    """Run the judge over the proposal + critiques, mutating ``adv``."""
-    judge_id = council.config.resolve_model_id(council.synthesizer)
+async def _adversarial_judge(
+    council: Council, prompt: str, adv: AdversarialResult, result: CouncilResult
+) -> None:
+    """Run the judge chain over the proposal + critiques, mutating ``adv``.
+
+    Mirrors :meth:`conclave.council.Council._synthesize` short-circuit for
+    short-circuit (DSE-1512): the "proposal failed" gate is adversarial-specific
+    (nothing to judge without a proposal), but the keyed-chain check
+    (:meth:`Council._chain_unkeyed_error`) and the adjudicate-then-record tail
+    (:meth:`Council._adjudicate_and_record`) are the SAME shared methods
+    :meth:`Council._synthesize` and :func:`_debate_synthesize` call (DSE-1512
+    review, Unit C), so the chain-of-one/chain wording and the
+    succession-ledger bookkeeping can never drift between the three roles.
+    ``result`` (the enclosing :class:`CouncilResult`) is threaded through only
+    to reach its manifest -- callers guarantee ``result.manifest is not None``
+    before calling this (:func:`run_adversarial` calls
+    :meth:`Council._ensure_manifest` immediately before this function).
+    """
+    primary_id = council.config.resolve_model_id(council.synthesizer)
     adv.judge = council.synthesizer
-    adv.judge_model_id = judge_id
+    adv.judge_model_id = primary_id
 
     if not adv.proposal.ok:
         adv.verdict_error = (
@@ -690,12 +739,12 @@ async def _adversarial_judge(council: Council, prompt: str, adv: AdversarialResu
         )
         logger.warning(adv.verdict_error)
         return
-    if not key_present(judge_id):
-        adv.verdict_error = (
-            f"judge '{council.synthesizer}' ({judge_id}) has no API key; "
-            "returning proposal and critiques only"
-        )
-        logger.warning(adv.verdict_error)
+
+    err = council._chain_unkeyed_error("judge", "returning proposal and critiques only")
+    if err is not None:
+        adv.verdict_error = err
+        logger.warning(err)
+        council._record_adjudication(result, council._skipped_attempts("judge"), [], phase="judge")
         return
 
     usable_critiques = adv.successful_critiques
@@ -709,8 +758,13 @@ async def _adversarial_judge(council: Council, prompt: str, adv: AdversarialResu
     user_content = prompts.judge_user(
         prompt, adv.proposer, adv.proposal.answer or "", critique_blocks
     )
-    answer = await council.synthesize_blocks(prompts.JUDGE_SYSTEM, user_content)
-    if answer.ok:
-        adv.verdict = answer.answer
-    else:
-        adv.verdict_error = answer.error
+    outcome = await council._adjudicate_and_record(
+        result, "judge", prompts.JUDGE_SYSTEM, user_content, phase="judge"
+    )
+    answer = outcome.answer
+    if answer is not None:
+        adv.judge, adv.judge_model_id = outcome.name, outcome.model_id
+        if answer.ok:
+            adv.verdict = answer.answer
+        else:
+            adv.verdict_error = answer.error

@@ -14,7 +14,7 @@
 - **Repo:** `/Users/ernestprovo/dev/conclave/`
 - **License:** MIT
 - **Author:** Data Science & Engineering Experts, Inc. (DSE)
-- **Last updated:** 2026-07-18
+- **Last updated:** 2026-09-03
 
 ---
 
@@ -73,7 +73,7 @@ Helicone is in §11).
 | **The skeptical engineer** | Senior dev / architect making a consequential technical call | A fast second/third opinion across models, with raw per-model answers visible so they can judge disagreement themselves. Uses the CLI ad hoc. |
 | **The library integrator** | Developer building a tool that needs multi-model input at *design/eval time* | `from conclave import Council`, structured `CouncilResult` (latency, token usage, per-model errors), partial-failure resilience. The primary downstream example is **mcp-warden** (see §10). |
 | **The researcher / evaluator** | Someone comparing model behavior on a prompt set | Deterministic structure around answers, JSON output (`--json`) for downstream analysis, per-model latency and token accounting. |
-| **The cost-conscious power user** | Heavy LLM user who already pays each provider directly | BYO-keys with **no markup** and **no third party seeing the prompt**. conclave is a thin local orchestrator over the user's own accounts. |
+| **The cost-conscious power user** | Heavy LLM user who already pays each provider directly | BYO-keys with **no markup** and **no third party seeing the prompt** (a declared synthesizer chain can send the prompt to the next declared vendor on an infrastructure failure — §4a). conclave is a thin local orchestrator over the user's own accounts. |
 
 Non-personas (*not* who we build for): teams wanting a hosted multi-agent SaaS, or anyone
 needing a deterministic runtime adjudicator (Non-Goals §8, mcp-warden boundary §10).
@@ -274,7 +274,9 @@ and cache hits (synthesize/raw builds its own richer one earlier). Pinned by
 a `ProviderExecutionReceipt{phase, attempt, outcome, name, provider, model_id,
 generation_settings, latency_ms, usage, error_category, schema_valid, versions}`),
 `total_latency_ms`, `total_usage`, `schema_valid`,
-`redacted_errors`, and verdict-provenance slots (`verdict_extraction: VerdictExtraction{model_id,
+`redacted_errors`, `adjudication_succession` (the per-role succession ledger: candidate,
+attempt index, outcome, bounded failure category, HTTP status; never free text), and
+verdict-provenance slots (`verdict_extraction: VerdictExtraction{model_id,
 prompt_version}` — the execution-trace hook — plus `verdict_type`, `consensus_method`,
 `verdict_absent_reason`). Two deliberate honesty choices:
 
@@ -286,6 +288,26 @@ For buffered Elite, every attempted call becomes a receipt: `initial`, `critique
   `verified_no_secrets` **only** after `scan_for_secret_material()` proves the serialized manifest
   free of forbidden substrings (`sk-`, `bearer`, `authorization`, `api_key`, `x-api-key`). Key
   *values* never appear; errors are redacted upstream and re-redacted on construction.
+
+### Adjudication succession (v1.4)
+
+The synthesizer / judge / verdict-extractor identity is an ordered ladder
+(`synthesizer_chain`; a chain of one is the v1.3 behaviour). The seam `Council.adjudicate`
+walks it under one rule, shared by every role including streaming synthesis and verdict
+extraction: **advance only on an infrastructure failure** (`unkeyed`, `unresolved`, `auth`,
+`quota`, `unavailable`, `timeout`, `transport`); any candidate that answered — including a
+malformed answer — is terminal. The rule is narrow on purpose: allowing a second vendor to
+re-adjudicate after a content failure would let a run shop for its verdict and would break
+reproducibility. Failure categories are typed at the raise site (`TransportError.category`,
+`ProviderError.category`), never inferred from error text. The ledger carries bounded
+categories and an integer HTTP status only, so `secret_safety` remains provable. A successor
+adjudication is a clean run; a run whose primary adjudicator did not adjudicate for an
+infrastructure reason — no key, auth, quota, 5xx, timeout, network — or whose ladder was
+exhausted, is never cached — a cache hit must never pin a result the primary did not produce,
+nor replay an outage after it ends. For verdict extraction specifically, the failure category is decided
+by whether the candidate EVER answered across its initial call and same-model repair retry,
+not by whichever attempt happened to run last: a candidate that answered on either attempt is
+terminal for the role even if its other attempt hit an unrelated infrastructure error.
 
 ---
 

@@ -29,7 +29,9 @@ This module deliberately does NOT import :mod:`conclave.models`; the dependency
 runs the other way (``models`` imports the manifest types and calls
 ``model_rebuild()``) so there is no cycle — the same no-cycle pattern
 :mod:`conclave.verdict` uses. It DOES import :class:`~conclave.models.TokenUsage`
-(a leaf type with no back-edge to the manifest) for the usage fields.
+and the :data:`~conclave.models.FailureCategory` literal (both leaf types with
+no back-edge to the manifest) for the usage fields and the bounded
+``failure_category`` on :class:`AdjudicationAttempt`, respectively.
 """
 
 from __future__ import annotations
@@ -38,7 +40,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from .models import TokenUsage
+from .models import FailureCategory, TokenUsage
 
 # ``secret_safety`` status literals. UNVERIFIED is the safe default (a manifest is
 # untrusted until the self-scan proves it clean); VERIFIED is stamped only by
@@ -97,6 +99,45 @@ class VerdictExtraction(BaseModel):
 
     model_id: str | None = None
     prompt_version: str | None = None
+
+
+AdjudicationRole = Literal["synthesis", "debate_final", "judge", "verdict_extraction"]
+AdjudicationAttemptOutcome = Literal[
+    "success",  # this candidate adjudicated
+    "failed_over",  # infra failure; the ladder advanced to the next candidate
+    # (which may itself have been skipped for a missing key)
+    "exhausted",  # infra failure on the LAST candidate; nothing left to try
+    "terminal_failure",  # the candidate answered unusably; failover refused by rule
+    "skipped_unkeyed",  # no API key in the environment; no call made
+]
+
+
+class AdjudicationAttempt(BaseModel):
+    """One step of the synthesizer/judge succession ladder (DSE-1512).
+
+    Deliberately carries NO free text: only bounded categories and an HTTP
+    status. A raw provider error string could contain words the secret-safety
+    scan forbids (e.g. "authorization"), which would un-verify the manifest.
+
+    Attributes:
+        role: Which adjudication role this attempt served.
+        candidate: Friendly name of the model tried at this step.
+        model_id: Resolved provider-prefixed model id.
+        attempt_index: One-based position of this candidate in the chain.
+        outcome: Bounded outcome of the attempt -- see
+            :data:`AdjudicationAttemptOutcome`.
+        failure_category: The typed :data:`conclave.models.FailureCategory` of
+            the failure, or ``None`` on ``"success"``.
+        http_status: The HTTP status that produced the failure, when known.
+    """
+
+    role: AdjudicationRole
+    candidate: str
+    model_id: str
+    attempt_index: int = Field(ge=1)
+    outcome: AdjudicationAttemptOutcome
+    failure_category: FailureCategory | None = None
+    http_status: int | None = None
 
 
 class ProviderExecutionReceipt(BaseModel):
@@ -192,6 +233,11 @@ class ModelHarnessManifest(BaseModel):
         verdict_absent_reason: Why ``result.verdict`` is ``None`` (open-ended
             generation, N<2, or structured-extraction failure), or ``None`` when
             a verdict is present / not yet computed (DD-2 ripple, filled by CAC-05).
+        adjudication_succession: The full synthesizer/judge/verdict-extractor
+            succession ledger (DSE-1512) -- one :class:`AdjudicationAttempt` per
+            candidate tried across every adjudication role in this run,
+            including skipped-unkeyed candidates. Empty for a run that never
+            called :meth:`conclave.council.Council.adjudicate`.
     """
 
     # REQUIRED identity.
@@ -228,6 +274,9 @@ class ModelHarnessManifest(BaseModel):
     verdict_type: str | None = None
     consensus_method: str | None = None
     verdict_absent_reason: str | None = None
+
+    # Synthesizer/judge/verdict-extractor succession ledger (DSE-1512).
+    adjudication_succession: list[AdjudicationAttempt] = Field(default_factory=list)
 
 
 def scan_for_secret_material(manifest: ModelHarnessManifest) -> bool:

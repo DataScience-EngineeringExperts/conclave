@@ -12,7 +12,7 @@ import pytest
 
 from conclave import Council
 from conclave.config import ConclaveConfig
-from tests.conftest import make_response
+from tests.conftest import install_council_script, make_failed_answer, make_ok_answer, make_response
 
 
 def _all_keys(monkeypatch) -> None:
@@ -324,3 +324,239 @@ async def test_config_disk_read_at_most_once_per_ask(monkeypatch, tmp_path):
     assert reads["n"] <= 1, f"expected at most one disk read for the run, got {reads['n']}"
 
     config_mod.clear_config_cache()
+
+
+# --------------------------------------------------------------------------- #
+# synthesizer_chain resolution (DSE-1512)
+# --------------------------------------------------------------------------- #
+
+
+def test_council_chain_defaults_to_single_synthesizer():
+    c = Council(models=["grok"], config=ConclaveConfig(synthesizer="claude"))
+    assert c.synthesizer_chain == ["claude"] and c.synthesizer == "claude"
+
+
+def test_council_chain_from_constructor_string():
+    c = Council(models=["grok"], synthesizer="claude>grok", config=ConclaveConfig())
+    assert c.synthesizer_chain == ["claude", "grok"] and c.synthesizer == "claude"
+
+
+def test_council_chain_from_constructor_list():
+    c = Council(models=["grok"], synthesizer=["gemini", "grok"], config=ConclaveConfig())
+    assert c.synthesizer_chain == ["gemini", "grok"] and c.synthesizer == "gemini"
+
+
+def test_council_chain_from_config_overrides_scalar():
+    cfg = ConclaveConfig(synthesizer="claude", synthesizer_chain=["grok", "gemini"])
+    c = Council(models=["claude"], config=cfg)
+    assert c.synthesizer_chain == ["grok", "gemini"] and c.synthesizer == "grok"
+
+
+def test_council_constructor_arg_beats_config_chain():
+    cfg = ConclaveConfig(synthesizer_chain=["grok", "gemini"])
+    c = Council(models=["claude"], synthesizer="claude", config=cfg)
+    assert c.synthesizer_chain == ["claude"]
+
+
+# --------------------------------------------------------------------------- #
+# prose synthesis routed through the adjudication succession seam (DSE-1512, task 5)
+# --------------------------------------------------------------------------- #
+
+CFG = ConclaveConfig(
+    models={
+        "claude": "anthropic/c",
+        "grok": "xai/g",
+        "gemini": "gemini/m",
+        "openai": "openai/o",
+        "mistral": "mistral/m",
+    }
+)
+
+
+async def test_synthesize_mode_fails_over_and_is_not_degraded(monkeypatch, keys):
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_failed_answer("claude", "anthropic/c", "quota", 402),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.synthesis == "grok says yes" and r.synthesis_error is None and r.degraded is False
+    assert (r.synthesizer, r.synthesizer_model_id) == ("grok", "xai/g")
+    ledger = r.manifest.adjudication_succession
+    assert [(a.role, a.candidate, a.outcome) for a in ledger] == [
+        ("synthesis", "claude", "failed_over"),
+        ("synthesis", "grok", "success"),
+    ]
+    assert [
+        (x.phase, x.attempt, x.name) for x in r.manifest.receipts if x.phase == "synthesis"
+    ] == [
+        ("synthesis", 1, "claude"),
+        ("synthesis", 2, "grok"),
+    ]
+    assert r.manifest.secret_safety == "verified_no_secrets"
+    assert calls == ["gemini", "claude", "grok"]
+
+
+async def test_synthesize_mode_exhausted_is_degraded(monkeypatch, keys):
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_failed_answer("claude", "anthropic/c", "quota", 429),
+            "grok": make_failed_answer("grok", "xai/g", "unavailable", 503),
+        },
+    )
+    c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.synthesis is None
+    assert r.synthesis_error == "grok failed"
+    assert r.degraded is True
+    ledger = r.manifest.adjudication_succession
+    assert [a.outcome for a in ledger] == ["failed_over", "exhausted"]
+    assert (r.synthesizer, r.synthesizer_model_id) == ("grok", "xai/g")
+    assert calls == ["gemini", "claude", "grok"]
+
+
+async def test_synthesize_chain_of_one_no_key_message_unchanged(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    calls = install_council_script(monkeypatch, {"gemini": make_ok_answer("gemini", "gemini/m")})
+    c = Council(models=["gemini"], synthesizer="claude", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.synthesis_error == (
+        "synthesizer 'claude' (anthropic/c) has no API key; returning raw answers only"
+    )
+    ledger = r.manifest.adjudication_succession
+    assert [(a.role, a.candidate, a.outcome) for a in ledger] == [
+        ("synthesis", "claude", "skipped_unkeyed")
+    ]
+    assert [x for x in r.manifest.receipts if x.phase == "synthesis"] == []
+    assert calls == ["gemini"]
+
+
+async def test_synthesize_chain_all_unkeyed_message(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    calls = install_council_script(monkeypatch, {"gemini": make_ok_answer("gemini", "gemini/m")})
+    c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.synthesis_error == (
+        "synthesizer chain [claude, grok] has no API key for any candidate; "
+        "returning raw answers only"
+    )
+    ledger = r.manifest.adjudication_succession
+    assert [a.outcome for a in ledger] == ["skipped_unkeyed", "skipped_unkeyed"]
+    assert r.degraded is True
+    assert calls == ["gemini"]
+
+
+# --------------------------------------------------------------------------- #
+# CouncilResult.primary_failed_over computed field (DSE-1512 review, Unit F)
+# --------------------------------------------------------------------------- #
+
+
+async def test_successor_run_is_primary_failed_over_but_not_degraded(monkeypatch, keys):
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_failed_answer("claude", "anthropic/c", "quota", 402),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.primary_failed_over is True
+    assert r.degraded is False
+    assert "primary_failed_over" in r.model_dump(mode="json")
+
+
+async def test_chain_of_one_clean_run_is_not_primary_failed_over(monkeypatch, keys):
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_ok_answer("claude", "anthropic/c"),
+        },
+    )
+    c = Council(models=["gemini"], synthesizer="claude", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.primary_failed_over is False
+    assert "primary_failed_over" in r.model_dump(mode="json")
+
+
+async def test_terminal_failure_primary_is_not_primary_failed_over(monkeypatch, keys):
+    """A primary that answered unusably (``terminal_failure`` at index 1) is NOT
+    primary_failed_over -- it adjudicated, just badly, so failover never fires and
+    the run must stay cacheable exactly like any other content failure.
+    """
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "claude": make_failed_answer("claude", "anthropic/c", "bad_request", 400),
+        },
+    )
+    c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.primary_failed_over is False
+    assert r.degraded is True
+    assert [a.outcome for a in r.manifest.adjudication_succession] == ["terminal_failure"]
+
+
+async def test_successor_after_unkeyed_primary_is_primary_failed_over(monkeypatch):
+    """DSE-1512 review, Unit A3: a keyed successor after a SKIPPED (not failed) primary
+    still counts as primary_failed_over -- no candidate ever errored on a live call.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.setenv("XAI_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    c = Council(models=["gemini"], synthesizer="claude>grok", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.primary_failed_over is True
+    assert r.degraded is False
+    ledger = r.manifest.adjudication_succession
+    assert [(a.candidate, a.outcome, a.attempt_index) for a in ledger] == [
+        ("claude", "skipped_unkeyed", 1),
+        ("grok", "success", 2),
+    ]
+
+
+async def test_chain_of_one_unkeyed_is_primary_failed_over(monkeypatch):
+    """A chain-of-one unkeyed synthesizer IS primary_failed_over (DSE-1512 review,
+    uniform rule): the primary's attempt_index==1 outcome is "skipped_unkeyed" --
+    it never adjudicated, for an infrastructure reason (no key) -- exactly like a
+    live failover or an exhausted ladder, even though there is no successor to
+    have adjudicated instead.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    install_council_script(monkeypatch, {"gemini": make_ok_answer("gemini", "gemini/m")})
+    c = Council(models=["gemini"], synthesizer="claude", config=CFG, extract_verdict=False)
+    r = await c.ask("q")
+    assert r.primary_failed_over is True
+    assert r.degraded is True
+    assert [a.outcome for a in r.manifest.adjudication_succession] == ["skipped_unkeyed"]
+
+
+async def test_chain_of_one_unkeyed_is_primary_failed_over_with_verdict_extraction(monkeypatch):
+    """Same as above with the default ``extract_verdict=True``: the rule must not
+    depend on which roles ran or whether verdict extraction's separate
+    unkeyed-candidate handling (see ``Council._apply_verdict``) happened to run.
+    """
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    install_council_script(monkeypatch, {"gemini": make_ok_answer("gemini", "gemini/m")})
+    c = Council(models=["gemini"], synthesizer="claude", config=CFG)
+    r = await c.ask("q")
+    assert r.primary_failed_over is True
+    assert r.degraded is True

@@ -52,24 +52,39 @@ is detectable downstream instead of being silently absorbed as model drift.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from . import cache as cache_mod
 from . import transport
 from .adapters.base import redact
-from .config import ConclaveConfig, load_config
+from .config import ConclaveConfig, load_config, parse_synthesizer_chain
 from .logging import get_logger
 from .manifest import (
+    AdjudicationAttempt,
+    AdjudicationAttemptOutcome,
+    AdjudicationRole,
     ModelHarnessManifest,
     ProviderExecutionReceipt,
     ProviderSkip,
     verified_secret_safety,
 )
-from .models import ELITE_PROTOCOL_VERSION, CouncilResult, ModelAnswer, StreamEvent, TokenUsage
+from .models import (
+    ELITE_PROTOCOL_VERSION,
+    FAILOVER_CATEGORIES,
+    CouncilResult,
+    ModelAnswer,
+    StreamEvent,
+    TokenUsage,
+)
 from .prompts import ELITE_PROMPT_VERSION, SYNTHESIS_PROMPT_VERSION
 from .providers import call_model, receipt_from_answer
 from .registry import key_present
+
+if TYPE_CHECKING:  # avoid an import cycle at runtime; only needed for typing
+    from .verdict_synthesis import VerdictSynthesisResult
 
 logger = get_logger("council")
 
@@ -98,13 +113,44 @@ _SYNTH_SYSTEM = (
 __all__ = ["Council", "SYNTHESIS_PROMPT_VERSION"]
 
 
+@dataclass
+class AdjudicationOutcome:
+    """Return value of :meth:`Council.adjudicate`.
+
+    ``answer`` is the successful answer, or the terminal / exhausted failure, or
+    ``None`` when no candidate could be called at all (every one unkeyed).
+    ``called`` lists every REAL call in order (for receipts); ``attempts`` is the
+    full ledger including skipped candidates.
+    """
+
+    answer: ModelAnswer | None
+    attempts: list[AdjudicationAttempt]
+    called: list[ModelAnswer]
+
+    @property
+    def name(self) -> str | None:
+        return self.answer.name if self.answer is not None else None
+
+    @property
+    def model_id(self) -> str | None:
+        return self.answer.model_id if self.answer is not None else None
+
+
 class Council:
     """A council of foundation models with an optional synthesizer.
 
     Args:
         models: Friendly names (or raw provider-prefixed model ids) of council members.
-        synthesizer: Friendly name of the synthesizer model. If ``None``, the
-            config default is used.
+        synthesizer: Friendly name of the synthesizer model, an ordered chain
+            spec (``"claude>grok>gemini"``), or a list of names
+            (``["claude", "grok"]``). If ``None``, ``config.synthesizer_chain``
+            is used when set, else ``config.synthesizer`` (a chain of one).
+            Whichever form resolves, ``self.synthesizer`` keeps its historic
+            meaning: the primary (first) candidate. The full ordered ladder is
+            ``self.synthesizer_chain`` (DSE-1512); :meth:`adjudicate` walks it
+            and advances past a candidate only on an infrastructure failure
+            (see :data:`conclave.models.FAILOVER_CATEGORIES`) -- any other
+            failure is terminal for the role.
         config: Pre-loaded config; if ``None``, loaded from disk + defaults.
         temperature: Sampling temperature for member calls.
         timeout: Per-call timeout in seconds.
@@ -154,7 +200,7 @@ class Council:
     def __init__(
         self,
         models: list[str],
-        synthesizer: str | None = None,
+        synthesizer: str | Sequence[str] | None = None,
         config: ConclaveConfig | None = None,
         temperature: float = 0.7,
         timeout: float = 120.0,
@@ -165,7 +211,9 @@ class Council:
     ) -> None:
         self.config = config or load_config()
         self.requested_models = list(models)
-        self.synthesizer = synthesizer or self.config.synthesizer
+        self.synthesizer_chain = self._resolve_chain(synthesizer, self.config)
+        # Back-compat: the primary candidate keeps the historic attribute.
+        self.synthesizer = self.synthesizer_chain[0]
         self.temperature = temperature
         self.timeout = timeout
         # Explicit override wins; otherwise defer to config (off by default).
@@ -189,6 +237,31 @@ class Council:
         # that DEBUG band and accept the responsibility.
         if not allow_transport_debug_logging:
             transport.guard_transport_logging()
+
+    @staticmethod
+    def _resolve_chain(spec: str | Sequence[str] | None, config: ConclaveConfig) -> list[str]:
+        """Resolve the synthesizer ladder (DSE-1512).
+
+        Precedence, highest first: the constructor ``synthesizer=`` arg (string
+        chain spec or list of names) -> ``config.synthesizer_chain`` -> a chain
+        of one built from ``config.synthesizer``. This mirrors the pre-existing
+        scalar-``synthesizer`` precedence documented in the class docstring, just
+        extended to an ordered list -- a chain of one behaves exactly like today.
+
+        Args:
+            spec: The constructor's ``synthesizer`` argument, or ``None``.
+            config: The resolved council config.
+
+        Returns:
+            A non-empty ordered list of candidate friendly names.
+        """
+        if isinstance(spec, str):
+            chain = parse_synthesizer_chain(spec)
+        elif spec is not None:
+            chain = parse_synthesizer_chain(">".join(spec))
+        else:
+            chain = list(config.synthesizer_chain)
+        return chain or [config.synthesizer]
 
     def _available_members(self) -> tuple[list[tuple[str, str]], list[str]]:
         """Partition requested members into (available, skipped-for-no-key).
@@ -221,17 +294,21 @@ class Council:
     ) -> str:
         """Build the cache key for a run from the resolved, secret-free identity.
 
-        Uses the *resolved* member ids and the synthesizer/judge identity so two
-        runs collide only when they would genuinely produce equivalent output.
-        Members that would be skipped for a missing key are excluded -- a cache
-        entry reflects the council that actually ran, so a key reappearing later
+        Uses the *resolved* member ids and the FULL resolved synthesizer/judge
+        chain (DSE-1512, not just the primary) so two runs collide only when
+        they would genuinely produce equivalent output: changing any successor
+        candidate in the ladder invalidates a prior entry, since a later run
+        over the same prompt could fail over to a different model. Members
+        that would be skipped for a missing key are excluded -- a cache entry
+        reflects the council that actually ran, so a key reappearing later
         produces the same membership. No environment value is read here.
         """
         members, _skipped = self._available_members()
-        synth_id = self.config.resolve_model_id(self.synthesizer)
+        chain_pairs = [(c, self.config.resolve_model_id(c)) for c in self.synthesizer_chain]
+        synth_id = chain_pairs[0][1]
         used_prefixes = {
             model_id.split("/", 1)[0]
-            for _name, model_id in [*members, (self.synthesizer, synth_id)]
+            for _name, model_id in [*members, *chain_pairs]
             if "/" in model_id
         }
         return cache_mod.make_key(
@@ -240,6 +317,7 @@ class Council:
             members=members,
             synthesizer=self.synthesizer,
             synthesizer_model_id=synth_id,
+            synthesizer_chain=chain_pairs,
             temperature=self.temperature,
             timeout=self.timeout,
             rounds=rounds,
@@ -273,8 +351,9 @@ class Council:
 
         On a hit the cached :class:`CouncilResult` is returned with ``cached=True``
         and the providers are not called. On a miss (or when caching is off) the
-        live ``run`` executes; a successful live run is stored best-effort. Cache
-        read/write failures never propagate -- they degrade to a normal live run.
+        live ``run`` executes; a successful live run is stored best-effort, EXCEPT
+        for the no-store rule below. Cache read/write failures never propagate --
+        they degrade to a normal live run.
 
         This is the single chokepoint every mode funnels through, so it is also
         where the manifest-on-every-result invariant is enforced: each returned
@@ -282,6 +361,26 @@ class Council:
         synthesize/raw path, which builds its own richer manifest in
         :meth:`_ask_uncached`; a fill for ``debate``/``adversarial``/``vote`` and
         for a cache hit stored before the manifest existed).
+
+        **No-store when the primary did not adjudicate (DSE-1512).** A cache
+        hit must never pin a result the chain's primary adjudicator did not
+        produce, and it must never replay an infrastructure outage -- including
+        a still-missing key -- after it has cleared. So a live result is NOT
+        written to the cache when
+        :attr:`~conclave.models.CouncilResult.primary_failed_over` is ``True``.
+        See that property for the exact rule; in one sentence: the primary
+        adjudicator of some role did not itself produce the answer, for an
+        infrastructure reason (no key, auth, quota, 5xx, timeout, network) or
+        because the whole ladder was exhausted. The uncached result is still
+        returned to THIS caller unchanged; only the write to disk is skipped,
+        so the next identical ``ask`` gets a fresh chance at a healthy primary
+        rather than a pinned failure or a successor's answer served under the
+        primary's name. This is a deliberate, narrow behavior change from
+        v1.3.0: a chain-of-one run whose sole synthesizer had no key or
+        errored for an infrastructure reason used to be cached and now is not.
+        A ``"terminal_failure"`` ledger entry (the model answered, just not
+        usably) is unaffected and remains cacheable exactly as before --
+        re-running would not produce a different, better answer.
         """
         if not self.cache_enabled:
             result = await run()
@@ -304,6 +403,13 @@ class Council:
 
         result = await run()
         self._ensure_manifest(result, mode)
+        if result.primary_failed_over:
+            logger.info(
+                "not caching %s run (%s): primary adjudicator failed for an infrastructure reason",
+                mode,
+                key[:12],
+            )
+            return result
         cache_mod.store(key, result)
         return result
 
@@ -605,28 +711,15 @@ class Council:
 
         if synthesize:
             # Prose synthesis first, then the structured verdict over the SAME
-            # answers. ``_apply_verdict`` runs after the manifest exists so it can
-            # populate the manifest's verdict-provenance slots; it is skipped in
-            # raw mode (no synthesizer call) and is opt-out via the constructor
-            # flag (resolved inside the helper). The no-members early return above
-            # never reaches here, so a memberless run carries no verdict.
-            synthesis_answer = await self._synthesize(result)
-            if synthesis_answer is not None:
-                self._append_manifest_receipts(
-                    result,
-                    [
-                        receipt_from_answer(
-                            synthesis_answer,
-                            temperature=self.temperature,
-                            timeout=self.timeout,
-                            phase="synthesis",
-                            protocol_version=(
-                                ELITE_PROTOCOL_VERSION if result.mode == "elite" else None
-                            ),
-                            prompt_version=SYNTHESIS_PROMPT_VERSION,
-                        )
-                    ],
-                )
+            # answers. ``_synthesize`` records its own succession ledger + one
+            # receipt per real call via ``_record_adjudication`` (DSE-1512), so
+            # no manual receipt append is needed here. ``_apply_verdict`` runs
+            # after the manifest exists so it can populate the manifest's
+            # verdict-provenance slots; it is skipped in raw mode (no synthesizer
+            # call) and is opt-out via the constructor flag (resolved inside the
+            # helper). The no-members early return above never reaches here, so
+            # a memberless run carries no verdict.
+            await self._synthesize(result)
             await self._apply_verdict(result)
         return result
 
@@ -648,7 +741,14 @@ class Council:
         synthesis was cached) followed by the matching ``*_done`` events and the
         terminal ``done`` (with ``result.cached is True``). The providers are not
         called. On a cache **miss**, the live stream runs and, on completion, the
-        assembled result is stored so a later ``--stream`` or buffered run hits.
+        assembled result is stored so a later ``--stream`` or buffered run hits
+        -- UNLESS :attr:`~conclave.models.CouncilResult.primary_failed_over` is
+        ``True``: the primary adjudicator of some role did not itself produce
+        the answer (see that property for the exact rule, including a missing
+        key), mirroring :meth:`_cached_run`'s no-store rule exactly -- a cache
+        hit must never pin a result the primary did not produce, nor replay an
+        infrastructure outage after it has cleared. The run is still returned
+        to this caller unchanged; only the write to disk is skipped.
 
         Args:
             prompt: The user prompt to fan out.
@@ -670,14 +770,23 @@ class Council:
                     yield event
                 return
 
-            # Live miss: stream, capture the terminal result, then store it.
+            # Live miss: stream, capture the terminal result, then store it
+            # (no-store on primary infrastructure failure -- see the docstring).
             final: CouncilResult | None = None
             async for event in stream_ask(self, prompt, synthesize=synthesize):
                 if event.type == "done" and event.result is not None:
                     final = event.result
                 yield event
             if final is not None:
-                cache_mod.store(key, final)
+                if final.primary_failed_over:
+                    logger.info(
+                        "not caching %s run (%s): primary adjudicator failed for an "
+                        "infrastructure reason",
+                        mode,
+                        key[:12],
+                    )
+                else:
+                    cache_mod.store(key, final)
             return
 
         async for event in stream_ask(self, prompt, synthesize=synthesize):
@@ -733,13 +842,15 @@ class Council:
         return events
 
     async def _synthesize(self, result: CouncilResult) -> ModelAnswer | None:
-        """Run the synthesizer over the successful answers, mutating ``result``.
+        """Run the synthesizer chain over the successful answers, mutating ``result``.
 
         This is the buffered (non-streaming) synthesize path; the streaming
         counterpart :func:`conclave.streaming._stream_synthesis` mirrors it
-        short-circuit for short-circuit. The synthesizer model is
-        ``self.synthesizer`` (resolved per the precedence documented in the module
-        docstring: constructor arg, else config, else the ``"claude"`` default).
+        short-circuit for short-circuit (unchanged by DSE-1512 -- streaming keeps
+        the single-candidate synthesizer path). The synthesizer identity is
+        ``self.synthesizer`` (the chain's primary, resolved per the precedence
+        documented in the module docstring); the full ordered ladder tried is
+        ``self.synthesizer_chain`` (:meth:`adjudicate` walks it).
 
         Every degraded outcome is made observable on ``result`` -- none is
         silent. On success ``result.synthesis`` holds the merged answer; on any
@@ -747,17 +858,28 @@ class Council:
         ``result.synthesis_error`` carries the reason:
 
         * **no usable answers** -- every member failed/was skipped, so there is
-          nothing to merge;
-        * **synthesizer unkeyed** -- ``self.synthesizer``'s API key is absent, so
-          the raw member answers are returned with an explanatory error;
-        * **synthesizer call failed** -- the synthesizer provider errored, and its
-          error text is surfaced verbatim.
+          nothing to merge (no adjudication attempt is made; the ledger stays
+          untouched for this run);
+        * **no chain candidate keyed** -- every candidate in
+          ``self.synthesizer_chain`` has no API key, so the raw member answers
+          are returned with an explanatory error (a chain of one keeps the
+          historic single-model wording byte-for-byte); the ledger records one
+          ``skipped_unkeyed`` attempt per candidate via
+          :meth:`_skipped_attempts`;
+        * **chain exhausted or terminal** -- every keyed candidate failed
+          (:meth:`adjudicate`'s succession rule), or the answering candidate's
+          failure is terminal for the role; the error text of the resolved
+          answer is surfaced verbatim.
 
         The synthesizer identity (``synthesizer`` / ``synthesizer_model_id``) is
-        recorded on ``result`` before the key check so a consumer can see *which*
-        model was selected even when it could not run. The prompt used is the
-        versioned :data:`_SYNTH_SYSTEM`; the version tag already lives on
-        ``result.prompt_version``.
+        recorded on ``result`` before the key check (as the chain's primary) and
+        again after adjudication (as whichever candidate actually answered), so
+        a consumer can see which model was selected even when it could not run,
+        and which one actually produced the synthesis when the chain failed
+        over. The prompt used is the versioned :data:`_SYNTH_SYSTEM`; the
+        version tag already lives on ``result.prompt_version``. Every real call
+        this method makes is recorded via :meth:`_record_adjudication`, which
+        appends the succession ledger and one execution receipt per call.
         """
         usable = result.successful_answers
         if not usable:
@@ -765,16 +887,17 @@ class Council:
             logger.warning(result.synthesis_error)
             return None
 
-        synth_id = self.config.resolve_model_id(self.synthesizer)
+        primary_id = self.config.resolve_model_id(self.synthesizer)
         result.synthesizer = self.synthesizer
-        result.synthesizer_model_id = synth_id
+        result.synthesizer_model_id = primary_id
 
-        if not key_present(synth_id):
-            result.synthesis_error = (
-                f"synthesizer '{self.synthesizer}' ({synth_id}) has no API key; "
-                "returning raw answers only"
+        err = self._chain_unkeyed_error("synthesizer", "returning raw answers only")
+        if err is not None:
+            result.synthesis_error = err
+            logger.warning(err)
+            self._record_adjudication(
+                result, self._skipped_attempts("synthesis"), [], phase="synthesis"
             )
-            logger.warning(result.synthesis_error)
             return None
 
         blocks = "\n\n".join(
@@ -787,11 +910,21 @@ class Council:
             f"Council answers:\n\n{blocks}\n\n"
             "Now produce the consolidated answer."
         )
-        answer = await self.synthesize_blocks(_SYNTH_SYSTEM, user_content)
-        if answer.ok:
-            result.synthesis = answer.answer
-        else:
-            result.synthesis_error = answer.error
+        outcome = await self._adjudicate_and_record(
+            result,
+            "synthesis",
+            _SYNTH_SYSTEM,
+            user_content,
+            phase="synthesis",
+            protocol_version=(ELITE_PROTOCOL_VERSION if result.mode == "elite" else None),
+        )
+        answer = outcome.answer
+        if answer is not None:
+            result.synthesizer, result.synthesizer_model_id = outcome.name, outcome.model_id
+            if answer.ok:
+                result.synthesis = answer.answer
+            else:
+                result.synthesis_error = answer.error
         return answer
 
     async def _apply_verdict(
@@ -827,22 +960,69 @@ class Council:
         retry on a malformed response) distinct from the prose synthesis call --
         the documented cost of the default-on verdict.
 
-        ``extract_verdict`` owns the N<2 gate (it returns ``verdict=None`` with the
-        reason ``"fewer than 2 responding members"`` and makes NO LLM call in that
-        case), so this method delegates unconditionally rather than duplicating the
-        responder-counting logic; that keeps a single code path and lets the
-        manifest carry the N<2 reason. ``extract_verdict`` never raises, and this
-        method only assigns already-secret-free objects afterward, so no defensive
-        try/except is needed.
+        **Chain walk (DSE-1512).** Unlike every other adjudication role, this one
+        cannot simply call :meth:`adjudicate`: verdict extraction is not a single
+        call -- :func:`conclave.verdict_synthesis.extract_verdict` makes the
+        initial structured call PLUS one same-model repair retry, validates the
+        JSON, and computes consensus, all in one invocation. So the chain walk for
+        this role lives here: ``extract_verdict`` is called once per
+        ``self.synthesizer_chain`` candidate, and the outcome is classified from
+        what it reports (``vsr.verdict_absent_reason`` /
+        ``vsr.failure_category`` / ``vsr.http_status``) rather than from a raw
+        :class:`~conclave.models.ModelAnswer`. A candidate whose failure category
+        is in :data:`~conclave.models.FAILOVER_CATEGORIES` advances the chain
+        (``"failed_over"``, or ``"exhausted"`` on the last candidate); any other
+        failure -- including ``"malformed_response"`` (the candidate answered, but
+        not usably) -- is terminal for the role, exactly like every other
+        adjudication role's rule: a model that answered is never second-guessed by
+        another vendor.
+
+        **Unkeyed candidates are NOT pre-skipped for this role** -- a deliberate
+        difference from :meth:`adjudicate`. Today, with a chain of one and an
+        unkeyed synthesizer, ``_apply_verdict`` still calls ``extract_verdict``,
+        which makes two ``call_model`` invocations that return instantly with the
+        "no API key" error (no network), yielding two failed
+        ``verdict_extraction``/``verdict_repair`` receipts and
+        ``verdict_absent_reason == "verdict extraction failed schema
+        validation"``. Preserving that byte-for-byte (the chain-of-one rule) means
+        letting ``extract_verdict`` run for every candidate rather than
+        pre-filtering by :func:`conclave.registry.key_present` first: an unkeyed
+        candidate's ``vsr.failure_category`` comes back ``"unkeyed"``, which IS in
+        ``FAILOVER_CATEGORIES``, so it becomes ``"failed_over"`` (or
+        ``"exhausted"`` on the last candidate) -- matching the receipts exactly,
+        since the calls did happen and did fail. The ``"skipped_unkeyed"`` outcome
+        (used by every other role via :meth:`_skipped_attempts`) is therefore
+        never produced for this role.
+
+        This distinction is invisible to the cache. Whether an unkeyed primary
+        lands as ``"skipped_unkeyed"`` (every other role) or as
+        ``"failed_over"``/``"exhausted"`` (this role) does not change the
+        no-store outcome, because
+        :attr:`~conclave.models.CouncilResult.primary_failed_over` treats all
+        three the same at the primary's ``attempt_index == 1`` -- see that
+        property for the uniform rule.
+
+        The N<2 responder gate is unaffected: ``extract_verdict`` returns
+        immediately with NO call made (``vsr.attempt_receipts == []``) regardless
+        of which candidate is asked, since the gate counts responding MEMBERS, not
+        chain candidates. The chain walk stops after the first candidate in that
+        case (asking a second candidate would just repeat the same no-call
+        no-op), so N<2 never contributes a ``verdict_extraction`` ledger entry.
+
+        ``extract_verdict`` never raises, and this method only assigns
+        already-secret-free objects afterward, so no defensive try/except is
+        needed.
 
         When ``result.manifest`` exists its verdict-provenance slots are populated
-        (extractor identity + prompt version, absent reason, consensus method,
-        verdict type) and the manifest's ``secret_safety`` stamp is RE-RUN over the
+        from the LAST candidate consulted (extractor identity + prompt version,
+        absent reason, consensus method, verdict type), the full succession ledger
+        is appended, and the manifest's ``secret_safety`` stamp is RE-RUN over the
         final content: the stamp was first computed in :meth:`_build_manifest`
         before these fields existed, so re-stamping keeps the VERIFIED claim honest
         over the manifest a consumer actually receives. The new fields (a resolved
         model id, a prompt-version string, the ``verdict_type``/``consensus_method``
-        literals) are provably key-free, so the stamp stays VERIFIED.
+        literals, and the ledger's bounded categories) are provably key-free, so
+        the stamp stays VERIFIED.
 
         Args:
             result: The in-progress :class:`CouncilResult` (answers + manifest
@@ -854,23 +1034,96 @@ class Council:
         # Lazy import mirrors this module's deferred-import style (``modes`` /
         # ``streaming`` are imported inside methods) and sidesteps any import-cycle
         # risk between council and the verdict engine.
+        from .verdict_synthesis import REASON_EXTRACTION_FAILED
         from .verdict_synthesis import extract_verdict as extract_verdict_fn
 
-        synthesizer_name = self.synthesizer
-        synth_id = self.config.resolve_model_id(self.synthesizer)
-        vsr = await extract_verdict_fn(
-            result.prompt,
-            result.answers,
-            synthesizer_name=synthesizer_name,
-            synthesizer_model_id=synth_id,
-            config=self.config,
-            temperature=self.temperature,
-            timeout=self.timeout,
-            protocol_version=(ELITE_PROTOCOL_VERSION if result.mode == "elite" else None),
-        )
+        protocol_version = ELITE_PROTOCOL_VERSION if result.mode == "elite" else None
+        chain = self.synthesizer_chain
+        attempts: list[AdjudicationAttempt] = []
+        vsr: VerdictSynthesisResult | None = None
+        # Running count of verdict receipts already appended across PRIOR chain
+        # candidates in this call (QA review M2): each candidate's own
+        # ``attempt_receipts`` restarts at 1 (extract_verdict has no visibility
+        # into the chain), so without an offset a successor's receipts collide
+        # with the primary's ("attempt=1" appears twice). Renumbering here keeps
+        # ``attempt`` monotonically increasing across the whole verdict-
+        # extraction sequence on the manifest; a chain of one has offset 0 and
+        # is byte-for-byte unchanged.
+        verdict_receipts_so_far = 0
+        for index, candidate in enumerate(chain, start=1):
+            model_id = self.config.resolve_model_id(candidate)
+            vsr = await extract_verdict_fn(
+                result.prompt,
+                result.answers,
+                synthesizer_name=candidate,
+                synthesizer_model_id=model_id,
+                config=self.config,
+                temperature=self.temperature,
+                timeout=self.timeout,
+                protocol_version=protocol_version,
+            )
+            renumbered_receipts = [
+                receipt.model_copy(update={"attempt": verdict_receipts_so_far + offset})
+                for offset, receipt in enumerate(vsr.attempt_receipts, start=1)
+            ]
+            if record_receipts:
+                self._append_manifest_receipts(result, renumbered_receipts)
+            verdict_receipts_so_far += len(renumbered_receipts)
+            if not vsr.attempt_receipts:
+                # N<2 gate: no call was made for this candidate (or any other --
+                # the responder count does not depend on which candidate is
+                # asked), so there is nothing to adjudicate. Stop here rather
+                # than repeating the same no-op for every remaining candidate.
+                break
 
-        if record_receipts:
-            self._append_manifest_receipts(result, vsr.attempt_receipts)
+            def _attempt(
+                outcome: str,
+                *,
+                failure_category: str | None = None,
+                http_status: int | None = None,
+                _candidate: str = candidate,
+                _model_id: str = model_id,
+                _index: int = index,
+            ) -> AdjudicationAttempt:
+                """Build one ledger entry for the candidate/index of this iteration.
+
+                The loop variables are bound as default-argument values so the
+                closure captures THIS iteration's ``candidate``/``model_id``/
+                ``index`` rather than whatever they are when the loop ends
+                (flake8-bugbear B023) -- mirrors :meth:`adjudicate`'s ``_attempt``.
+                """
+                return AdjudicationAttempt(
+                    role="verdict_extraction",
+                    candidate=_candidate,
+                    model_id=_model_id,
+                    attempt_index=_index,
+                    outcome=outcome,
+                    failure_category=failure_category,
+                    http_status=http_status,
+                )
+
+            failed = vsr.verdict_absent_reason == REASON_EXTRACTION_FAILED
+            is_last = index == len(chain)
+            outcome = self._classify_outcome(
+                failed=failed, category=vsr.failure_category, is_last=is_last
+            )
+            attempts.append(
+                _attempt(
+                    outcome,
+                    failure_category=None if outcome == "success" else vsr.failure_category,
+                    http_status=None if outcome == "success" else vsr.http_status,
+                )
+            )
+            if outcome == "failed_over":
+                logger.warning(
+                    "verdict_extraction: '%s' failed (%s); trying next candidate",
+                    candidate,
+                    vsr.failure_category,
+                )
+                continue
+            if outcome == "exhausted":
+                continue
+            break
 
         result.verdict = vsr.verdict
         if vsr.verdict is not None:
@@ -883,42 +1136,324 @@ class Council:
             result.minority_reports = vsr.verdict.minority_reports
 
         if result.manifest is not None:
+            result.manifest.adjudication_succession.extend(attempts)
             result.manifest.verdict_extraction = vsr.extraction
             result.manifest.verdict_absent_reason = vsr.verdict_absent_reason
             result.manifest.consensus_method = vsr.verdict.consensus_method if vsr.verdict else None
             result.manifest.verdict_type = vsr.verdict.verdict_type if vsr.verdict else None
             # Re-stamp over the now-complete manifest so the VERIFIED claim covers
-            # the verdict-provenance fields just written (they are key-free).
+            # the verdict-provenance fields (including the new ledger entries)
+            # just written (they are key-free).
             result.manifest.secret_safety = verified_secret_safety(result.manifest)
 
-    async def synthesize_blocks(self, system_prompt: str, user_content: str) -> ModelAnswer:
-        """Call the synthesizer model with an arbitrary system + user message.
+    @staticmethod
+    def _classify_outcome(
+        *, failed: bool, category: str | None, is_last: bool
+    ) -> AdjudicationAttemptOutcome:
+        """The single failover rule, shared by every adjudication role (DSE-1512 review).
 
-        Shared by synthesize mode, debate's final consolidation, and the
-        adversarial judge so the synthesizer call path (and its error capture)
-        is written once. Callers are responsible for checking ``key_present``
-        on the synthesizer beforehand when they need a distinct no-key message;
-        this method still returns a ``ModelAnswer.error`` if the call fails.
+        An infrastructure failure (``category in FAILOVER_CATEGORIES``) advances
+        the chain -- ``"failed_over"``, or ``"exhausted"`` when there is no next
+        candidate to try. Any other failure is terminal for the role: a model
+        that answered (even unusably) is never second-guessed by another vendor.
+        A non-failure is always ``"success"``.
+
+        Args:
+            failed: Whether this attempt failed.
+            category: The attempt's typed failure category, or ``None``. Callers
+                that must force a terminal outcome regardless of the real
+                category (e.g. streaming's post-first-delta rule) pass ``None``
+                here while still recording the true category on the ledger entry.
+            is_last: Whether this is the last candidate in the chain.
+
+        Returns:
+            The bounded :data:`~conclave.manifest.AdjudicationAttemptOutcome`.
+        """
+        if not failed:
+            return "success"
+        if category in FAILOVER_CATEGORIES:
+            return "exhausted" if is_last else "failed_over"
+        return "terminal_failure"
+
+    async def adjudicate(
+        self, role: AdjudicationRole, system_prompt: str, user_content: str
+    ) -> AdjudicationOutcome:
+        """Walk ``synthesizer_chain`` for one adjudication role (DSE-1512).
+
+        Rule: candidates are tried in declared order; an unkeyed candidate is
+        skipped without a call; a call that fails with a category in
+        :data:`FAILOVER_CATEGORIES` advances to the next candidate; ANY other
+        failure is terminal for the role -- a model that answered is never
+        second-guessed by another vendor, which would let adjudication shop for
+        a result. No scoring, no health tracking: the order is the operator's.
+
+        Args:
+            role: Which adjudication role this call serves (recorded on every
+                :class:`~conclave.manifest.AdjudicationAttempt`).
+            system_prompt: System instruction for the synthesizer/judge.
+            user_content: The user-role content (prompt + answers/critiques).
+
+        Returns:
+            An :class:`AdjudicationOutcome` carrying the resolved answer (or
+            ``None`` when every candidate was unkeyed), the full attempt
+            ledger, and the list of real calls made.
+        """
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        attempts: list[AdjudicationAttempt] = []
+        called: list[ModelAnswer] = []
+        last_failure: ModelAnswer | None = None
+        chain = self.synthesizer_chain
+        for index, candidate in enumerate(chain, start=1):
+            model_id = self.config.resolve_model_id(candidate)
+
+            def _attempt(
+                outcome: str,
+                *,
+                failure_category: str | None = None,
+                http_status: int | None = None,
+                _candidate: str = candidate,
+                _model_id: str = model_id,
+                _index: int = index,
+            ) -> AdjudicationAttempt:
+                """Build one ledger entry for the candidate/index of this iteration.
+
+                The loop variables are bound as default-argument values so the
+                closure captures THIS iteration's ``candidate``/``model_id``/
+                ``index`` rather than whatever they are when the loop ends
+                (flake8-bugbear B023).
+                """
+                return AdjudicationAttempt(
+                    role=role,
+                    candidate=_candidate,
+                    model_id=_model_id,
+                    attempt_index=_index,
+                    outcome=outcome,
+                    failure_category=failure_category,
+                    http_status=http_status,
+                )
+
+            if not key_present(model_id):
+                attempts.append(_attempt("skipped_unkeyed", failure_category="unkeyed"))
+                continue
+            answer = await call_model(
+                candidate,
+                model_id,
+                messages,
+                config=self.config,
+                temperature=self.temperature,
+                timeout=self.timeout,
+            )
+            called.append(answer)
+            is_last = index == len(chain)
+            category = answer.failure_category
+            outcome = self._classify_outcome(
+                failed=not answer.ok, category=category, is_last=is_last
+            )
+            attempts.append(
+                _attempt(
+                    outcome,
+                    failure_category=None if outcome == "success" else category,
+                    http_status=None if outcome == "success" else answer.http_status,
+                )
+            )
+            if outcome == "success":
+                return AdjudicationOutcome(answer=answer, attempts=attempts, called=called)
+            if outcome == "terminal_failure":
+                return AdjudicationOutcome(answer=answer, attempts=attempts, called=called)
+            # "failed_over" or "exhausted": advance the chain (or fall through to
+            # the final return below when this was the last candidate).
+            last_failure = answer
+            if outcome == "failed_over":
+                logger.warning(
+                    "%s: '%s' failed (%s); trying next candidate", role, candidate, category
+                )
+        return AdjudicationOutcome(answer=last_failure, attempts=attempts, called=called)
+
+    def _skipped_attempts(self, role: AdjudicationRole) -> list[AdjudicationAttempt]:
+        """Build the succession ledger for a chain where NO candidate is keyed.
+
+        Used by every adjudication call site (synthesis, debate's final
+        consolidation, the adversarial judge) when it short-circuits on the
+        "no candidate has an API key" branch -- :meth:`adjudicate` is never
+        called (there is nothing to call), but the ledger must still record
+        that every chain candidate was considered and skipped, one
+        ``skipped_unkeyed`` :class:`~conclave.manifest.AdjudicationAttempt` per
+        candidate in chain order.
+
+        Args:
+            role: Which adjudication role this skip ledger serves.
+
+        Returns:
+            One ``skipped_unkeyed`` attempt per candidate in
+            ``self.synthesizer_chain``, in chain order.
+        """
+        return [
+            AdjudicationAttempt(
+                role=role,
+                candidate=candidate,
+                model_id=self.config.resolve_model_id(candidate),
+                attempt_index=index,
+                outcome="skipped_unkeyed",
+                failure_category="unkeyed",
+            )
+            for index, candidate in enumerate(self.synthesizer_chain, start=1)
+        ]
+
+    def _chain_unkeyed_error(self, actor: str, suffix: str) -> str | None:
+        """Return the no-key error for the whole chain, or ``None`` if any candidate is keyed.
+
+        The shared keyed-check for every adjudication call site (synthesis,
+        debate's final consolidation, the adversarial judge) that needs a
+        distinct "no candidate has a key" message before calling
+        :meth:`adjudicate` (DSE-1512 review, Unit C). ``actor`` is the role
+        noun used in the message (``"synthesizer"`` / ``"judge"``); ``suffix``
+        is the mode-specific tail (``"returning raw answers only"``,
+        ``"returning final-round answers only"``, ``"returning proposal and
+        critiques only"``). A chain of one keeps the historic single-candidate
+        wording verbatim byte-for-byte.
+
+        Args:
+            actor: The role noun for the message.
+            suffix: The mode-specific tail clause.
+
+        Returns:
+            The formatted error string when every chain candidate is unkeyed,
+            else ``None``.
+        """
+        keyed = [c for c in self.synthesizer_chain if key_present(self.config.resolve_model_id(c))]
+        if keyed:
+            return None
+        if len(self.synthesizer_chain) == 1:
+            primary_id = self.config.resolve_model_id(self.synthesizer)
+            return f"{actor} '{self.synthesizer}' ({primary_id}) has no API key; {suffix}"
+        names = ", ".join(self.synthesizer_chain)
+        return f"{actor} chain [{names}] has no API key for any candidate; {suffix}"
+
+    def _record_adjudication(
+        self,
+        result: CouncilResult,
+        attempts: list[AdjudicationAttempt],
+        called: list[ModelAnswer],
+        *,
+        phase: str,
+        record_receipts: bool = True,
+        protocol_version: str | None = None,
+        prompt_version: str | None = SYNTHESIS_PROMPT_VERSION,
+    ) -> None:
+        """Append the succession ledger (always) and one receipt per real call.
+
+        No-op when the result has no manifest yet. ``_recompute_manifest_accounting``
+        re-derives totals and re-stamps ``secret_safety`` over the new content.
+
+        Args:
+            result: The in-progress result. Mutated in place.
+            attempts: The full attempt ledger from :meth:`adjudicate`, including
+                skipped-unkeyed candidates.
+            called: The real calls made, in order (from
+                :attr:`AdjudicationOutcome.called`).
+            phase: The manifest receipt phase to stamp on each call.
+            record_receipts: When ``False``, skip appending receipts (the ledger
+                is still recorded); used by callers that record receipts
+                elsewhere.
+            protocol_version: Optional protocol version to stamp on receipts.
+            prompt_version: Prompt version to stamp on receipts; defaults to the
+                synthesis prompt version.
+        """
+        if result.manifest is None:
+            return
+        result.manifest.adjudication_succession.extend(attempts)
+        if record_receipts:
+            result.manifest.receipts.extend(
+                receipt_from_answer(
+                    answer,
+                    temperature=self.temperature,
+                    timeout=self.timeout,
+                    phase=phase,
+                    attempt=index,
+                    protocol_version=protocol_version,
+                    prompt_version=prompt_version,
+                )
+                for index, answer in enumerate(called, start=1)
+            )
+        self._recompute_manifest_accounting(result.manifest)
+
+    async def _adjudicate_and_record(
+        self,
+        result: CouncilResult,
+        role: AdjudicationRole,
+        system_prompt: str,
+        user_content: str,
+        *,
+        phase: str,
+        protocol_version: str | None = None,
+    ) -> AdjudicationOutcome:
+        """``adjudicate`` then ``_record_adjudication`` -- the common tail of every role.
+
+        Shared by :meth:`_synthesize`, :func:`conclave.modes._debate_synthesize`,
+        and :func:`conclave.modes._adversarial_judge` (DSE-1512 review, Unit C)
+        so the "call the chain, then land the ledger + receipts" sequence is
+        written exactly once.
+
+        Args:
+            result: The in-progress result. Mutated in place via
+                :meth:`_record_adjudication`.
+            role: Which adjudication role this call serves.
+            system_prompt: System instruction for the synthesizer/judge.
+            user_content: The user-role content (prompt + answers/critiques).
+            phase: The manifest receipt phase to stamp on each real call.
+            protocol_version: Optional protocol version to stamp on receipts.
+
+        Returns:
+            The :class:`AdjudicationOutcome` from :meth:`adjudicate`.
+        """
+        outcome = await self.adjudicate(role, system_prompt, user_content)
+        self._record_adjudication(
+            result, outcome.attempts, outcome.called, phase=phase, protocol_version=protocol_version
+        )
+        return outcome
+
+    async def synthesize_blocks(self, system_prompt: str, user_content: str) -> ModelAnswer:
+        """Call the synthesizer chain with an arbitrary system + user message.
+
+        A compatibility wrapper kept for external/library callers that want one
+        synthesizer answer without building a full :class:`CouncilResult` (QA
+        review M4). It walks ``synthesizer_chain`` via :meth:`adjudicate` --
+        with a chain of one (the default) this is byte-for-byte the historic
+        single-call behavior -- and returns whichever :class:`ModelAnswer` the
+        walk resolves to, or a synthetic ``ModelAnswer.error`` when every
+        candidate was unkeyed. Callers are responsible for checking
+        ``key_present`` beforehand when they need a distinct no-key message.
+
+        **No caller inside this package uses this method any more.**
+        :meth:`_synthesize`, :func:`conclave.modes._debate_synthesize`, and
+        :func:`conclave.modes._adversarial_judge` all go through
+        :meth:`_adjudicate_and_record` instead, because THIS method records
+        neither the succession ledger nor any receipts -- it has no
+        :class:`CouncilResult` to attach them to. A caller that needs the audit
+        trail (the manifest's ``adjudication_succession`` + per-call receipts)
+        must go through :meth:`Council.ask` / :meth:`debate` / :meth:`adversarial`
+        instead; this method remains for a caller that genuinely only wants the
+        bare answer. No behavior change from calling :meth:`adjudicate` directly.
 
         Args:
             system_prompt: System instruction for the synthesizer/judge.
             user_content: The user-role content (prompt + answers/critiques).
 
         Returns:
-            A :class:`ModelAnswer` from the synthesizer model.
+            A :class:`ModelAnswer` from the synthesizer chain.
         """
+        outcome = await self.adjudicate("synthesis", system_prompt, user_content)
+        if outcome.answer is not None:
+            return outcome.answer
         synth_id = self.config.resolve_model_id(self.synthesizer)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ]
-        return await call_model(
-            self.synthesizer,
-            synth_id,
-            messages,
-            config=self.config,
-            temperature=self.temperature,
-            timeout=self.timeout,
+        return ModelAnswer(
+            name=self.synthesizer,
+            model_id=synth_id,
+            error="no candidate in synthesizer chain has an API key",
+            failure_category="unkeyed",
         )
 
     async def debate(
@@ -983,22 +1518,15 @@ class Council:
         async def run() -> CouncilResult:
             result = await run_elite(self, prompt)
             if result.elite is not None and result.elite.completed:
-                synthesis_answer = await self._synthesize(result)
+                # Ensure the manifest exists BEFORE synthesizing so
+                # ``_synthesize``'s ``_record_adjudication`` call has somewhere
+                # to land the succession ledger and per-call receipts
+                # (DSE-1512). ``_ensure_manifest`` only flattens the already-
+                # collected phase artifacts (initial/critique/revision), so
+                # building it before synthesis runs is safe -- synthesis is not
+                # one of those phases.
                 self._ensure_manifest(result, "elite")
-                if synthesis_answer is not None:
-                    self._append_manifest_receipts(
-                        result,
-                        [
-                            receipt_from_answer(
-                                synthesis_answer,
-                                temperature=self.temperature,
-                                timeout=self.timeout,
-                                phase="synthesis",
-                                protocol_version=ELITE_PROTOCOL_VERSION,
-                                prompt_version=SYNTHESIS_PROMPT_VERSION,
-                            )
-                        ],
-                    )
+                await self._synthesize(result)
                 if result.synthesis is None:
                     result.elite.decision_readiness = "not_ready"
                     result.elite.readiness_reasons = ["synthesis.failed"]

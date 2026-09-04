@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 import warnings
 
-from ..models import TokenUsage
+from ..models import TokenUsage, categorize_http_status
 from ..provider_catalog import capabilities_for
 from ..registry import PROVIDER_ENV_VARS
 from .base import OutputContract, ProviderError, SSEDelta, status_error
@@ -342,7 +342,11 @@ class GeminiAdapter:
     def parse_response(self, status: int, payload: object) -> tuple[str, TokenUsage | None]:
         """Concatenate the first candidate's text parts. See base protocol."""
         if status < 200 or status >= 300:
-            raise ProviderError(status_error("gemini", status, payload, secondary_keys=("status",)))
+            raise ProviderError(
+                status_error("gemini", status, payload, secondary_keys=("status",)),
+                category=categorize_http_status(status),
+                http_status=status,
+            )
         if not isinstance(payload, dict):
             raise ProviderError(f"gemini: non-JSON response body (status {status})")
 

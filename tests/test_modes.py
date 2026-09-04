@@ -14,7 +14,7 @@ import pytest
 
 from conclave import AdversarialResult, Council, DebateRound
 from conclave.config import ConclaveConfig
-from tests.conftest import make_response
+from tests.conftest import install_council_script, make_failed_answer, make_ok_answer, make_response
 
 
 def _all_keys(monkeypatch) -> None:
@@ -798,3 +798,193 @@ def test_adversarial_sync_raises_inside_loop():
             council.adversarial_sync("hi")
 
     asyncio.run(_inner())
+
+
+# --------------------------------------------------------------------------- #
+# debate final consolidation + adversarial judge routed through the
+# adjudication succession seam (DSE-1512, task 5)
+# --------------------------------------------------------------------------- #
+
+CFG = ConclaveConfig(
+    models={
+        "claude": "anthropic/c",
+        "grok": "xai/g",
+        "gemini": "gemini/m",
+        "openai": "openai/o",
+        "mistral": "mistral/m",
+    }
+)
+
+
+async def test_debate_final_fails_over(monkeypatch, keys):
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "openai": make_ok_answer("openai", "openai/o"),
+            "claude": make_failed_answer("claude", "anthropic/c", "auth", 401),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    c = Council(
+        models=["gemini", "openai"], synthesizer="claude>grok", config=CFG, extract_verdict=False
+    )
+    r = await c.debate("q", rounds=1)
+    assert r.synthesis == "grok says yes"
+    assert (r.synthesizer, r.synthesizer_model_id) == ("grok", "xai/g")
+    assert r.degraded is False
+    ledger = r.manifest.adjudication_succession
+    assert [(a.role, a.candidate, a.outcome) for a in ledger] == [
+        ("debate_final", "claude", "failed_over"),
+        ("debate_final", "grok", "success"),
+    ]
+    assert [
+        (x.phase, x.attempt, x.name) for x in r.manifest.receipts if x.phase == "debate_final"
+    ] == [
+        ("debate_final", 1, "claude"),
+        ("debate_final", 2, "grok"),
+    ]
+    assert calls == ["gemini", "openai", "claude", "grok"]
+
+
+async def test_adversarial_judge_fails_over(monkeypatch, keys):
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "openai": make_ok_answer("openai", "openai/o"),
+            "claude": make_failed_answer("claude", "anthropic/c", "unavailable", 503),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    c = Council(models=["gemini", "openai"], synthesizer="claude>grok", config=CFG)
+    r = await c.adversarial("q")
+    adv = r.adversarial
+    assert adv.verdict == "grok says yes"
+    assert (adv.judge, adv.judge_model_id) == ("grok", "xai/g")
+    assert r.synthesis == "grok says yes"
+    assert r.degraded is False
+    ledger = r.manifest.adjudication_succession
+    assert [(a.role, a.candidate, a.outcome) for a in ledger] == [
+        ("judge", "claude", "failed_over"),
+        ("judge", "grok", "success"),
+    ]
+    assert [(x.phase, x.attempt, x.name) for x in r.manifest.receipts if x.phase == "judge"] == [
+        ("judge", 1, "claude"),
+        ("judge", 2, "grok"),
+    ]
+    assert calls[0] == "gemini"  # default proposer is the first requested member
+    assert "grok" in calls
+
+
+async def test_adversarial_judge_terminal_does_not_fail_over(monkeypatch, keys):
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "openai": make_ok_answer("openai", "openai/o"),
+            "claude": make_failed_answer("claude", "anthropic/c", "bad_request", 400),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    c = Council(models=["gemini", "openai"], synthesizer="claude>grok", config=CFG)
+    r = await c.adversarial("q")
+    adv = r.adversarial
+    assert adv.verdict is None
+    assert adv.verdict_error == "claude failed"
+    assert r.degraded is True
+    assert "grok" not in calls
+    ledger = r.manifest.adjudication_succession
+    assert [(a.role, a.candidate, a.outcome) for a in ledger] == [
+        ("judge", "claude", "terminal_failure")
+    ]
+
+
+async def test_debate_chain_of_one_no_key_message_unchanged(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    install_council_script(monkeypatch, {"gemini": make_ok_answer("gemini", "gemini/m")})
+    c = Council(models=["gemini"], synthesizer="claude", config=CFG, extract_verdict=False)
+    r = await c.debate("q", rounds=1)
+    assert r.synthesis_error == (
+        "synthesizer 'claude' (anthropic/c) has no API key; returning final-round answers only"
+    )
+
+
+async def test_adversarial_judge_chain_of_one_no_key_message_unchanged(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    install_council_script(monkeypatch, {"gemini": make_ok_answer("gemini", "gemini/m")})
+    c = Council(models=["gemini"], synthesizer="claude", config=CFG, extract_verdict=False)
+    r = await c.adversarial("q")
+    adv = r.adversarial
+    assert adv.verdict_error == (
+        "judge 'claude' (anthropic/c) has no API key; returning proposal and critiques only"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# primary_failed_over via a successor after a skipped-unkeyed primary
+# (DSE-1512 review, Unit A3) -- and proof the second run is not served from
+# cache, mirroring tests/test_council.py's synthesize-mode counterpart.
+# --------------------------------------------------------------------------- #
+
+
+async def test_debate_successor_after_unkeyed_primary_is_primary_failed_over(monkeypatch, tmp_path):
+    """A debate whose final consolidator's primary was skipped for a missing key,
+    with a keyed successor, counts as primary_failed_over -- and is not cached.
+    """
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.setenv("XAI_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    c = Council(
+        models=["gemini"],
+        synthesizer="claude>grok",
+        config=CFG,
+        extract_verdict=False,
+        cache=True,
+    )
+    r1 = await c.debate("q", rounds=1)
+    assert r1.primary_failed_over is True
+    assert r1.cached is False
+
+    r2 = await c.debate("q", rounds=1)
+    assert r2.cached is False  # not served from cache -- ran again
+    assert calls.count("gemini") == 2
+
+
+async def test_adversarial_successor_after_unkeyed_primary_is_primary_failed_over(
+    monkeypatch, tmp_path
+):
+    """Same for the adversarial judge: a successor after a skipped-unkeyed primary."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    monkeypatch.setenv("XAI_API_KEY", "dummy")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    calls = install_council_script(
+        monkeypatch,
+        {
+            "gemini": make_ok_answer("gemini", "gemini/m"),
+            "grok": make_ok_answer("grok", "xai/g"),
+        },
+    )
+    c = Council(
+        models=["gemini"],
+        synthesizer="claude>grok",
+        config=CFG,
+        extract_verdict=False,
+        cache=True,
+    )
+    r1 = await c.adversarial("q")
+    assert r1.primary_failed_over is True
+    assert r1.cached is False
+
+    r2 = await c.adversarial("q")
+    assert r2.cached is False  # not served from cache -- ran again
+    assert calls.count("gemini") == 2

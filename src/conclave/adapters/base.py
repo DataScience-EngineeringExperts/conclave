@@ -30,7 +30,7 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
-from ..models import TokenUsage
+from ..models import FailureCategory, TokenUsage
 from ..registry import PROVIDER_ENV_VARS
 
 # Matches "Bearer sk-abc123" / "Bearer xai-..." auth headers echoed into errors.
@@ -241,11 +241,24 @@ class ProviderError(Exception):
     """A provider-side failure: non-2xx status or a malformed/empty payload.
 
     The message passed in is redacted on construction, so the stored message is
-    always safe to place in ``ModelAnswer.error`` and to log.
+    always safe to place in ``ModelAnswer.error`` and to log. ``category`` /
+    ``http_status`` are typed at the raise site (DSE-1512) so failover never
+    depends on the message text. ``category`` defaults to
+    ``"malformed_response"`` -- the shape every existing raise site in this
+    package had before this field existed (a 2xx response with an unusable
+    payload); the non-2xx raise sites pass an explicit status-derived category.
     """
 
-    def __init__(self, message: str) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: FailureCategory = "malformed_response",
+        http_status: int | None = None,
+    ) -> None:
         super().__init__(redact(message))
+        self.category: FailureCategory = category
+        self.http_status = http_status
 
 
 @runtime_checkable

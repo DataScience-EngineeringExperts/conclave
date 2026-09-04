@@ -115,6 +115,54 @@ class TokenUsage(BaseModel):
     total_tokens: int = Field(default=0, ge=0)
 
 
+# DSE-1512 — typed failure categories. Derived at the RAISE SITE from the HTTP
+# status or exception type, never by inspecting a rendered error string. The
+# adjudication ladder (Council.adjudicate) fails over ONLY on the categories in
+# FAILOVER_CATEGORIES: infrastructure failures where no model ever produced an
+# answer. A model that answered (even malformed) is terminal for that role.
+FailureCategory = Literal[
+    "unkeyed",  # env var absent -- no call made
+    "unresolved",  # unknown provider prefix -- no call made
+    "auth",  # 401 / 403
+    "quota",  # 402 / 429
+    "unavailable",  # 5xx
+    "timeout",  # 408 or transport deadline
+    "transport",  # DNS / connection / other httpx network error
+    "bad_request",  # other 4xx -- the request was wrong, not the vendor
+    "malformed_response",  # 2xx with an unusable payload / empty content
+    "unexpected",  # anything else -- never failed over
+]
+
+FAILOVER_CATEGORIES: frozenset[str] = frozenset(
+    {"unkeyed", "unresolved", "auth", "quota", "unavailable", "timeout", "transport"}
+)
+
+
+def categorize_http_status(status: int) -> FailureCategory:
+    """Map a non-2xx HTTP status to a :data:`FailureCategory` (pure, no I/O).
+
+    Every 4xx/5xx status is bounded by one of the categories above. Anything
+    OUTSIDE that range (1xx, 2xx, 3xx, or >= 600 -- none of which this
+    function is meant to be called with, but a defensive raise site could)
+    maps to ``"unexpected"`` (QA review M3), never ``"malformed_response"``:
+    that category is reserved for a 2xx response with an unusable PAYLOAD, a
+    distinct failure mode this function never sees. Neither ``"unexpected"``
+    nor ``"malformed_response"`` is in :data:`FAILOVER_CATEGORIES`, so this
+    never affects failover either way.
+    """
+    if status in (401, 403):
+        return "auth"
+    if status in (402, 429):
+        return "quota"
+    if status == 408:
+        return "timeout"
+    if 500 <= status <= 599:
+        return "unavailable"
+    if 400 <= status <= 499:
+        return "bad_request"
+    return "unexpected"
+
+
 class ModelAnswer(BaseModel):
     """One council member's response (or failure).
 
@@ -132,6 +180,15 @@ class ModelAnswer(BaseModel):
         warnings: Non-fatal notes about this answer (e.g. structured-output repair
             applied). Empty by default. Distinct from ``error``, which marks the
             whole call as failed.
+        failure_category: Typed classification of ``error`` (DSE-1512), derived
+            at the raise site from the HTTP status or exception type -- never by
+            inspecting ``error`` text. ``None`` on success and on any answer
+            collected before this field existed. See :data:`FailureCategory` and
+            :data:`FAILOVER_CATEGORIES`.
+        http_status: The HTTP status code that produced ``error``, when the
+            failure came from a response (as opposed to a pre-call or transport
+            failure). ``None`` on success and whenever no HTTP response was
+            received.
     """
 
     name: str
@@ -142,6 +199,8 @@ class ModelAnswer(BaseModel):
     error: str | None = None
     answer_id: str | None = None
     warnings: list[str] = Field(default_factory=list)
+    failure_category: FailureCategory | None = None
+    http_status: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -257,6 +316,15 @@ class AdversarialResult(BaseModel):
         return [c for c in self.critiques if c.ok]
 
 
+# DSE-1512 review — the uniform primary_failed_over rule. An outcome at the
+# PRIMARY's attempt (attempt_index == 1) in this set means the primary did not
+# itself adjudicate for an infrastructure reason: a missing key
+# ("skipped_unkeyed") is treated exactly like a live failover or an exhausted
+# ladder, because in every case no key/content answer ever came back from the
+# primary. See CouncilResult.primary_failed_over for the full rule.
+_PRIMARY_INFRA_OUTCOMES: frozenset[str] = frozenset({"failed_over", "exhausted", "skipped_unkeyed"})
+
+
 class VoteResult(BaseModel):
     """The tally from a constrained-choice vote run.
 
@@ -360,6 +428,16 @@ class CouncilResult(BaseModel):
             so a caller cannot mistake a partial run for a clean pass. See the
             property docstring below for the exact rule and the CLI's exit-code
             contract (:func:`conclave.cli.ask`) that keys off it.
+        primary_failed_over: Computed field (DSE-1512, review-uniform rule) --
+            ``True`` when the primary adjudicator of at least one role did not
+            itself adjudicate for an infrastructure reason (no key, auth,
+            quota, 5xx, timeout, network) or the ladder was exhausted, whether
+            or not a successor then answered. Independent of ``degraded``: a
+            successor adjudication is ``primary_failed_over=True,
+            degraded=False``. A ``terminal_failure`` primary (the model
+            answered, just not usably) is ``False``. See the property
+            docstring below for the exact rule and why the cache never stores
+            such a run, buffered or streamed.
     """
 
     prompt: str
@@ -446,6 +524,75 @@ class CouncilResult(BaseModel):
         if self.adversarial is not None and self.adversarial.verdict_error:
             return True
         return False
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def primary_failed_over(self) -> bool:
+        """True when the primary adjudicator did not adjudicate, for any role (DSE-1512, uniform rule).
+
+        ``True`` iff, for any adjudication role recorded on
+        ``self.manifest.adjudication_succession`` (synthesis, debate's final
+        consolidation, the adversarial judge, or verdict extraction), the
+        attempt at ``attempt_index == 1`` -- the chain's declared primary --
+        has ``outcome`` in :data:`_PRIMARY_INFRA_OUTCOMES`:
+
+        * ``"failed_over"`` -- the primary failed for an infrastructure reason
+          (auth/quota/5xx/timeout/network/unresolved, see
+          :data:`FAILOVER_CATEGORIES`) and a successor then answered;
+        * ``"exhausted"`` -- the primary failed the same way and NOTHING in
+          the chain answered (the ladder was exhausted);
+        * ``"skipped_unkeyed"`` -- the primary had no API key, so no call was
+          ever made for it. A missing key is an infrastructure reason like any
+          other: the primary simply did not adjudicate.
+
+        This one condition subsumes every case the previous, two-outcome rule
+        handled separately: a successor can only have adjudicated
+        (``attempt_index > 1``, ``outcome == "success"``) if the primary at
+        index 1 was ``"failed_over"`` or ``"skipped_unkeyed"``; a fully
+        exhausted ladder always has index 1 in this set too. A role with no
+        ledger entries (it never ran for this result -- e.g. ``vote``/``raw``
+        modes, or a role this run never reached) contributes nothing.
+
+        ``False`` when the primary's index-1 attempt is ``"success"`` (it
+        adjudicated) or ``"terminal_failure"`` (it answered, just not usably
+        -- a content failure, not an infrastructure one, so re-running the
+        same model would not produce a different, better answer). Also
+        ``False`` for any run with no manifest.
+
+        This closes a real gap from the prior two-outcome rule: an unkeyed
+        primary was recorded as ``"skipped_unkeyed"`` by every role except
+        verdict extraction (which deliberately calls the unkeyed candidate
+        anyway and records ``"failed_over"``/``"exhausted"`` -- see
+        :meth:`conclave.council.Council._apply_verdict`), so whether an
+        unkeyed-primary run reported ``True`` used to depend on which roles
+        happened to run and on ``extract_verdict``, rather than being uniform.
+
+        Independent of :attr:`degraded`: a run adjudicated by a successor is a
+        clean run (``primary_failed_over=True, degraded=False``), while a run
+        where the whole chain was exhausted is both
+        (``primary_failed_over=True, degraded=True``). The two flags answer
+        different questions -- "did the judge/synthesis step ultimately
+        produce a usable result?" (``degraded``) versus "did the primary
+        candidate itself need to be replaced or exhausted?"
+        (``primary_failed_over``).
+
+        A run for which this is ``True`` is never written to the result cache,
+        whether the run was buffered or streamed via ``--stream`` (see
+        :meth:`conclave.council.Council._cached_run` and
+        :meth:`conclave.council.Council.ask_stream`): a cache hit must never
+        pin a result the primary did not produce, nor replay an
+        infrastructure outage -- including a still-missing key -- after it
+        has cleared. Included as a top-level key in ``model_dump(mode="json")``
+        output (a Pydantic ``computed_field``), so a scripted consumer can
+        check it directly instead of walking the manifest's succession
+        ledger.
+        """
+        if self.manifest is None:
+            return False
+        return any(
+            a.attempt_index == 1 and a.outcome in _PRIMARY_INFRA_OUTCOMES
+            for a in self.manifest.adjudication_succession
+        )
 
 
 # Late import (see the note near the top): ``manifest`` imports ``TokenUsage``
