@@ -331,6 +331,7 @@ class Council:
             for _name, model_id in [*members, *chain_pairs]
             if "/" in model_id
         }
+        snapshot = load_default_price_snapshot()
         return cache_mod.make_key(
             prompt=prompt,
             mode=mode,
@@ -351,6 +352,8 @@ class Council:
                 if prefix in used_prefixes
             },
             source_bundle_digest=self.source_bundle_digest,
+            price_snapshot_digest=None if snapshot is None else snapshot.digest(),
+            max_output_tokens=self.max_output_tokens,
             protocol_version=ELITE_PROTOCOL_VERSION,
             synthesis_prompt_version=SYNTHESIS_PROMPT_VERSION,
             elite_prompt_version=ELITE_PROMPT_VERSION,

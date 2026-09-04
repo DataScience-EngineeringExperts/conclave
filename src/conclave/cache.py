@@ -61,7 +61,10 @@ logger = get_logger("cache")
 # old entries simply miss instead of being mis-served against new code.
 # v4 (DSE-1512): identity now carries the full ordered synthesizer/judge chain,
 # not just the primary candidate.
-CACHE_FORMAT_VERSION = "4"
+# v5 (DSE-1514): identity now carries the price-snapshot rate fingerprint and the
+# max_output_tokens cap, so a re-priced or differently-capped run can never be
+# served a stale ceiling (or a longer/shorter answer) from a prior entry.
+CACHE_FORMAT_VERSION = "5"
 _SECRET_QUERY_PARTS = (
     "authorization",
     "auth",
@@ -167,6 +170,8 @@ def build_identity(
     endpoint_urls: Mapping[str, str] | None = None,
     source_bundle_digest: str | None = None,
     synthesizer_chain: Sequence[tuple[str, str]] | None = None,
+    price_snapshot_digest: str | None = None,
+    max_output_tokens: int | None = None,
     cache_format_version: str = CACHE_FORMAT_VERSION,
     protocol_version: str = ELITE_PROTOCOL_VERSION,
     synthesis_prompt_version: str = SYNTHESIS_PROMPT_VERSION,
@@ -186,6 +191,13 @@ def build_identity(
     chain of one built from ``synthesizer``/``synthesizer_model_id``, so a
     direct caller that never passes it still gets a stable, meaningful value
     and existing single-candidate callers are unaffected.
+
+    ``price_snapshot_digest`` (DSE-1514) is the rate digest of the price
+    snapshot a run's ceilings are computed against; two runs priced under
+    different rates must not collide, because a hit would serve a ceiling that
+    was never true of those rates. ``max_output_tokens`` (DSE-1514) is the hard
+    output cap; it changes the answers themselves, so it is part of generation
+    identity.
     """
     chain = (
         list(synthesizer_chain)
@@ -209,7 +221,11 @@ def build_identity(
         # The full ordered failover ladder (DSE-1512); a chain of one is
         # byte-for-byte equivalent to the legacy "synthesizer" pair above.
         "synthesizer_chain": [[name, model_id] for name, model_id in chain],
-        "generation": {"temperature": temperature, "timeout": timeout},
+        "generation": {
+            "temperature": temperature,
+            "timeout": timeout,
+            "max_output_tokens": max_output_tokens,
+        },
         "extract_verdict": extract_verdict,
         "endpoint_fingerprints": {
             prefix: _endpoint_fingerprint(url)
@@ -219,6 +235,12 @@ def build_identity(
         # value out of the inspectable identity while preserving invalidation.
         "source_bundle_fingerprint": (
             _digest(source_bundle_digest) if source_bundle_digest is not None else None
+        ),
+        # Re-hash the snapshot digest for the same reason the source bundle
+        # digest is re-hashed: a malformed caller value must never appear in an
+        # inspectable identity document, while still invalidating prior entries.
+        "price_snapshot_fingerprint": (
+            _digest(price_snapshot_digest) if price_snapshot_digest is not None else None
         ),
         "mode_params": {},
     }
@@ -251,6 +273,8 @@ def make_key(
     endpoint_urls: Mapping[str, str] | None = None,
     source_bundle_digest: str | None = None,
     synthesizer_chain: Sequence[tuple[str, str]] | None = None,
+    price_snapshot_digest: str | None = None,
+    max_output_tokens: int | None = None,
     cache_format_version: str = CACHE_FORMAT_VERSION,
     protocol_version: str = ELITE_PROTOCOL_VERSION,
     synthesis_prompt_version: str = SYNTHESIS_PROMPT_VERSION,
@@ -292,6 +316,12 @@ def make_key(
             collide, since a later run over the same prompt could fail over
             differently. Defaults to a chain of one built from
             ``synthesizer``/``synthesizer_model_id`` when omitted.
+        price_snapshot_digest: The rate digest of the price snapshot a run's
+            ceilings are computed against (DSE-1514); two runs priced under
+            different rates must not collide, because a hit would serve a
+            ceiling that was never true of those rates.
+        max_output_tokens: The hard output cap; it changes the answers
+            themselves, so it is part of generation identity.
 
     Returns:
         A 64-char lowercase hex SHA-256 digest. Contains zero key material.
@@ -312,6 +342,8 @@ def make_key(
         endpoint_urls=endpoint_urls,
         source_bundle_digest=source_bundle_digest,
         synthesizer_chain=synthesizer_chain,
+        price_snapshot_digest=price_snapshot_digest,
+        max_output_tokens=max_output_tokens,
         cache_format_version=cache_format_version,
         protocol_version=protocol_version,
         synthesis_prompt_version=synthesis_prompt_version,
