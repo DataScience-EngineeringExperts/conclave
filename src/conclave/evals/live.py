@@ -10,7 +10,7 @@ import json
 import os
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from decimal import ROUND_CEILING, Decimal, localcontext
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
@@ -18,6 +18,7 @@ from pydantic import Field, ValidationError, model_validator
 
 from conclave.adapters.base import redact
 from conclave.models import ModelAnswer, TokenUsage
+from conclave.pricing import reported_usage_cost
 from conclave.providers import _receipt_error_category, call_model
 from conclave.registry import PROVIDER_ENV_VARS
 from conclave.verdict_synthesis import VERDICT_REPAIR_ERROR_DETAIL_MAX_BYTES
@@ -33,8 +34,6 @@ from .models import (
     StudyManifest,
 )
 from .pricing import (
-    TOKENS_PER_MILLION,
-    USD_MICROCENT,
     CallReservation,
     ModelPrice,
     PriceBook,
@@ -660,34 +659,19 @@ def _unattributed_usage_tokens(usage: TokenUsage) -> int:
 
 
 def _reported_usage_cost(price: ModelPrice, usage: TokenUsage) -> Decimal:
-    unattributed = _unattributed_usage_tokens(usage)
-    precision = max(
-        64,
-        len(str(usage.prompt_tokens))
-        + len(price.input_ceiling_usd_per_million_tokens.as_tuple().digits)
-        + 20,
-        len(str(usage.completion_tokens))
-        + len(price.output_ceiling_usd_per_million_tokens.as_tuple().digits)
-        + 20,
-        len(str(usage.total_tokens))
-        + max(
-            len(price.input_ceiling_usd_per_million_tokens.as_tuple().digits),
-            len(price.output_ceiling_usd_per_million_tokens.as_tuple().digits),
-        )
-        + 20,
+    """Charge reported usage at ceiling rates via the shared arithmetic (DSE-1514).
+
+    Thin adapter over :func:`conclave.pricing.reported_usage_cost`, which owns
+    the unattributed-token rule (charged at the higher of the two rates) and the
+    ROUND_CEILING quantization. Raises the same ``ValueError`` as before when a
+    provider reports a total below its own attributed usage.
+    """
+    return reported_usage_cost(
+        price.as_rates(),
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        total_tokens=usage.total_tokens,
     )
-    with localcontext() as context:
-        context.prec = precision
-        cost = (
-            Decimal(usage.prompt_tokens) * price.input_ceiling_usd_per_million_tokens
-            + Decimal(usage.completion_tokens) * price.output_ceiling_usd_per_million_tokens
-            + Decimal(unattributed)
-            * max(
-                price.input_ceiling_usd_per_million_tokens,
-                price.output_ceiling_usd_per_million_tokens,
-            )
-        ) / TOKENS_PER_MILLION
-        return cost.quantize(USD_MICROCENT, rounding=ROUND_CEILING)
 
 
 def _bounded_error_category(error: str) -> ProviderCallErrorCategory:
