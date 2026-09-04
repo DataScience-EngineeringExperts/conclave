@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from ..tape import Sha256Digest  # noqa: F401 -- re-exported; moved here from tape.py (DSE-1517)
 
 EVAL_SCHEMA_VERSION = "conclave_eval_v1"
 SchemaVersion = Literal["conclave_eval_v1"]
@@ -29,7 +31,6 @@ EVAL_CONDITION_IDS: tuple[ConditionId, ...] = (
     "elite_full",
 )
 
-Sha256Digest = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
 RunOutcome = Literal["success", "failed", "timed_out", "malformed", "abstained", "incomplete"]
 EvidenceClassification = Literal["synthetic_exploratory", "paid_exploratory_pilot", "confirmatory"]
 
