@@ -28,9 +28,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_CEILING, Decimal, localcontext
+from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+
+from .logging import get_logger
+
+logger = get_logger("pricing")
 
 # The quantum every emitted amount is rounded up to: one USD micro-cent.
 USD_MICROCENT = Decimal("0.000001")
@@ -392,3 +398,43 @@ class PriceSnapshot(BaseModel):
             sort_keys=True,
         ).encode("utf-8")
         return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def _price_data_dir() -> Path:
+    """Return the packaged directory holding the dated price snapshots."""
+    return Path(__file__).parent / "data"
+
+
+@lru_cache(maxsize=1)
+def load_default_price_snapshot() -> PriceSnapshot | None:
+    """Load the newest packaged price snapshot, or ``None`` when unavailable.
+
+    Picks the lexicographically-last ``prices-YYYY-MM-DD.json`` in
+    ``conclave/data`` (ISO dates sort chronologically), parses it with
+    ``parse_float=Decimal`` so a JSON number can never become a float rate, and
+    validates it. Memoized for the life of the process: a snapshot is a frozen
+    artifact, so re-reading it per run would be pure overhead.
+
+    Returns ``None`` -- never raises -- when the directory is absent, empty,
+    unreadable, or holds a file that fails validation, and logs a warning. A
+    missing snapshot means a run carries NO ceiling; it must never mean a failed
+    run. (The pre-flight spend gate treats the same condition as a refusal
+    instead; that asymmetry is deliberate.)
+    """
+    try:
+        candidates = sorted(_price_data_dir().glob("prices-*.json"))
+    except OSError as exc:
+        logger.warning("price snapshot directory unreadable: %s; pricing disabled", exc)
+        return None
+    if not candidates:
+        logger.warning("no packaged price snapshot found; pricing disabled")
+        return None
+    path = candidates[-1]
+    try:
+        with path.open(encoding="utf-8") as handle:
+            payload = json.load(handle, parse_float=Decimal)
+        payload.pop("_note", None)
+        return PriceSnapshot.model_validate(payload)
+    except (OSError, json.JSONDecodeError, ValidationError, TypeError) as exc:
+        logger.warning("price snapshot %s is unusable: %s; pricing disabled", path.name, exc)
+        return None

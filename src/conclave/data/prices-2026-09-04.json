@@ -1,0 +1,64 @@
+{
+  "_note": "Hand-verified vendor list prices, rounded UP, read 2026-09-04 from each vendor's own official pricing page (see per-entry source_url). A model absent from this file is UNPRICED, never estimated -- never carried over from a sibling model. Two of conclave.registry.DEFAULT_MODELS are OMITTED for exactly that reason: groq/llama-3.3-70b-versatile was moved off every published on-demand rate to an Enterprise-only 'Contact Sales' tier on 2026-08-16 (console.groq.com/docs/deprecations); deepseek/deepseek-chat was fully retired on 2026-07-24 (api-docs.deepseek.com/updates) with no successor sharing that exact model id -- its replacement id, deepseek-v4-flash, is a DIFFERENT model id conclave does not resolve, so it is not a substitute rate. Every priced entry takes the HIGHEST standard on-demand rate that could apply to a plain, unconfigured chat request: for xai/grok-4.3 and gemini/gemini-2.5-pro that is the >=200K/>200K long-context tier (both step ALL of input+output up together, never just one side); for openai/gpt-4.1 that is the standard tier -- the more expensive 'fast mode' priority tier ($3.50/$14.00) requires an explicit opt-in service-tier parameter, so it is not what a plain request is billed at, the same reasoning that excludes Anthropic's opt-in US-only-inference tier ($3.30/$16.50) for anthropic/claude-sonnet-4-6. Cached-input discounts and batch-API discounts are excluded everywhere as strictly cheaper, never-default lanes. perplexity/sonar-pro also carries a separate per-request search fee (up to $0.014/request at the highest context-size tier) that is NOT a per-token rate and has no field in this schema; it is deliberately not folded into either ceiling here and is called out so a caller relying solely on this snapshot for perplexity/sonar-pro undercounts by that per-request amount. max_output_bytes_per_token is an attestation of 8 bytes/token (2x the eval harness fixture value of 4): it only ever converts an upstream output-token cap into a downstream input BYTE bound, so a larger value is strictly more pessimistic. Regenerate deliberately; never fetch at runtime.",
+  "snapshot_id": "conclave-default-prices-2026-09-04",
+  "captured_at": "2026-09-04",
+  "currency": "USD",
+  "entries": [
+    {
+      "provider_id": "openai",
+      "model_id": "openai/gpt-4.1",
+      "input_ceiling_usd_per_million_tokens": "2.00",
+      "output_ceiling_usd_per_million_tokens": "8.00",
+      "max_output_bytes_per_token": 8,
+      "source_url": "https://openai.com/api/pricing/"
+    },
+    {
+      "provider_id": "anthropic",
+      "model_id": "anthropic/claude-sonnet-4-6",
+      "input_ceiling_usd_per_million_tokens": "3.00",
+      "output_ceiling_usd_per_million_tokens": "15.00",
+      "max_output_bytes_per_token": 8,
+      "source_url": "https://docs.anthropic.com/en/docs/about-claude/pricing"
+    },
+    {
+      "provider_id": "xai",
+      "model_id": "xai/grok-4.3",
+      "input_ceiling_usd_per_million_tokens": "2.50",
+      "output_ceiling_usd_per_million_tokens": "5.00",
+      "max_output_bytes_per_token": 8,
+      "source_url": "https://docs.x.ai/developers/pricing"
+    },
+    {
+      "provider_id": "gemini",
+      "model_id": "gemini/gemini-2.5-pro",
+      "input_ceiling_usd_per_million_tokens": "2.50",
+      "output_ceiling_usd_per_million_tokens": "15.00",
+      "max_output_bytes_per_token": 8,
+      "source_url": "https://ai.google.dev/gemini-api/docs/pricing"
+    },
+    {
+      "provider_id": "perplexity",
+      "model_id": "perplexity/sonar-pro",
+      "input_ceiling_usd_per_million_tokens": "3.00",
+      "output_ceiling_usd_per_million_tokens": "15.00",
+      "max_output_bytes_per_token": 8,
+      "source_url": "https://docs.perplexity.ai/docs/getting-started/pricing"
+    },
+    {
+      "provider_id": "mistral",
+      "model_id": "mistral/mistral-large-latest",
+      "input_ceiling_usd_per_million_tokens": "0.50",
+      "output_ceiling_usd_per_million_tokens": "1.50",
+      "max_output_bytes_per_token": 8,
+      "source_url": "https://mistral.ai/pricing/api/"
+    },
+    {
+      "provider_id": "together",
+      "model_id": "together/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      "input_ceiling_usd_per_million_tokens": "1.04",
+      "output_ceiling_usd_per_million_tokens": "1.04",
+      "max_output_bytes_per_token": 8,
+      "source_url": "https://www.together.ai/pricing"
+    }
+  ]
+}

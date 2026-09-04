@@ -85,3 +85,55 @@ def test_staleness_is_reported_but_never_changes_a_rate():
     assert stale.is_stale(as_of=date(2026, 9, 3)) is True
     entry = stale.rates_for("openai/gpt-4.1")
     assert entry.output_ceiling_usd_per_million_tokens == Decimal("15.00")
+
+
+def test_default_snapshot_loads_and_prices_the_verified_default_models():
+    from conclave.pricing import load_default_price_snapshot
+    from conclave.registry import DEFAULT_MODELS
+
+    snapshot = load_default_price_snapshot()
+    assert snapshot is not None
+    assert snapshot.currency == "USD"
+    assert snapshot.snapshot_id.startswith("conclave-default-prices-")
+
+    priced = {entry.model_id for entry in snapshot.entries}
+    # Every priced entry must be one of the shipped defaults -- the snapshot is
+    # not a place to accumulate models the product does not resolve.
+    assert priced <= set(DEFAULT_MODELS.values())
+    # The four frontier defaults must be priced; anything unverifiable is omitted
+    # deliberately and shows up as an unpriced model at runtime.
+    assert {
+        "openai/gpt-4.1",
+        "anthropic/claude-sonnet-4-6",
+        "xai/grok-4.3",
+        "gemini/gemini-2.5-pro",
+    } <= priced
+
+    for entry in snapshot.entries:
+        assert isinstance(entry.input_ceiling_usd_per_million_tokens, Decimal)
+        assert isinstance(entry.output_ceiling_usd_per_million_tokens, Decimal)
+        assert entry.source_url and entry.source_url.startswith("https://")
+        assert entry.max_output_bytes_per_token == 8
+        assert entry.provider_id == entry.model_id.split("/", 1)[0]
+
+
+def test_default_snapshot_is_memoized_and_ships_inside_the_package():
+    from pathlib import Path
+
+    import conclave
+    from conclave.pricing import load_default_price_snapshot
+
+    assert load_default_price_snapshot() is load_default_price_snapshot()
+    data_dir = Path(conclave.__file__).parent / "data"
+    assert sorted(path.name for path in data_dir.glob("prices-*.json"))
+
+
+def test_a_missing_snapshot_directory_degrades_to_none(monkeypatch, tmp_path):
+    from conclave import pricing
+
+    pricing.load_default_price_snapshot.cache_clear()
+    monkeypatch.setattr(pricing, "_price_data_dir", lambda: tmp_path)
+    try:
+        assert pricing.load_default_price_snapshot() is None
+    finally:
+        pricing.load_default_price_snapshot.cache_clear()
