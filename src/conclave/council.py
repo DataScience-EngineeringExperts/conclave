@@ -1474,6 +1474,7 @@ class Council:
                 answer,
                 temperature=self.temperature,
                 timeout=self.timeout,
+                max_output_tokens=self.max_output_tokens,
                 phase=f"round-{debate_round.round_number}",
             )
             for debate_round in result.rounds
@@ -1489,7 +1490,7 @@ class Council:
                 ProviderSkip(name=name, reason="no API key in environment") for name in skipped
             ],
             model_ids=[model_id for _name, model_id in members],
-            generation_settings={"temperature": self.temperature, "timeout": self.timeout},
+            generation_settings=self._generation_settings(),
             receipts=receipts,
         )
         self._recompute_manifest_accounting(manifest)
