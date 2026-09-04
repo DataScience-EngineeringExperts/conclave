@@ -82,6 +82,8 @@ from .models import (
 )
 from .pricing import (
     PriceSnapshot,
+    SpendCapExceeded,
+    SpendUnboundable,
     load_default_price_snapshot,
     reported_usage_cost,
 )
@@ -289,6 +291,17 @@ class Council:
             ``None`` unless set), leaving each provider's own default in place
             exactly as before this flag existed. A cap is the precondition for
             ``--max-spend-usd``: see :meth:`plan_calls`.
+        max_spend_usd: Opt-in pre-flight spend cap in USD (DSE-1514). When set,
+            every deliberation call (:meth:`ask`/:meth:`ask_stream` and their
+            mode wrappers) first enumerates :meth:`plan_calls`, prices it via
+            :meth:`_reserve_plan`, and raises :class:`conclave.pricing.
+            SpendCapExceeded` -- BEFORE any provider call -- when the reserved
+            total exceeds this cap. Requires ``max_output_tokens`` (explicit or
+            via config): an unbounded output cannot be bounded in dollars, so
+            setting this without a cap raises :class:`conclave.pricing.
+            SpendUnboundable` at construction time rather than at the first
+            call. ``None`` (the default) installs no gate at all -- byte-
+            identical to today.
 
     Example:
         >>> council = Council(models=["grok", "perplexity"], synthesizer="claude")
@@ -308,6 +321,7 @@ class Council:
         allow_transport_debug_logging: bool = False,
         source_bundle_digest: str | None = None,
         max_output_tokens: int | None = None,
+        max_spend_usd: Decimal | None = None,
     ) -> None:
         self.config = config or load_config()
         self.requested_models = list(models)
@@ -343,6 +357,12 @@ class Council:
         self.max_output_tokens = (
             self.config.max_output_tokens if max_output_tokens is None else max_output_tokens
         )
+        # A spend cap without an output cap is not enforceable: output is the
+        # unbounded term. Refuse at construction rather than at the first call,
+        # so a library caller cannot get halfway into a run before finding out.
+        self.max_spend_usd = max_spend_usd
+        if max_spend_usd is not None and self.max_output_tokens is None:
+            raise SpendUnboundable(_NO_OUTPUT_CAP_MESSAGE)
 
     @staticmethod
     def _resolve_chain(spec: str | Sequence[str] | None, config: ConclaveConfig) -> list[str]:
@@ -575,6 +595,81 @@ class Council:
             chain_count=len(chain),
         )
 
+    def _reserve_plan(self, plan: CallPlan) -> Decimal:
+        """Price a :class:`CallPlan` pessimistically against the snapshot.
+
+        Args:
+            plan: The worst-case plan from :meth:`plan_calls`.
+
+        Returns:
+            The reserved total in USD -- an upper bound on what the run can cost.
+
+        Raises:
+            SpendUnboundable: No snapshot, or any planned call's model has no
+                snapshot entry. Never falls back to a similar model's rate.
+        """
+        snapshot = load_default_price_snapshot()
+        if snapshot is None:
+            raise SpendUnboundable("cannot bound spend: price snapshot unavailable")
+        total = Decimal("0")
+        for call in plan.calls:
+            rates = snapshot.rates_for(call.model_id)
+            if rates is None:
+                raise SpendUnboundable(
+                    f"cannot bound spend: no priced rate for {call.model_id} "
+                    f"in snapshot {snapshot.digest()} ({snapshot.captured_at.isoformat()})"
+                )
+            total += reserve_cost(
+                rates,
+                prompt_token_upper_bound=call.prompt_token_upper_bound,
+                prompt_template_token_allowance=call.prompt_template_token_allowance,
+                provider_framing_token_allowance=call.provider_framing_token_allowance,
+                upstream_output_token_ceilings=(
+                    (call.max_output_tokens,) * call.upstream_output_call_count
+                ),
+                upstream_output_bytes_per_token=rates.max_output_bytes_per_token,
+                max_output_tokens=call.max_output_tokens,
+            ).reserved_cost_usd
+        return total
+
+    def _enforce_spend_cap(
+        self,
+        mode: str,
+        prompt: str,
+        *,
+        rounds: int | None = None,
+        proposer: str | None = None,
+        choices: list[str] | None = None,
+    ) -> None:
+        """Refuse an over-budget or unboundable run BEFORE any provider call.
+
+        A no-op when ``max_spend_usd`` is unset, so a run with no spend flags is
+        byte-identical to today. Deliberately NOT applied to a cache hit: a hit
+        makes no provider call and therefore cannot exceed any cap.
+
+        Raises:
+            SpendUnboundable: The plan cannot be priced.
+            SpendCapExceeded: The priced plan exceeds the cap.
+        """
+        if self.max_spend_usd is None:
+            return
+        plan = self.plan_calls(
+            mode,
+            prompt,
+            rounds=2 if rounds is None else rounds,
+            proposer=proposer,
+            choices=choices,
+        )
+        reserved = self._reserve_plan(plan)
+        if reserved > self.max_spend_usd:
+            raise SpendCapExceeded(reserved, self.max_spend_usd, len(plan.calls))
+        logger.info(
+            "spend gate: reserved %s USD for %d calls, under the %s USD cap",
+            reserved,
+            len(plan.calls),
+            self.max_spend_usd,
+        )
+
     def _cache_key(
         self,
         prompt: str,
@@ -679,6 +774,7 @@ class Council:
         re-running would not produce a different, better answer.
         """
         if not self.cache_enabled:
+            self._enforce_spend_cap(mode, prompt, rounds=rounds, proposer=proposer, choices=choices)
             result = await run()
             self._ensure_manifest(result, mode)
             self._price_manifest(result)
@@ -699,6 +795,7 @@ class Council:
             self._price_manifest(hit)
             return hit
 
+        self._enforce_spend_cap(mode, prompt, rounds=rounds, proposer=proposer, choices=choices)
         result = await run()
         self._ensure_manifest(result, mode)
         self._price_manifest(result)
@@ -1289,6 +1386,7 @@ class Council:
 
             # Live miss: stream, capture the terminal result, then store it
             # (no-store on primary infrastructure failure -- see the docstring).
+            self._enforce_spend_cap(mode, prompt)
             final: CouncilResult | None = None
             async for event in stream_ask(self, prompt, synthesize=synthesize):
                 if event.type == "done" and event.result is not None:
@@ -1306,6 +1404,7 @@ class Council:
                     cache_mod.store(key, final)
             return
 
+        self._enforce_spend_cap(mode, prompt)
         async for event in stream_ask(self, prompt, synthesize=synthesize):
             yield event
 

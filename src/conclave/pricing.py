@@ -438,3 +438,40 @@ def load_default_price_snapshot() -> PriceSnapshot | None:
     except (OSError, json.JSONDecodeError, ValidationError, TypeError) as exc:
         logger.warning("price snapshot %s is unusable: %s; pricing disabled", path.name, exc)
         return None
+
+
+class SpendRefused(Exception):
+    """Base class for a pre-flight spend refusal.
+
+    Raised BEFORE any provider call. Every subclass maps to CLI exit code 4.
+    Refusing is the honest outcome when a run cannot be bounded: the alternative
+    is to invent a number, which is the exact failure this module exists to
+    prevent.
+    """
+
+
+class SpendUnboundable(SpendRefused):
+    """The call plan cannot be priced at all, so no cap can be enforced.
+
+    Causes: no output cap configured, no price snapshot available, or a model in
+    the plan with no snapshot entry. Never a fallback rate, never a guess.
+    """
+
+
+class SpendCapExceeded(SpendRefused):
+    """The fully-priced worst-case plan reserves more than the stated cap.
+
+    Attributes:
+        reserved: The pessimistic total for the whole plan, in USD.
+        cap: The operator's stated cap, in USD.
+        call_count: How many provider calls the plan enumerated.
+    """
+
+    def __init__(self, reserved: Decimal, cap: Decimal, call_count: int) -> None:
+        self.reserved = reserved
+        self.cap = cap
+        self.call_count = call_count
+        super().__init__(
+            f"refusing to run: reserved {reserved} USD for {call_count} calls "
+            f"exceeds the cap of {cap} USD"
+        )

@@ -59,6 +59,12 @@ from .models import (
     StreamEvent,
     TokenUsage,
 )
+from .pricing import (
+    PriceSnapshot,
+    SpendCapExceeded,
+    SpendRefused,
+    SpendUnboundable,
+)
 from .transport import aclose, guard_transport_logging
 from .verdict import (
     VERDICT_EXTRACTION_PROMPT_VERSION,
@@ -116,5 +122,10 @@ __all__ = [
     "ProviderExecutionReceipt",
     "VerdictExtraction",
     "ProviderSkip",
+    # DSE-1514 bounded cost receipts + pre-flight spend gate public surface.
+    "PriceSnapshot",
+    "SpendRefused",
+    "SpendUnboundable",
+    "SpendCapExceeded",
     "__version__",
 ]
