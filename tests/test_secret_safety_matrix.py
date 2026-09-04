@@ -459,3 +459,176 @@ def test_scan_rejects_planted_canary_in_manifest():
         redacted_errors=[f"leaked credential {PLANTED}"],
     )
     assert scan_for_secret_material(polluted) is False
+
+
+# --------------------------------------------------------------------------- #
+# DSE-1514 Task 13: the pricing fields never un-verify the secret-safety stamp,
+# and pricing_warnings is a closed vocabulary -- statically (source scan) and
+# dynamically (every reachable warning shape across every mode).
+# --------------------------------------------------------------------------- #
+
+
+def test_pricing_fields_never_un_verify_the_stamp():
+    """A model id with an awkward substring must not break the stamp."""
+    from decimal import Decimal
+
+    from conclave.manifest import (
+        SECRET_SAFETY_VERIFIED,
+        ModelHarnessManifest,
+        ProviderExecutionReceipt,
+        verified_secret_safety,
+    )
+
+    manifest = ModelHarnessManifest(
+        request_id="r",
+        conclave_version="1.3.0",
+        mode="synthesize",
+        model_ids=["deepseek/deepseek-chat", "together/meta-llama/Llama-3.3-70B-Instruct-Turbo"],
+        receipts=[
+            ProviderExecutionReceipt(
+                name="deepseek",
+                provider="deepseek",
+                model_id="deepseek/deepseek-chat",
+                cost_ceiling_usd=Decimal("0.000123"),
+                cost_basis="reservation",
+                generation_settings={
+                    "temperature": 0.7,
+                    "timeout": 120.0,
+                    "max_output_tokens": 8,
+                },
+            )
+        ],
+        cost_ceiling_usd=Decimal("0.000123"),
+        price_snapshot_digest="sha256:" + "e" * 64,
+        priced_as_of="2026-09-03",
+        unpriced_models=["together/meta-llama/Llama-3.3-70B-Instruct-Turbo"],
+        unpriced_receipts=0,
+        pricing_warnings=[
+            "unpriced_models_present",
+            "price_snapshot_stale",
+            "no_output_cap_configured",
+        ],
+    )
+    assert verified_secret_safety(manifest) == SECRET_SAFETY_VERIFIED
+
+
+def test_pricing_warnings_are_a_closed_vocabulary_in_the_code():
+    """No pricing warning may be built by interpolation."""
+    import re
+    from pathlib import Path
+
+    import conclave
+
+    source = (Path(conclave.__file__).parent / "council.py").read_text(encoding="utf-8")
+    appended = re.findall(r"warnings\.append\((.+?)\)", source)
+    assert appended, "the pricing warning appends moved; update this guard"
+    for expression in appended:
+        assert expression.startswith('"') and expression.endswith('"'), (
+            f"pricing warning must be a literal, got {expression}"
+        )
+
+
+async def test_a_fully_populated_priced_manifest_still_stamps_verified(
+    monkeypatch, keys, patch_call_model
+):
+    """A priced manifest with every new field populated -- a stale-snapshot
+    warning AND an unpriced model/receipt AND a real ceiling on the priced
+    receipt -- still stamps VERIFIED (DSE-1514 review, Task 13).
+
+    Exercises the real run path (``Council.ask``) rather than a hand-built
+    manifest, so the shape asserted is one ``_price_manifest`` can actually
+    produce, not a synthetic one that happens to pass the scan.
+    """
+    from datetime import date
+
+    from conclave.manifest import SECRET_SAFETY_VERIFIED
+    from tests.test_pricing_receipts import _install_snapshot, _snapshot
+
+    # grok is priced but the snapshot is stale-dated; claude (the synthesizer)
+    # has NO entry at all -- both a stale-snapshot warning and an
+    # unpriced-model/unpriced-receipt shape land on the SAME manifest.
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3", captured_at=date(2026, 1, 1)))
+    patch_call_model(lambda model_id, messages: make_response("ok"))
+    council = Council(models=["grok"], synthesizer="claude", extract_verdict=False)
+    manifest = (await council.ask("q")).manifest
+
+    assert manifest.cost_ceiling_usd is None  # all-or-nothing: claude is unpriced
+    assert manifest.unpriced_models == ["anthropic/claude-sonnet-4-6"]
+    assert manifest.unpriced_receipts >= 1
+    assert "price_snapshot_stale" in manifest.pricing_warnings
+    assert "unpriced_models_present" in manifest.pricing_warnings
+    priced = [r for r in manifest.receipts if r.model_id == "xai/grok-4.3"]
+    assert priced and all(r.cost_ceiling_usd is not None for r in priced)
+    assert manifest.secret_safety == SECRET_SAFETY_VERIFIED
+    assert scan_for_secret_material(manifest) is True
+
+
+@pytest.mark.parametrize("mode", ["synthesize", "raw", "debate", "adversarial", "vote", "elite"])
+async def test_pricing_warnings_stay_within_the_closed_vocabulary(
+    monkeypatch, keys, patch_call_model, mode
+):
+    """DSE-1514 review, Task 13: run every mode against every warning-producing
+    shape (no snapshot, an unpriced model, a stale snapshot, an uncapped
+    failed call) and prove every emitted ``pricing_warnings`` entry is drawn
+    from :data:`conclave.council.PRICING_WARNING_VOCABULARY` -- the dynamic
+    complement to the static source-scan guard above.
+    """
+    from datetime import date
+
+    from conclave.council import PRICING_WARNING_VOCABULARY, Council
+    from tests.test_pricing_receipts import _install_snapshot, _snapshot
+
+    async def run(council: Council):
+        if mode == "debate":
+            return await council.debate("q", rounds=2)
+        if mode == "adversarial":
+            return await council.adversarial("q")
+        if mode == "vote":
+            return await council.vote("q", choices=["a", "b"])
+        if mode == "elite":
+            return await council.elite("q")
+        return await council.ask("q", synthesize=(mode == "synthesize"))
+
+    seen: set[str] = set()
+
+    # Shape 1: no snapshot at all -> price_snapshot_unavailable.
+    _install_snapshot(monkeypatch, None)
+    patch_call_model(lambda model_id, messages: make_response("ok"))
+    council = Council(models=["grok", "gemini"], synthesizer="claude", extract_verdict=False)
+    seen.update((await run(council)).manifest.pricing_warnings)
+
+    # Shape 2: fully priced but stale -> price_snapshot_stale.
+    _install_snapshot(
+        monkeypatch,
+        _snapshot(
+            "xai/grok-4.3",
+            "gemini/gemini-2.5-pro",
+            "anthropic/claude-sonnet-4-6",
+            captured_at=date(2026, 1, 1),
+        ),
+    )
+    council = Council(models=["grok", "gemini"], synthesizer="claude", extract_verdict=False)
+    seen.update((await run(council)).manifest.pricing_warnings)
+
+    # Shape 3: the synthesizer/judge/chain model has no snapshot entry ->
+    # unpriced_models_present (+ unpriced_receipts_present).
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3", "gemini/gemini-2.5-pro"))
+    council = Council(models=["grok", "gemini"], synthesizer="claude", extract_verdict=False)
+    seen.update((await run(council)).manifest.pricing_warnings)
+
+    # Shape 4: every model priced, every call fails with no usage, no output
+    # cap -> unpriced_receipts_present + no_output_cap_configured.
+    _install_snapshot(
+        monkeypatch,
+        _snapshot("xai/grok-4.3", "gemini/gemini-2.5-pro", "anthropic/claude-sonnet-4-6"),
+    )
+
+    def failing(model_id, messages):
+        raise RuntimeError("boom")
+
+    patch_call_model(failing)
+    council = Council(models=["grok", "gemini"], synthesizer="claude", extract_verdict=False)
+    seen.update((await run(council)).manifest.pricing_warnings)
+
+    assert seen, "no pricing_warnings were ever produced; the fixture setup is stale"
+    assert seen <= PRICING_WARNING_VOCABULARY

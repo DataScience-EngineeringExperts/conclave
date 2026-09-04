@@ -187,6 +187,24 @@ _NO_OUTPUT_CAP_MESSAGE = (
     "cannot bound spend: no output cap (set --max-output-tokens or config max_output_tokens)"
 )
 
+# The closed vocabulary of pricing_warnings identifiers (DSE-1514). Every
+# append to the ``warnings`` list -- or the list-literal assignment on the
+# missing-snapshot path -- inside :meth:`Council._price_manifest` uses one of
+# these exact strings, never interpolated text, a provider name, or a count,
+# so a warning can never carry secret-shaped material. Tests in
+# tests/test_secret_safety_matrix.py assert both statically (scanning the
+# source for every append call) and dynamically (every reachable warning
+# shape across every mode) that nothing else is ever appended.
+PRICING_WARNING_VOCABULARY = frozenset(
+    {
+        "price_snapshot_stale",
+        "price_snapshot_unavailable",
+        "unpriced_models_present",
+        "unpriced_receipts_present",
+        "no_output_cap_configured",
+    }
+)
+
 # Re-exported for callers that want the version without importing prompts.
 __all__ = ["Council", "SYNTHESIS_PROMPT_VERSION"]
 
