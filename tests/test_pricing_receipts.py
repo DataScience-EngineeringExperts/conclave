@@ -18,6 +18,20 @@ from conclave.pricing import PriceRates, PriceSnapshot
 from tests.conftest import make_response
 
 
+def test_usage_is_reported_rejects_none_and_all_zero_accepts_any_nonzero_counter():
+    """DSE-1514 QA I1: the shared "is this usage worth pricing" predicate."""
+    from conclave.council import _usage_is_reported
+    from conclave.models import TokenUsage
+
+    assert _usage_is_reported(None) is False
+    assert _usage_is_reported(TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)) is (
+        False
+    )
+    assert _usage_is_reported(TokenUsage(prompt_tokens=1, completion_tokens=0, total_tokens=0))
+    assert _usage_is_reported(TokenUsage(prompt_tokens=0, completion_tokens=1, total_tokens=0))
+    assert _usage_is_reported(TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=1))
+
+
 def _receipt(**overrides) -> ProviderExecutionReceipt:
     payload = {
         "name": "claude",
@@ -227,3 +241,74 @@ async def test_an_impossible_usage_total_degrades_to_unpriced(monkeypatch, keys)
     assert manifest.receipts[0].cost_ceiling_usd is None
     assert manifest.cost_ceiling_usd is None
     assert manifest.unpriced_receipts == 1
+
+
+async def test_a_successful_call_with_no_reported_usage_is_unpriced_not_a_reservation(
+    monkeypatch, keys
+):
+    """QA C1 (Round 3 half): usage=None on a SUCCESSFUL call is unpriced, never estimated.
+
+    :mod:`conclave.adapters.openai_compat` returns ``usage=None`` when a
+    provider omits the usage field on an otherwise-clean response -- this is a
+    normal outcome on a clean call, not a failure. Pricing it via a flat
+    reservation that ignores which phase the call belongs to would silently
+    mis-price synthesis/judge/verdict calls (which embed upstream output) by
+    3-9x. This round has no phase-aware plan to reserve from, so the honest
+    rule is: no reported usage -> unpriced, exactly like a failed call.
+    """
+    import conclave.council as council_mod
+    from conclave.models import ModelAnswer
+
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3"))
+
+    async def no_usage(name, model_id, messages, **kwargs):
+        return ModelAnswer(name=name, model_id=model_id, answer="ok", usage=None)
+
+    monkeypatch.setattr(council_mod, "call_model", no_usage)
+    council = Council(models=["grok"], synthesizer="grok", extract_verdict=False)
+    manifest = (await council.ask("q", synthesize=False)).manifest
+
+    assert manifest.receipts[0].outcome == "success"
+    assert manifest.receipts[0].usage is None
+    assert manifest.receipts[0].cost_ceiling_usd is None
+    assert manifest.receipts[0].cost_basis is None
+    assert manifest.unpriced_receipts == 1
+    assert manifest.cost_ceiling_usd is None
+    assert "unpriced_receipts_present" in manifest.pricing_warnings
+
+
+async def test_a_zero_usage_success_is_unpriced_not_free(monkeypatch, keys):
+    """QA I1: an all-zero reported ``TokenUsage`` is "no usage", never ``$0``.
+
+    ``usage: {}`` on the wire coerces to ``TokenUsage(0, 0, 0)`` -- a
+    technically-present but empty usage figure. Pricing that as
+    ``$0.000000`` would assert a false floor (the call definitely cost
+    something; a 5,000-byte prompt was sent) rather than an honest bound, so
+    it must be treated exactly like "no usage reported" -- unpriced.
+    """
+    import conclave.council as council_mod
+    from conclave.models import ModelAnswer, TokenUsage
+
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3"))
+
+    async def zero_usage(name, model_id, messages, **kwargs):
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            answer="ok",
+            usage=TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        )
+
+    monkeypatch.setattr(council_mod, "call_model", zero_usage)
+    council = Council(models=["grok"], synthesizer="grok", extract_verdict=False)
+    manifest = (await council.ask("q" * 5000, synthesize=False)).manifest
+
+    assert manifest.receipts[0].usage == TokenUsage(
+        prompt_tokens=0, completion_tokens=0, total_tokens=0
+    )
+    assert manifest.receipts[0].cost_ceiling_usd is None
+    assert manifest.receipts[0].cost_basis is None
+    assert manifest.unpriced_receipts == 1
+    assert manifest.cost_ceiling_usd is None
+    assert manifest.cost_ceiling_usd != Decimal("0")
+    assert "unpriced_receipts_present" in manifest.pricing_warnings
