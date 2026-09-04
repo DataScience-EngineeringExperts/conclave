@@ -409,6 +409,12 @@ async def test_debate_result_carries_verified_manifest(monkeypatch, patch_call_m
     # Full resolved membership is recorded even though only survivors answer.
     assert result.manifest.providers_considered == ["grok", "gemini", "perplexity"]
     assert result.manifest.providers_called == ["grok", "gemini", "perplexity"]
+    # DSE-1514 QA C2 (old: 3 receipts, final round only): every round gets a
+    # receipt per member, in round order, THEN the debate_final consolidation.
+    assert [r.phase for r in result.manifest.receipts] == (
+        ["round-1"] * 3 + ["round-2"] * 3 + ["debate_final"]
+    )
+    assert len(result.manifest.receipts) == 7  # 3 + 3 + 1, matching every real call made
 
 
 async def test_debate_dropped_member_still_in_manifest_membership(monkeypatch, patch_call_model):
@@ -432,6 +438,18 @@ async def test_debate_dropped_member_still_in_manifest_membership(monkeypatch, p
     _assert_verified_manifest(result, "debate")
     # Membership reflects everyone that was called, not just final-round survivors.
     assert set(result.manifest.providers_called) == {"grok", "gemini", "perplexity"}
+    # DSE-1514 QA C2 (old: 2 receipts, final round only): round 1 called all 3
+    # members (gemini fails and drops out); round 2 called only the 2
+    # survivors; debate_final consolidates -- 3 + 2 + 1 = 6 receipts total,
+    # matching every real council-seam call this run made.
+    assert [r.phase for r in result.manifest.receipts] == (
+        ["round-1"] * 3 + ["round-2"] * 2 + ["debate_final"]
+    )
+    assert len(result.manifest.receipts) == 6
+    round_1_names = {r.name for r in result.manifest.receipts if r.phase == "round-1"}
+    round_2_names = {r.name for r in result.manifest.receipts if r.phase == "round-2"}
+    assert round_1_names == {"grok", "gemini", "perplexity"}
+    assert round_2_names == {"grok", "perplexity"}  # gemini dropped out after round 1
 
 
 async def test_debate_no_members_still_carries_manifest(monkeypatch, patch_call_model, clear_keys):

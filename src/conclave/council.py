@@ -54,6 +54,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -78,6 +79,11 @@ from .models import (
     ModelAnswer,
     StreamEvent,
     TokenUsage,
+)
+from .pricing import (
+    PriceSnapshot,
+    load_default_price_snapshot,
+    reported_usage_cost,
 )
 from .prompts import ELITE_PROMPT_VERSION, SYNTHESIS_PROMPT_VERSION
 from .providers import call_model, receipt_from_answer
@@ -111,6 +117,33 @@ _SYNTH_SYSTEM = (
 
 # Re-exported for callers that want the version without importing prompts.
 __all__ = ["Council", "SYNTHESIS_PROMPT_VERSION"]
+
+
+def _usage_is_reported(usage: TokenUsage | None) -> bool:
+    """Whether ``usage`` is a trustworthy, non-zero signal worth pricing (DSE-1514 QA I1).
+
+    ``usage is None`` is not proof a call cost nothing: it is the shape of both
+    a FAILED call (no usage was ever produced) and a SUCCESSFUL one whose
+    provider simply omitted the usage field --
+    :func:`conclave.adapters.openai_compat`'s chat-completion path returns
+    ``None`` when a provider does this, including for some streamed responses.
+    And a provider can report a technically-present ``TokenUsage`` that is all
+    zeros, which is the same "nothing to price" signal wearing a non-``None``
+    shape. Treating either as ``$0.000000`` would assert a false floor rather
+    than an honest bound, so :meth:`Council._price_manifest` calls this helper
+    to decide "does this receipt carry a number worth pricing" before ever
+    looking at the ceiling math.
+
+    Args:
+        usage: The receipt's :class:`~conclave.models.TokenUsage`, or ``None``.
+
+    Returns:
+        ``True`` only when ``usage`` is present AND at least one of its three
+        counters is non-zero.
+    """
+    return usage is not None and bool(
+        usage.prompt_tokens or usage.completion_tokens or usage.total_tokens
+    )
 
 
 @dataclass
@@ -237,6 +270,10 @@ class Council:
         # that DEBUG band and accept the responsibility.
         if not allow_transport_debug_logging:
             transport.guard_transport_logging()
+        # Replaced by the real config/argument resolution in the output-cap task
+        # (DSE-1514 Task 9). Needed already by `_price_manifest` (Task 7), which
+        # reads it to decide whether a failed call's reservation can be priced.
+        self.max_output_tokens: int | None = None
 
     @staticmethod
     def _resolve_chain(spec: str | Sequence[str] | None, config: ConclaveConfig) -> list[str]:
@@ -311,6 +348,7 @@ class Council:
             for _name, model_id in [*members, *chain_pairs]
             if "/" in model_id
         }
+        snapshot = load_default_price_snapshot()
         return cache_mod.make_key(
             prompt=prompt,
             mode=mode,
@@ -331,6 +369,8 @@ class Council:
                 if prefix in used_prefixes
             },
             source_bundle_digest=self.source_bundle_digest,
+            price_snapshot_digest=None if snapshot is None else snapshot.digest(),
+            max_output_tokens=self.max_output_tokens,
             protocol_version=ELITE_PROTOCOL_VERSION,
             synthesis_prompt_version=SYNTHESIS_PROMPT_VERSION,
             elite_prompt_version=ELITE_PROMPT_VERSION,
@@ -385,6 +425,7 @@ class Council:
         if not self.cache_enabled:
             result = await run()
             self._ensure_manifest(result, mode)
+            self._price_manifest(result)
             return result
 
         key = self._cache_key(
@@ -399,10 +440,12 @@ class Council:
         if hit is not None:
             logger.info("cache hit for %s run (%s)", mode, key[:12])
             self._ensure_manifest(hit, mode)
+            self._price_manifest(hit)
             return hit
 
         result = await run()
         self._ensure_manifest(result, mode)
+        self._price_manifest(result)
         if result.primary_failed_over:
             logger.info(
                 "not caching %s run (%s): primary adjudicator failed for an infrastructure reason",
@@ -436,9 +479,11 @@ class Council:
         resolution :meth:`_cache_key` already performs) rather than threaded back
         through every mode's return value; this keeps ``providers_called`` /
         ``model_ids`` reflecting the full resolved membership even for debate rounds
-        where a member later dropped out, while the per-answer receipts are built
-        from ``result.answers``. :meth:`_build_manifest` stamps ``secret_safety``
-        VERIFIED when the assembled manifest is provably clean.
+        where a member later dropped out. For ``debate`` with ``result.rounds``
+        populated the per-answer receipts are built from EVERY round (see
+        :meth:`_build_debate_manifest`, DSE-1514 QA C2); every other mode builds
+        them from ``result.answers`` alone. :meth:`_build_manifest` stamps
+        ``secret_safety`` VERIFIED when the assembled manifest is provably clean.
 
         Args:
             result: The result to attach a manifest to. Mutated in place.
@@ -449,6 +494,12 @@ class Council:
         members, skipped = self._available_members()
         if mode == "elite" and result.elite is not None:
             result.manifest = self._build_elite_manifest(
+                members=members,
+                skipped=skipped,
+                result=result,
+            )
+        elif mode == "debate" and result.rounds:
+            result.manifest = self._build_debate_manifest(
                 members=members,
                 skipped=skipped,
                 result=result,
@@ -590,6 +641,82 @@ class Council:
         self._recompute_manifest_accounting(manifest)
         return manifest
 
+    def _build_debate_manifest(
+        self,
+        *,
+        members: list[tuple[str, str]],
+        skipped: list[str],
+        result: CouncilResult,
+    ) -> ModelHarnessManifest:
+        """Assemble a debate manifest with one receipt per answer per ROUND (DSE-1514 QA C2).
+
+        :meth:`_build_manifest` builds receipts only from ``result.answers``,
+        which :func:`conclave.modes.run_debate` mirrors from the FINAL round
+        only. For a multi-round debate that silently under-counts every call:
+        rounds ``1..R-1`` and any member that dropped out mid-debate never get
+        a receipt, so the manifest -- and therefore
+        :meth:`_price_manifest`'s run-level cost ceiling, which sums exactly
+        the receipts present -- covers a strict subset of the calls a real
+        debate makes (4 of 7 at 3 members / 2 rounds, 4 of 10 at 3 members / 3
+        rounds) while still reporting a complete, non-``None`` ceiling.
+
+        This builds one receipt per answer for EVERY round in
+        ``result.rounds``, in round order, phase-stamped
+        ``f"round-{round_number}"`` -- the exact same ``"round-N"`` string
+        :meth:`_plan_table` gives its debate-round plan rows (DSE-1514 Round
+        4), so a usage-less receipt's phase maps onto its plan row by plain
+        equality, with no pattern-parsing needed. The ``debate_final``
+        adjudication receipt is appended AFTERWARDS by
+        :func:`conclave.modes._debate_synthesize` via
+        :meth:`_adjudicate_and_record`, so it is deliberately not built here
+        -- :func:`conclave.modes.run_debate` calls this (via
+        :meth:`_ensure_manifest`) BEFORE that consolidation step runs.
+
+        ``providers_called``/``model_ids`` still reflect the full resolved
+        membership (unchanged from :meth:`_build_manifest`), not just the
+        per-round callees, so a member that drops out mid-debate stays
+        visible as "called" even though a later round has no receipt for it.
+
+        Args:
+            members: ``(friendly_name, model_id)`` pairs resolvable (keyed)
+                for this run.
+            skipped: Friendly names skipped for a missing key.
+            result: The in-flight debate result. ``result.rounds`` is already
+                fully populated -- :func:`conclave.modes.run_debate` calls
+                this only after its round loop completes.
+
+        Returns:
+            A fully-assembled, secret-safety-stamped manifest whose receipts
+            cover every round's calls, in round order.
+        """
+        from . import __version__
+
+        receipts = [
+            receipt_from_answer(
+                answer,
+                temperature=self.temperature,
+                timeout=self.timeout,
+                phase=f"round-{debate_round.round_number}",
+            )
+            for debate_round in result.rounds
+            for answer in debate_round.answers
+        ]
+        manifest = ModelHarnessManifest(
+            request_id=uuid4().hex,
+            conclave_version=__version__,
+            mode="debate",
+            providers_considered=list(self.requested_models),
+            providers_called=[name for name, _model_id in members],
+            providers_skipped=[
+                ProviderSkip(name=name, reason="no API key in environment") for name in skipped
+            ],
+            model_ids=[model_id for _name, model_id in members],
+            generation_settings={"temperature": self.temperature, "timeout": self.timeout},
+            receipts=receipts,
+        )
+        self._recompute_manifest_accounting(manifest)
+        return manifest
+
     def _build_elite_manifest(
         self,
         *,
@@ -671,6 +798,133 @@ class Council:
         manifest.redacted_errors = [
             receipt.error for receipt in manifest.receipts if receipt.error is not None
         ]
+        manifest.secret_safety = verified_secret_safety(manifest)
+
+    def _price_manifest(self, result: CouncilResult) -> None:
+        """Stamp cost ceilings on the manifest -- the LAST step of a run (DSE-1514).
+
+        Runs after ``_ensure_manifest`` and after every receipt is appended, so
+        it sees the complete ledger. It is idempotent: it recomputes every field
+        from the receipts each time, so re-pricing a cache hit is harmless.
+
+        The rule, per receipt:
+
+        * the model has no snapshot entry -> unpriced (``None``/``None``), and
+          the model id joins ``unpriced_models``;
+        * the provider reported a trustworthy, non-zero usage figure
+          (:func:`_usage_is_reported`) -> ``reported_usage_cost`` at ceiling
+          rates, basis ``"reported_usage"``;
+        * usage is not reported -> unpriced (``None``/``None``), counted in
+          ``unpriced_receipts``. This covers three shapes deliberately treated
+          alike: the call FAILED (no usage was ever produced); the call
+          SUCCEEDED but the provider omitted the usage field
+          (:mod:`conclave.adapters.openai_compat` returns ``usage=None`` in
+          that case, including for some streamed responses -- this is a normal
+          outcome on a clean call, not a failure signal); or the provider
+          reported an all-zero ``TokenUsage`` (QA I1 -- a technically-present
+          but empty usage is the same "nothing to price" shape as ``None``,
+          and pricing it at ``$0.000000`` would assert a false floor rather
+          than an honest bound). A receipt without reported usage is NEVER
+          estimated from a flat reservation in this round: the input a
+          synthesis/judge/verdict call embeds is bounded by which PHASE it
+          belongs to (member calls carry only the prompt; synthesis/judge/
+          verdict calls additionally embed one or more upstream answers), and
+          this round has no phase-aware call plan to reserve from -- pricing a
+          synthesis receipt from a flat member-sized allowance silently
+          under-counts it. See DSE-1514 Round 4 for the phase-aware
+          reservation that replaces this blanket "unpriced" rule.
+
+        And at run level, ALL-OR-NOTHING: ``cost_ceiling_usd`` is the sum of
+        every receipt ceiling only when ``unpriced_models`` is empty AND
+        ``unpriced_receipts`` is zero. A run with no receipts at all (the
+        memberless path) has a provable ceiling of ``Decimal("0")`` -- no call
+        was made, so nothing was spent -- deliberately distinguished from
+        ``None`` ("could not be bounded").
+
+        Never raises: an unusable snapshot, an unreadable file, or a provider
+        that reports an impossible token total degrades to "unpriced" with a
+        bounded warning. A missing ceiling is an acceptable outcome; a failed
+        council run because of pricing is not.
+        """
+        manifest = result.manifest
+        if manifest is None:
+            return
+
+        snapshot: PriceSnapshot | None = load_default_price_snapshot()
+        if snapshot is None:
+            for receipt in manifest.receipts:
+                receipt.cost_ceiling_usd = None
+                receipt.cost_basis = None
+            manifest.cost_ceiling_usd = None
+            manifest.price_snapshot_digest = None
+            manifest.priced_as_of = None
+            manifest.unpriced_models = []
+            manifest.unpriced_receipts = len(manifest.receipts)
+            manifest.pricing_warnings = ["price_snapshot_unavailable"]
+            manifest.secret_safety = verified_secret_safety(manifest)
+            return
+
+        cap = self.max_output_tokens
+        unpriced_models: set[str] = {
+            model_id for model_id in manifest.model_ids if snapshot.rates_for(model_id) is None
+        }
+        unpriced_receipts = 0
+        for receipt in manifest.receipts:
+            rates = snapshot.rates_for(receipt.model_id)
+            if rates is None:
+                unpriced_models.add(receipt.model_id)
+                receipt.cost_ceiling_usd = None
+                receipt.cost_basis = None
+                unpriced_receipts += 1
+                continue
+            if _usage_is_reported(receipt.usage):
+                try:
+                    receipt.cost_ceiling_usd = reported_usage_cost(
+                        rates,
+                        prompt_tokens=receipt.usage.prompt_tokens,
+                        completion_tokens=receipt.usage.completion_tokens,
+                        total_tokens=receipt.usage.total_tokens,
+                    )
+                except ValueError:
+                    # A provider reported a total below its own attributed usage.
+                    # Bounding it would require inventing the missing tokens.
+                    logger.warning(
+                        "unusable reported usage for %s; leaving the call unpriced",
+                        receipt.model_id,
+                    )
+                    receipt.cost_ceiling_usd = None
+                    receipt.cost_basis = None
+                    unpriced_receipts += 1
+                    continue
+                receipt.cost_basis = "reported_usage"
+                continue
+            # No trustworthy usage: failed, successful-but-unreported, or
+            # all-zero. Unpriced -- see the docstring; never estimated.
+            receipt.cost_ceiling_usd = None
+            receipt.cost_basis = None
+            unpriced_receipts += 1
+
+        warnings: list[str] = []
+        if unpriced_models:
+            warnings.append("unpriced_models_present")
+        if unpriced_receipts:
+            warnings.append("unpriced_receipts_present")
+            if cap is None:
+                warnings.append("no_output_cap_configured")
+        if snapshot.is_stale():
+            warnings.append("price_snapshot_stale")
+
+        manifest.price_snapshot_digest = snapshot.digest()
+        manifest.priced_as_of = snapshot.captured_at.isoformat()
+        manifest.unpriced_models = sorted(unpriced_models)
+        manifest.unpriced_receipts = unpriced_receipts
+        manifest.pricing_warnings = warnings
+        manifest.cost_ceiling_usd = (
+            sum((receipt.cost_ceiling_usd for receipt in manifest.receipts), Decimal("0"))
+            if not unpriced_models and not unpriced_receipts
+            else None
+        )
+        # Re-stamp: the ceiling fields were written after _build_manifest's scan.
         manifest.secret_safety = verified_secret_safety(manifest)
 
     def _append_manifest_receipts(

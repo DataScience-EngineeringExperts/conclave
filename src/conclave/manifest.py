@@ -9,9 +9,15 @@ It records, in one secret-free object:
   resolved model ids, the generation settings used, per-call execution
   receipts, total latency, and total token usage;
 * cost (carefully — Scope Plan §8) — token ``total_usage`` is always present;
-  ``estimated_cost`` is left ``None`` (a wrong number inside an audit receipt is
-  worse than none) and ``pricing_snapshot_date`` is the dated-estimate slot a
-  later pricing table would stamp;
+  ``estimated_cost`` is left ``None`` FOREVER (a wrong number inside an audit
+  receipt is worse than none) and ``pricing_snapshot_date`` is the
+  dated-estimate slot a pricing table would stamp. A DIFFERENT, additive slot
+  carries a real answer instead (DSE-1514): ``cost_ceiling_usd`` (with its
+  per-receipt sibling ``cost_ceiling_usd``/``cost_basis``) is a falsifiable
+  UPPER BOUND priced against a dated ``price_snapshot_digest``/``priced_as_of``
+  snapshot, all-or-nothing — any ``unpriced_models``/``unpriced_receipts``
+  nulls the run-level ceiling rather than emit a partial sum, with
+  ``pricing_warnings`` carrying only bounded fixed identifiers;
 * HOW the verdict was made — ``verdict_extraction`` provenance (which model +
   prompt version produced the disagreement analysis), ``verdict_type``,
   ``consensus_method``, and the ``verdict_absent_reason`` (DD-2 ripple). These
@@ -36,9 +42,10 @@ no back-edge to the manifest) for the usage fields and the bounded
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .models import FailureCategory, TokenUsage
 
@@ -140,6 +147,31 @@ class AdjudicationAttempt(BaseModel):
     http_status: int | None = None
 
 
+# How a receipt's ``cost_ceiling_usd`` was derived. ``reported_usage`` means the
+# provider told us its token counts and they were charged at ceiling rates;
+# ``reservation`` means the call produced no usage (it failed, or the provider
+# reported none) and the ceiling is the pessimistic pre-call reservation instead.
+# There is no third basis: a call with neither usage nor a reservable output cap
+# is UNPRICED (``None``/``None``), never estimated.
+CostBasis = Literal["reported_usage", "reservation"]
+
+
+def _reject_float_cost_ceiling(value: object) -> object:
+    """Reject a float/bool ``cost_ceiling_usd`` outright rather than coercing it.
+
+    Plain ``Decimal | None`` fields accept ``float`` in pydantic's default (lax)
+    mode, silently reproducing the exact drift ``conclave.pricing.PriceRates``
+    was built to prevent (``Decimal(0.4)`` is not ``Decimal("0.4")``). Mirrors
+    ``PriceRates.require_exact_decimal_rate`` byte for byte; ``str`` and
+    ``Decimal`` still pass through untouched, so the JSON round trip through
+    ``model_dump(mode="json")`` (which renders a ``Decimal`` as a string) keeps
+    working.
+    """
+    if isinstance(value, (bool, float)):
+        raise ValueError("cost_ceiling_usd must be an exact decimal value, not a float")
+    return value
+
+
 class ProviderExecutionReceipt(BaseModel):
     """A per-call execution record for one council member that was CALLED.
 
@@ -165,6 +197,13 @@ class ProviderExecutionReceipt(BaseModel):
         estimated_cost: Trustworthy per-call cost when a dated pricing source is
             available. Conclave currently has no pricing table, so this stays
             ``None`` rather than inventing a number.
+        cost_ceiling_usd: A falsifiable UPPER BOUND on this call's cost in USD,
+            or ``None`` when the call could not be bounded. Exact ``Decimal``,
+            ROUND_CEILING, priced against the run's dated snapshot. Distinct
+            from ``estimated_cost`` on purpose: an estimate is a guess and stays
+            ``None`` forever; a ceiling is a checkable claim.
+        cost_basis: Which rule produced ``cost_ceiling_usd`` -- see
+            :data:`CostBasis`. ``None`` exactly when ``cost_ceiling_usd`` is.
         error: Compatibility field containing only the bounded error category,
             never raw provider text, URLs, bodies, prompts, or exception chains.
         error_category: Secret-free bounded failure category.
@@ -182,12 +221,18 @@ class ProviderExecutionReceipt(BaseModel):
     latency_ms: float = 0.0
     usage: TokenUsage | None = None
     estimated_cost: float | None = None
+    cost_ceiling_usd: Decimal | None = None
+    cost_basis: CostBasis | None = None
     error: str | None = None
     error_category: ReceiptErrorCategory | None = None
     schema_valid: bool | None = None
     protocol_version: str | None = None
     prompt_version: str | None = None
     schema_version: str | None = None
+
+    _validate_cost_ceiling_usd = field_validator("cost_ceiling_usd", mode="before")(
+        _reject_float_cost_ceiling
+    )
 
 
 class ModelHarnessManifest(BaseModel):
@@ -238,6 +283,24 @@ class ModelHarnessManifest(BaseModel):
             candidate tried across every adjudication role in this run,
             including skipped-unkeyed candidates. Empty for a run that never
             called :meth:`conclave.council.Council.adjudicate`.
+        cost_ceiling_usd: The run's total cost CEILING in USD -- the sum of every
+            receipt's ceiling -- populated only when the whole run is priceable.
+            All-or-nothing: any unpriced model or unpriced receipt leaves this
+            ``None`` with ``unpriced_models``/``unpriced_receipts`` naming why. A
+            partial sum reads exactly like a complete one and is never emitted.
+        price_snapshot_digest: Rate digest of the snapshot the ceiling was priced
+            against. Accompanies every non-``None`` ceiling.
+        priced_as_of: ISO date the snapshot's rates were captured.
+        unpriced_models: Sorted model ids that ran (or were called) in this run
+            and have no snapshot entry. Non-empty forces the run ceiling to
+            ``None``. Drawn from the same vocabulary as ``model_ids``, so it adds
+            no new secret-scan surface.
+        unpriced_receipts: How many receipts could not be priced at all.
+        pricing_warnings: Bounded, fixed identifiers only -- one of
+            ``price_snapshot_stale``, ``price_snapshot_unavailable``,
+            ``unpriced_models_present``, ``unpriced_receipts_present``,
+            ``no_output_cap_configured``. NEVER provider text, never
+            interpolated, so ``scan_for_secret_material`` stays provable.
     """
 
     # REQUIRED identity.
@@ -262,6 +325,15 @@ class ModelHarnessManifest(BaseModel):
     estimated_cost: float | None = None
     pricing_snapshot_date: str | None = None
 
+    # Bounded cost ceilings (DSE-1514). Additive; ``estimated_cost`` above is
+    # untouched and stays ``None`` forever.
+    cost_ceiling_usd: Decimal | None = None
+    price_snapshot_digest: str | None = None
+    priced_as_of: str | None = None
+    unpriced_models: list[str] = Field(default_factory=list)
+    unpriced_receipts: int = Field(default=0, ge=0)
+    pricing_warnings: list[str] = Field(default_factory=list)
+
     # Structured-output validity (CAC-02) + redacted member errors.
     schema_valid: bool | None = None
     redacted_errors: list[str] = Field(default_factory=list)
@@ -277,6 +349,10 @@ class ModelHarnessManifest(BaseModel):
 
     # Synthesizer/judge/verdict-extractor succession ledger (DSE-1512).
     adjudication_succession: list[AdjudicationAttempt] = Field(default_factory=list)
+
+    _validate_cost_ceiling_usd = field_validator("cost_ceiling_usd", mode="before")(
+        _reject_float_cost_ceiling
+    )
 
 
 def scan_for_secret_material(manifest: ModelHarnessManifest) -> bool:

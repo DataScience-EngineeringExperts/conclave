@@ -724,7 +724,12 @@ def test_identity_chain_defaults_to_primary_when_omitted():
 
 
 def test_cache_format_version_bumped():
-    assert cache_mod.CACHE_FORMAT_VERSION == "4"
+    # Tracks the CURRENT format version, not a frozen historical one -- DSE-1514
+    # bumped this from "4" (DSE-1512's synthesizer-chain identity) to "5" (the
+    # price-snapshot fingerprint + max_output_tokens cap); see
+    # test_cache_format_version_is_five_for_price_identity for the DSE-1514-named
+    # assertion of the same fact.
+    assert cache_mod.CACHE_FORMAT_VERSION == "5"
 
 
 async def test_result_adjudicated_by_successor_is_not_stored(monkeypatch, keys, cache_home):
@@ -1088,3 +1093,83 @@ async def test_stream_primary_run_is_stored(monkeypatch, keys, cache_home):
 
     r2 = await c.ask("q")
     assert r2.cached is True
+
+
+def test_cache_format_version_is_five_for_price_identity():
+    from conclave import cache as cache_mod
+
+    assert cache_mod.CACHE_FORMAT_VERSION == "5"
+
+
+def test_identity_carries_the_price_snapshot_fingerprint_and_output_cap():
+    from conclave.cache import build_identity
+
+    base = {
+        "prompt": "q",
+        "mode": "synthesize",
+        "members": [("grok", "xai/grok-4.3")],
+        "synthesizer": "claude",
+        "synthesizer_model_id": "anthropic/claude-sonnet-4-6",
+        "temperature": 0.7,
+    }
+    plain = build_identity(**base)
+    assert plain["price_snapshot_fingerprint"] is None
+    assert plain["generation"]["max_output_tokens"] is None
+
+    priced = build_identity(**base, price_snapshot_digest="sha256:" + "c" * 64)
+    other = build_identity(**base, price_snapshot_digest="sha256:" + "d" * 64)
+    assert priced["price_snapshot_fingerprint"] != plain["price_snapshot_fingerprint"]
+    assert priced["price_snapshot_fingerprint"] != other["price_snapshot_fingerprint"]
+    # The raw digest never enters the inspectable identity document -- it is
+    # re-hashed, matching how source_bundle_digest is handled.
+    assert "c" * 64 not in str(priced)
+
+    capped = build_identity(**base, max_output_tokens=512)
+    assert capped["generation"]["max_output_tokens"] == 512
+
+
+def test_two_snapshots_never_share_a_cache_key():
+    from conclave.cache import make_key
+
+    base = {
+        "prompt": "q",
+        "mode": "synthesize",
+        "members": [("grok", "xai/grok-4.3")],
+        "synthesizer": "claude",
+        "synthesizer_model_id": "anthropic/claude-sonnet-4-6",
+        "temperature": 0.7,
+    }
+    assert make_key(**base, price_snapshot_digest="sha256:" + "c" * 64) != make_key(
+        **base, price_snapshot_digest="sha256:" + "d" * 64
+    )
+    assert make_key(**base, max_output_tokens=512) != make_key(**base, max_output_tokens=1024)
+
+
+async def test_a_cached_result_round_trips_its_decimal_ceiling(tmp_path, monkeypatch, keys):
+    """A cache hit must return an exact Decimal ceiling, not a float or a string."""
+    from decimal import Decimal
+
+    import conclave.council as council_mod
+    from conclave.council import Council
+    from conclave.models import ModelAnswer, TokenUsage
+    from tests.test_pricing_receipts import _install_snapshot, _snapshot
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3"))
+
+    async def ok(name, model_id, messages, **kwargs):
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            answer="ok",
+            usage=TokenUsage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+        )
+
+    monkeypatch.setattr(council_mod, "call_model", ok)
+    council = Council(models=["grok"], synthesizer="grok", cache=True, extract_verdict=False)
+    live = await council.ask("q", synthesize=False)
+    hit = await council.ask("q", synthesize=False)
+
+    assert hit.cached is True
+    assert isinstance(hit.manifest.cost_ceiling_usd, Decimal)
+    assert hit.manifest.cost_ceiling_usd == live.manifest.cost_ceiling_usd

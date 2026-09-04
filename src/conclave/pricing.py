@@ -22,11 +22,21 @@ Three invariants hold everywhere in here and must survive every future edit:
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from decimal import ROUND_CEILING, Decimal, localcontext
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+
+from .logging import get_logger
+
+logger = get_logger("pricing")
 
 # The quantum every emitted amount is rounded up to: one USD micro-cent.
 USD_MICROCENT = Decimal("0.000001")
@@ -263,3 +273,168 @@ def reported_usage_cost(
             + Decimal(unattributed) * higher
         ) / TOKENS_PER_MILLION
         return cost.quantize(USD_MICROCENT, rounding=ROUND_CEILING)
+
+
+# A snapshot older than this many days emits a bounded warning on the manifest.
+# It is a STALENESS SIGNAL ONLY: an old snapshot still prices at exactly the
+# rates it records. Substituting a rate because one looks old would replace a
+# falsifiable claim with a guess, which is the failure this module exists to
+# prevent.
+PRICE_SNAPSHOT_MAX_AGE_DAYS = 90
+
+# Digest namespace for the PRODUCT snapshot. Deliberately distinct from the eval
+# harness's ``conclave_model_prices_v1`` so the two hash spaces can never collide
+# and an eval price book can never be mistaken for a product snapshot.
+_PRODUCT_PRICE_HASH_NAMESPACE = "conclave_product_prices_v1"
+
+
+def _canonical_decimal(value: Decimal) -> str:
+    """Render a Decimal in a normalized, representation-independent form.
+
+    ``Decimal("3.00")`` and ``Decimal("3")`` are the same rate and must produce
+    the same digest, so trailing fractional zeros are stripped and exponent
+    notation is expanded.
+    """
+    sign, digits, exponent = value.as_tuple()
+    digit_text = "".join(str(digit) for digit in digits)
+    if exponent >= 0:
+        integer = digit_text + ("0" * exponent)
+        fraction = ""
+    else:
+        split_at = len(digit_text) + exponent
+        if split_at > 0:
+            integer = digit_text[:split_at]
+            fraction = digit_text[split_at:]
+        else:
+            integer = "0"
+            fraction = ("0" * -split_at) + digit_text
+        fraction = fraction.rstrip("0")
+    canonical = integer if not fraction else f"{integer}.{fraction}"
+    return f"-{canonical}" if sign else canonical
+
+
+class PriceSnapshot(BaseModel):
+    """One dated, frozen, hand-verified set of product price ceilings.
+
+    Snapshots are checked-in artifacts under ``src/conclave/data/``, never
+    fetched at runtime (explicitly out of scope). Every entry cites the vendor
+    page its rate was read from; a model whose published list price could not be
+    verified is OMITTED, which makes it *unpriced* rather than guessed.
+
+    Attributes:
+        snapshot_id: Stable identifier, conventionally
+            ``conclave-default-prices-<YYYY-MM-DD>``.
+        captured_at: The date the rates were read from the vendor pages.
+        currency: Always ``"USD"``.
+        entries: The priced models, keyed by full provider-prefixed model id.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    snapshot_id: str = Field(min_length=1)
+    captured_at: date
+    currency: Literal["USD"]
+    entries: tuple[PriceRates, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_entries(self) -> PriceSnapshot:
+        """Require unique model ids and a citation on every entry."""
+        model_ids = [entry.model_id for entry in self.entries]
+        if len(set(model_ids)) != len(model_ids):
+            raise ValueError("price snapshot model ids must be unique")
+        uncited = sorted(entry.model_id for entry in self.entries if not entry.source_url)
+        if uncited:
+            raise ValueError(f"price snapshot entries must carry a source_url: {uncited}")
+        return self
+
+    def rates_for(self, model_id: str) -> PriceRates | None:
+        """Return the EXACT entry for ``model_id``, or ``None``.
+
+        Matching is exact and total: there is no prefix match, no provider
+        fallback, and no nearest-neighbour rate. An absent model is unpriced,
+        full stop.
+        """
+        for entry in self.entries:
+            if entry.model_id == model_id:
+                return entry
+        return None
+
+    def is_stale(self, *, as_of: date | None = None) -> bool:
+        """Return whether this snapshot is older than the staleness threshold."""
+        reference = as_of or date.today()
+        return (reference - self.captured_at).days > PRICE_SNAPSHOT_MAX_AGE_DAYS
+
+    def digest(self) -> str:
+        """Return an order- and representation-independent digest of the RATES.
+
+        Covers the namespace plus, per entry, ``provider_id``, ``model_id``, both
+        ceiling rates in canonical decimal form, and
+        ``max_output_bytes_per_token``. It deliberately EXCLUDES ``snapshot_id``,
+        ``captured_at``, and ``source_url``: this digest joins cache identity, and
+        re-dating or re-citing a snapshot whose rates are byte-identical must not
+        invalidate entries whose ceiling would come out exactly the same.
+        """
+        ordered = sorted(self.entries, key=lambda entry: (entry.provider_id, entry.model_id))
+        canonical = json.dumps(
+            {
+                "namespace": _PRODUCT_PRICE_HASH_NAMESPACE,
+                "entries": [
+                    {
+                        "provider_id": entry.provider_id,
+                        "model_id": entry.model_id,
+                        "input_ceiling_usd_per_million_tokens": _canonical_decimal(
+                            entry.input_ceiling_usd_per_million_tokens
+                        ),
+                        "output_ceiling_usd_per_million_tokens": _canonical_decimal(
+                            entry.output_ceiling_usd_per_million_tokens
+                        ),
+                        "max_output_bytes_per_token": str(entry.max_output_bytes_per_token),
+                    }
+                    for entry in ordered
+                ],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def _price_data_dir() -> Path:
+    """Return the packaged directory holding the dated price snapshots."""
+    return Path(__file__).parent / "data"
+
+
+@lru_cache(maxsize=1)
+def load_default_price_snapshot() -> PriceSnapshot | None:
+    """Load the newest packaged price snapshot, or ``None`` when unavailable.
+
+    Picks the lexicographically-last ``prices-YYYY-MM-DD.json`` in
+    ``conclave/data`` (ISO dates sort chronologically), parses it with
+    ``parse_float=Decimal`` so a JSON number can never become a float rate, and
+    validates it. Memoized for the life of the process: a snapshot is a frozen
+    artifact, so re-reading it per run would be pure overhead.
+
+    Returns ``None`` -- never raises -- when the directory is absent, empty,
+    unreadable, or holds a file that fails validation, and logs a warning. A
+    missing snapshot means a run carries NO ceiling; it must never mean a failed
+    run. (The pre-flight spend gate treats the same condition as a refusal
+    instead; that asymmetry is deliberate.)
+    """
+    try:
+        candidates = sorted(_price_data_dir().glob("prices-*.json"))
+    except OSError as exc:
+        logger.warning("price snapshot directory unreadable: %s; pricing disabled", exc)
+        return None
+    if not candidates:
+        logger.warning("no packaged price snapshot found; pricing disabled")
+        return None
+    path = candidates[-1]
+    try:
+        with path.open(encoding="utf-8") as handle:
+            payload = json.load(handle, parse_float=Decimal)
+        payload.pop("_note", None)
+        return PriceSnapshot.model_validate(payload)
+    except (OSError, json.JSONDecodeError, ValidationError, TypeError) as exc:
+        logger.warning("price snapshot %s is unusable: %s; pricing disabled", path.name, exc)
+        return None
