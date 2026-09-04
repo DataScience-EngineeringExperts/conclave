@@ -194,6 +194,9 @@ async def stream_ask(
         result.manifest = council._build_manifest(
             mode=result.mode, members=[], skipped=skipped, answers=[]
         )
+        # Pricing is the LAST step: it must see every receipt, including the verdict
+        # extraction receipts _apply_verdict just appended. Mirrors Council._cached_run.
+        council._price_manifest(result)
         yield StreamEvent(type="done", result=result)
         return
 
@@ -267,6 +270,9 @@ async def stream_ask(
         # receipt capture is currently the buffered/Elite contract.
         await council._apply_verdict(result, record_receipts=False)
 
+    # Pricing is the LAST step: it must see every receipt, including the verdict
+    # extraction receipts _apply_verdict just appended. Mirrors Council._cached_run.
+    council._price_manifest(result)
     yield StreamEvent(type="done", result=result)
 
 

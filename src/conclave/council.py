@@ -54,6 +54,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -78,6 +79,12 @@ from .models import (
     ModelAnswer,
     StreamEvent,
     TokenUsage,
+)
+from .pricing import (
+    PriceSnapshot,
+    load_default_price_snapshot,
+    reported_usage_cost,
+    reserve_cost,
 )
 from .prompts import ELITE_PROMPT_VERSION, SYNTHESIS_PROMPT_VERSION
 from .providers import call_model, receipt_from_answer
@@ -108,6 +115,15 @@ _SYNTH_SYSTEM = (
     "and adjudicate disagreements, and note any answer that is clearly wrong. "
     "Do not invent a model's position; rely only on the answers provided."
 )
+
+# Fixed allowances used when a FAILED call must be priced from a reservation
+# rather than from reported usage. A failed call carries no usage and no
+# recorded message list, so its input is bounded by the raw prompt bytes plus
+# these two constants: a template allowance covering any system/instruction
+# wording the mode wrapped around the prompt, and the same per-request framing
+# allowance the eval runner attests (64 + 16 per message, taken at 4 messages).
+_PRICING_TEMPLATE_ALLOWANCE = 4096
+_PRICING_FRAMING_ALLOWANCE = 64 + (16 * 4)
 
 # Re-exported for callers that want the version without importing prompts.
 __all__ = ["Council", "SYNTHESIS_PROMPT_VERSION"]
@@ -237,6 +253,10 @@ class Council:
         # that DEBUG band and accept the responsibility.
         if not allow_transport_debug_logging:
             transport.guard_transport_logging()
+        # Replaced by the real config/argument resolution in the output-cap task
+        # (DSE-1514 Task 9). Needed already by `_price_manifest` (Task 7), which
+        # reads it to decide whether a failed call's reservation can be priced.
+        self.max_output_tokens: int | None = None
 
     @staticmethod
     def _resolve_chain(spec: str | Sequence[str] | None, config: ConclaveConfig) -> list[str]:
@@ -385,6 +405,7 @@ class Council:
         if not self.cache_enabled:
             result = await run()
             self._ensure_manifest(result, mode)
+            self._price_manifest(result)
             return result
 
         key = self._cache_key(
@@ -399,10 +420,12 @@ class Council:
         if hit is not None:
             logger.info("cache hit for %s run (%s)", mode, key[:12])
             self._ensure_manifest(hit, mode)
+            self._price_manifest(hit)
             return hit
 
         result = await run()
         self._ensure_manifest(result, mode)
+        self._price_manifest(result)
         if result.primary_failed_over:
             logger.info(
                 "not caching %s run (%s): primary adjudicator failed for an infrastructure reason",
@@ -671,6 +694,127 @@ class Council:
         manifest.redacted_errors = [
             receipt.error for receipt in manifest.receipts if receipt.error is not None
         ]
+        manifest.secret_safety = verified_secret_safety(manifest)
+
+    def _price_manifest(self, result: CouncilResult) -> None:
+        """Stamp cost ceilings on the manifest -- the LAST step of a run (DSE-1514).
+
+        Runs after ``_ensure_manifest`` and after every receipt is appended, so
+        it sees the complete ledger. It is idempotent: it recomputes every field
+        from the receipts each time, so re-pricing a cache hit is harmless.
+
+        The rule, per receipt:
+
+        * the model has no snapshot entry -> unpriced (``None``/``None``), and
+          the model id joins ``unpriced_models``;
+        * the provider reported usage -> ``reported_usage_cost`` at ceiling
+          rates, basis ``"reported_usage"``;
+        * no usage (the call failed, or the provider reported none) AND an
+          output cap is configured -> the call's own pessimistic reservation,
+          basis ``"reservation"``;
+        * no usage and no output cap -> unpriced. Nothing is estimated.
+
+        And at run level, ALL-OR-NOTHING: ``cost_ceiling_usd`` is the sum of
+        every receipt ceiling only when ``unpriced_models`` is empty AND
+        ``unpriced_receipts`` is zero. A run with no receipts at all (the
+        memberless path) has a provable ceiling of ``Decimal("0")`` -- no call
+        was made, so nothing was spent -- deliberately distinguished from
+        ``None`` ("could not be bounded").
+
+        Never raises: an unusable snapshot, an unreadable file, or a provider
+        that reports an impossible token total degrades to "unpriced" with a
+        bounded warning. A missing ceiling is an acceptable outcome; a failed
+        council run because of pricing is not.
+        """
+        manifest = result.manifest
+        if manifest is None:
+            return
+
+        snapshot: PriceSnapshot | None = load_default_price_snapshot()
+        if snapshot is None:
+            for receipt in manifest.receipts:
+                receipt.cost_ceiling_usd = None
+                receipt.cost_basis = None
+            manifest.cost_ceiling_usd = None
+            manifest.price_snapshot_digest = None
+            manifest.priced_as_of = None
+            manifest.unpriced_models = []
+            manifest.unpriced_receipts = len(manifest.receipts)
+            manifest.pricing_warnings = ["price_snapshot_unavailable"]
+            manifest.secret_safety = verified_secret_safety(manifest)
+            return
+
+        cap = self.max_output_tokens
+        unpriced_models: set[str] = {
+            model_id for model_id in manifest.model_ids if snapshot.rates_for(model_id) is None
+        }
+        unpriced_receipts = 0
+        for receipt in manifest.receipts:
+            rates = snapshot.rates_for(receipt.model_id)
+            if rates is None:
+                unpriced_models.add(receipt.model_id)
+                receipt.cost_ceiling_usd = None
+                receipt.cost_basis = None
+                unpriced_receipts += 1
+                continue
+            if receipt.usage is not None:
+                try:
+                    receipt.cost_ceiling_usd = reported_usage_cost(
+                        rates,
+                        prompt_tokens=receipt.usage.prompt_tokens,
+                        completion_tokens=receipt.usage.completion_tokens,
+                        total_tokens=receipt.usage.total_tokens,
+                    )
+                except ValueError:
+                    # A provider reported a total below its own attributed usage.
+                    # Bounding it would require inventing the missing tokens.
+                    logger.warning(
+                        "unusable reported usage for %s; leaving the call unpriced",
+                        receipt.model_id,
+                    )
+                    receipt.cost_ceiling_usd = None
+                    receipt.cost_basis = None
+                    unpriced_receipts += 1
+                    continue
+                receipt.cost_basis = "reported_usage"
+                continue
+            if cap is None:
+                receipt.cost_ceiling_usd = None
+                receipt.cost_basis = None
+                unpriced_receipts += 1
+                continue
+            receipt.cost_ceiling_usd = reserve_cost(
+                rates,
+                prompt_token_upper_bound=len(result.prompt.encode("utf-8")),
+                prompt_template_token_allowance=_PRICING_TEMPLATE_ALLOWANCE,
+                provider_framing_token_allowance=_PRICING_FRAMING_ALLOWANCE,
+                upstream_output_token_ceilings=(),
+                upstream_output_bytes_per_token=rates.max_output_bytes_per_token,
+                max_output_tokens=cap,
+            ).reserved_cost_usd
+            receipt.cost_basis = "reservation"
+
+        warnings: list[str] = []
+        if unpriced_models:
+            warnings.append("unpriced_models_present")
+        if unpriced_receipts:
+            warnings.append("unpriced_receipts_present")
+            if cap is None:
+                warnings.append("no_output_cap_configured")
+        if snapshot.is_stale():
+            warnings.append("price_snapshot_stale")
+
+        manifest.price_snapshot_digest = snapshot.digest()
+        manifest.priced_as_of = snapshot.captured_at.isoformat()
+        manifest.unpriced_models = sorted(unpriced_models)
+        manifest.unpriced_receipts = unpriced_receipts
+        manifest.pricing_warnings = warnings
+        manifest.cost_ceiling_usd = (
+            sum((receipt.cost_ceiling_usd for receipt in manifest.receipts), Decimal("0"))
+            if not unpriced_models and not unpriced_receipts
+            else None
+        )
+        # Re-stamp: the ceiling fields were written after _build_manifest's scan.
         manifest.secret_safety = verified_secret_safety(manifest)
 
     def _append_manifest_receipts(
