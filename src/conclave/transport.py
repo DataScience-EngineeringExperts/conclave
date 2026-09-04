@@ -9,18 +9,35 @@ single internal error type, and one stable patch seam for transport-level tests
 The transport is intentionally provider-agnostic: it knows nothing about auth
 headers, model ids, or response shapes. Adapters build the request and parse the
 response; the transport just moves bytes and reports HTTP status.
+
+**The record/replay seam (DSE-1517 Task 2).** ``post_json`` and ``stream_sse``
+consult one :class:`contextvars.ContextVar` before doing anything else. With no
+context set, both functions are byte-for-byte their pre-DSE-1517 selves --
+nothing about this seam changes the default (no-context) code path. Two
+context types share the var: :class:`RecordingContext` (live keys, live
+network; wraps ``post_json`` to capture a sanitized tape) and
+:class:`ReplayContext` (offline: no keys, no network; ``post_json`` is fully
+overridden and ``stream_sse`` refuses outright). A process-global refcount,
+``_OFFLINE_STRICT``, backstops the per-task ``ContextVar`` for anything that
+escapes normal ``asyncio`` task-context inheritance (e.g. a
+``loop.run_in_executor`` hop onto a plain thread), so a strict replay can never
+quietly turn into a live call.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
-from typing import NoReturn
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import ClassVar, NoReturn
 
 import httpx
 
 from .logging import get_logger
 from .models import FailureCategory, categorize_http_status
+from .tape import PostJson
 
 logger = get_logger("transport")
 
@@ -156,6 +173,113 @@ def _raise_transport_error(message: str, category: FailureCategory = "transport"
     raise TransportError(message, category=category) from None
 
 
+@dataclass(frozen=True)
+class RecordingContext:
+    """Live-key, live-network transport override active during ``ask --record``.
+
+    ``post_json`` is wrapped (typically by a
+    :class:`conclave.tape.RecordingTransport`) so every call is captured onto a
+    sanitized tape; from the adapter's point of view, behavior is identical to
+    an uncontexted call. ``offline`` is ``False`` -- :func:`_resolve_key` always
+    falls through to the real environment lookup under this context (never the
+    replay sentinel: this is the F1 guard), and ``stream_sse`` is never
+    intercepted (``--record`` only drives buffered modes, so the streaming path
+    is never reached with a ``RecordingContext`` active, but the contract is
+    that it would pass straight through live if it were).
+    """
+
+    post_json: PostJson
+    offline: ClassVar[bool] = False
+
+
+@dataclass(frozen=True)
+class ReplayContext:
+    """Offline transport override active only inside ``conclave replay``.
+
+    No network call and no environment read ever happens under this context.
+    ``post_json`` is fully overridden by ``self.post_json`` (typically a
+    :class:`conclave.tape.ReplayingTransport`) before ``_get_client()`` is ever
+    reached, ``stream_sse`` refuses outright, and
+    :func:`conclave.providers._resolve_key` returns ``key_sentinel`` instead of
+    reading an env var. The sentinel is placed into request headers by the
+    adapter exactly like a real key would be, but the replaying transport
+    ignores headers entirely when matching a recorded exchange -- it hashes
+    only ``url`` and ``body`` -- so the sentinel never leaves the process. This
+    branch is reachable only when ``ctx.offline`` is true; a
+    :class:`RecordingContext` never triggers it.
+    """
+
+    post_json: PostJson
+    key_sentinel: str = "replay"
+    offline: ClassVar[bool] = True
+
+
+# One seam, two context types: set/read by ``recording``/``replaying`` below and
+# consulted at the top of ``post_json``/``stream_sse``. ``default=None`` is the
+# ordinary, no-context production path -- every call site checks ``is not None``
+# before touching ``.offline`` or ``.post_json``.
+_TRANSPORT: ContextVar[RecordingContext | ReplayContext | None] = ContextVar(
+    "conclave_transport", default=None
+)
+
+# Process-global refcount (not per-task): > 0 means "no live call anywhere in
+# this process", enforced independently of the ContextVar above so a call that
+# escapes normal asyncio task-context inheritance -- e.g. a
+# ``loop.run_in_executor`` hop onto a plain OS thread, which does not inherit
+# contextvars state -- still cannot reach the network during a strict replay.
+_OFFLINE_STRICT = 0
+
+
+def transport_context() -> RecordingContext | ReplayContext | None:
+    """Return the transport context active in the current asyncio task, if any."""
+    return _TRANSPORT.get()
+
+
+@contextmanager
+def recording(context: RecordingContext) -> Iterator[None]:
+    """Activate ``context`` as the live-key, live-network transport override.
+
+    Scoped via :class:`contextvars.ContextVar`: sibling ``asyncio`` tasks
+    created before this context manager is entered do not see the override
+    (task isolation), and the previous value is restored on exit even if the
+    wrapped run raises.
+    """
+    token = _TRANSPORT.set(context)
+    try:
+        yield
+    finally:
+        _TRANSPORT.reset(token)
+
+
+@contextmanager
+def replaying(context: ReplayContext, *, strict: bool = True) -> Iterator[None]:
+    """Activate ``context`` as the offline transport override.
+
+    Args:
+        context: The :class:`ReplayContext` to activate for the current task.
+        strict: When ``True`` (the default -- what the ``conclave replay`` CLI
+            always uses), also increments the process-global
+            ``_OFFLINE_STRICT`` refcount for the duration of the context, in a
+            ``try``/``finally`` so it is decremented even if the wrapped run
+            raises. That refcount backstops the per-task ``ContextVar`` for
+            anything that escapes normal task-context inheritance. ``False``
+            exists for the embedded/concurrent-replay case
+            (``replay_bundle(..., strict=False)``) where other live traffic may
+            legitimately share the process; using it is the caller's
+            responsibility.
+    """
+    token = _TRANSPORT.set(context)
+    global _OFFLINE_STRICT
+    if strict:
+        _OFFLINE_STRICT += 1
+    try:
+        yield
+    finally:
+        if strict:
+            _OFFLINE_STRICT -= 1
+        _TRANSPORT.reset(token)
+
+
 def _get_client() -> httpx.AsyncClient:
     """Return the process-wide pooled client, creating it on first use."""
     global _client
@@ -193,7 +317,23 @@ async def post_json(
             (``__cause__`` and ``__context__`` both cleared) so its header-bearing
             ``.request`` cannot leak the key via the surfaced error's traceback,
             cause-chain repr, or a direct attribute walk (audit RANK 1/5).
+            Also raised (category ``"unexpected"``) when a strict offline
+            replay is active and no context intercepted this call (DSE-1517).
+
+    Note:
+        The record/replay seam (DSE-1517) is checked FIRST, before
+        ``_get_client()`` is ever called. With no context active and the
+        strict backstop at zero, this is byte-for-byte the pre-DSE-1517
+        function body.
     """
+    ctx = _TRANSPORT.get()
+    if ctx is not None:
+        return await ctx.post_json(url, headers, json_body, timeout)
+    if _OFFLINE_STRICT > 0:
+        raise TransportError(
+            "live call attempted during a strict offline replay", category="unexpected"
+        )
+
     client = _get_client()
     # Inner try maps httpx failures to TransportError via _raise_transport_error
     # (which raises ``from None``); the outer try clears ``__context__`` at a
@@ -277,7 +417,26 @@ async def stream_sse(
             (``__cause__`` and ``__context__`` both cleared) so its header-bearing
             ``.request`` cannot leak the key via the surfaced error's traceback,
             cause-chain repr, or a direct attribute walk (audit RANK 1/5).
+            Also raised (category ``"unexpected"``) under an offline
+            :class:`ReplayContext` or a strict offline replay: streaming has no
+            recorded override, so it refuses outright rather than reaching the
+            network (DSE-1517). A :class:`RecordingContext` does NOT trigger
+            this -- ``--record`` only drives buffered modes, so this path is
+            never exercised while recording, but the contract is that it would
+            stream live if it were.
+
+    Note:
+        The record/replay seam (DSE-1517) is checked FIRST, before
+        ``_get_client()`` is ever called. With no context active and the
+        strict backstop at zero, this is byte-for-byte the pre-DSE-1517
+        function body.
     """
+    ctx = _TRANSPORT.get()
+    if (ctx is not None and ctx.offline) or _OFFLINE_STRICT > 0:
+        raise TransportError(
+            "live call attempted during a strict offline replay", category="unexpected"
+        )
+
     client = _get_client()
     # Inner try maps httpx failures to TransportError via _raise_transport_error
     # (raises ``from None``); the outer try clears ``__context__`` at a boundary

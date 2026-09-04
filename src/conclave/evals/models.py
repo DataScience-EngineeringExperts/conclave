@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..tape import Sha256Digest  # noqa: F401 -- re-exported; moved here from tape.py (DSE-1517)
+from ..tape import Sha256Digest  # noqa: F401 -- re-exported; moved to tape.py (DSE-1517)
 
 EVAL_SCHEMA_VERSION = "conclave_eval_v1"
 SchemaVersion = Literal["conclave_eval_v1"]

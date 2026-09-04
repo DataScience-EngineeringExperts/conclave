@@ -112,15 +112,42 @@ def _receipt_error_category(error: str) -> ReceiptErrorCategory:
 def _resolve_key(adapter: ProviderAdapter) -> str | None:
     """Read the active key VALUE for an adapter from the environment, or None.
 
-    Walks the adapter's candidate env var names in order and returns the first
-    non-empty value. The value is read here, used only to build the request, and
-    never stored on any object, logged, or serialized.
+    Under an offline :class:`conclave.transport.ReplayContext` (``ctx.offline``
+    is true), no environment variable is read at all: this returns the
+    context's ``key_sentinel`` instead. The sentinel is placed into request
+    headers by the adapter exactly as a real key would be, but the replaying
+    transport ignores headers entirely when matching a recorded exchange -- it
+    hashes only ``url`` and ``body`` -- so the sentinel never leaves the
+    process. This branch is reachable only when a transport context is active
+    AND that context is offline; a live run (no context, or a
+    :class:`conclave.transport.RecordingContext`) always falls through to the
+    real environment lookup below (the F1 guard -- a recording run never sees
+    the sentinel).
+
+    Otherwise walks the adapter's candidate env var names in order and returns
+    the first non-empty value. The value is read here, used only to build the
+    request, and never stored on any object, logged, or serialized.
     """
+    ctx = transport.transport_context()
+    if ctx is not None and ctx.offline:
+        return ctx.key_sentinel
     for var in adapter.env_vars:
         value = os.environ.get(var, "").strip()
         if value:
             return value
     return None
+
+
+def unkeyed_error_message(adapter: ProviderAdapter) -> str:
+    """Build the "no API key" error text shared by every unkeyed call path.
+
+    Factored out (DSE-1517) so :func:`call_model` and :func:`call_model_stream`
+    compose the exact same string instead of each inlining their own copy --
+    byte-identical output, one place to change the wording. Names every
+    candidate environment variable for the adapter's provider, in order.
+    """
+    names = " or ".join(adapter.env_vars) or "(none)"
+    return f"no API key in environment (set {names})"
 
 
 async def call_model(
@@ -187,8 +214,7 @@ async def call_model(
     api_key = _resolve_key(adapter)
     if api_key is None:
         latency = time.perf_counter() - started
-        names = " or ".join(adapter.env_vars) or "(none)"
-        msg = f"no API key in environment (set {names})"
+        msg = unkeyed_error_message(adapter)
         logger.warning("%s (%s) %s", name, model_id, msg)
         return ModelAnswer(
             name=name,
@@ -364,8 +390,7 @@ async def call_model_stream(
     api_key = _resolve_key(adapter)
     if api_key is None:
         latency = time.perf_counter() - started
-        names = " or ".join(adapter.env_vars) or "(none)"
-        msg = f"no API key in environment (set {names})"
+        msg = unkeyed_error_message(adapter)
         logger.warning("%s (%s) %s", name, model_id, msg)
         yield ModelAnswer(
             name=name,
