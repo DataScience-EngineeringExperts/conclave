@@ -42,6 +42,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exhausted. Independent of `degraded`; the cache never stores a `true` run.
 - A declared chain widens which vendors may receive the prompt (see README › Synthesizer
   failover › Confidentiality).
+- **Bounded cost ceilings on the manifest (DSE-1514).** Every receipt now carries
+  `cost_ceiling_usd` (exact `Decimal`, `ROUND_CEILING`) and `cost_basis` (`reported_usage` or
+  `reservation`), and the manifest carries a run-level `cost_ceiling_usd`,
+  `price_snapshot_digest`, `priced_as_of`, `unpriced_models`, `unpriced_receipts`, and a bounded
+  `pricing_warnings` list. A ceiling is a falsifiable claim — *"this run cost no more than $X,
+  priced against snapshot `<digest>` dated `<date>`"* — not an estimate. `estimated_cost` is
+  untouched and stays `None`. **All-or-nothing:** one unpriced model or one unpriceable receipt
+  leaves the run ceiling `None` rather than emitting a partial sum.
+- **Dated, vendor-cited price snapshot.** `src/conclave/data/prices-<date>.json` ships in the
+  wheel. Every entry cites the vendor page its rate was read from; rates are rounded **up**; a
+  model whose list price could not be verified is **omitted** (unpriced), never guessed —
+  `groq/llama-3.3-70b-versatile` and `deepseek/deepseek-chat` are currently omitted this way,
+  tracked for re-pricing in DSE-1537. Nothing is fetched at runtime. A snapshot older than 90
+  days adds a `price_snapshot_stale` warning and still prices at exactly its recorded rates.
+- **`--max-output-tokens` / `max_output_tokens:`.** A hard output ceiling threaded to every call
+  a council makes — members, synthesizer, judge, verdict extraction and its repair retry, and
+  both streaming paths — and recorded in `generation_settings` when set.
+- **`--max-spend-usd` pre-flight spend gate.** Enumerates the worst-case call plan for the
+  selected mode (`raw` `N`, `synthesize` `N+C+2C`, `vote` `N`, `debate` `N*R+C`, `adversarial`
+  `N+C`, `elite` `3N+C+2C`, where `C` is the count of *keyed* synthesizer-chain candidates), and
+  the adversarial byte-worst-case is 1 proposer succeeding immediately + N-1 critics (each
+  embedding the proposal's answer) with the judge embedding the proposal and every critique.
+  Reserves each call pessimistically at ceiling rates and **refuses before the first provider
+  call** with the reserved total, the cap, and the call count. New exit code **4**. A plan that
+  cannot be bounded — no output cap, no snapshot, or an unpriced model — refuses with a distinct
+  message rather than guessing.
 
 ### Changed
 
@@ -59,6 +85,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not.
 - `ProviderError` and `TransportError` accept keyword-only `category` (and `http_status`);
   positional construction is unchanged.
+- **Cache format version `4` → `5` (DSE-1514).** Identity now additionally carries the
+  price-snapshot rate fingerprint and `max_output_tokens`; old entries miss safely.
+- `generation_settings` (on receipts and the manifest) gains `max_output_tokens` when a cap is
+  configured, so an integer token cap round-trips as an integer, not a float. An uncapped run's
+  `generation_settings` is byte-identical to before this change.
 
 ### Not changed (deliberately)
 
@@ -67,6 +98,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is decided by whether it ever answered.
 - Member-level failover (members already degrade gracefully), transport-level retries, and
   the substring-derived `ReceiptErrorCategory` on receipts.
+- **`estimated_cost` stays `None` everywhere, permanently (DSE-1514).** It is never assigned,
+  never summed into, never renamed. A ceiling (`cost_ceiling_usd`) is a different, falsifiable
+  claim from an estimate, and the two must never be conflated in one field.
 
 ## [1.3.0] - 2026-08-01
 

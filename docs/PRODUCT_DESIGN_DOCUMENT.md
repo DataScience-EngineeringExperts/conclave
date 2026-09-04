@@ -272,18 +272,23 @@ and cache hits (synthesize/raw builds its own richer one earlier). Pinned by
 `providers_considered/called/skipped`
 (each skip a `ProviderSkip{name, reason}`), `model_ids`, `generation_settings`, `receipts` (each
 a `ProviderExecutionReceipt{phase, attempt, outcome, name, provider, model_id,
-generation_settings, latency_ms, usage, error_category, schema_valid, versions}`),
+generation_settings, latency_ms, usage, error_category, schema_valid, versions, cost_ceiling_usd,
+cost_basis}`),
 `total_latency_ms`, `total_usage`, `schema_valid`,
 `redacted_errors`, `adjudication_succession` (the per-role succession ledger: candidate,
-attempt index, outcome, bounded failure category, HTTP status; never free text), and
-verdict-provenance slots (`verdict_extraction: VerdictExtraction{model_id,
+attempt index, outcome, bounded failure category, HTTP status; never free text), verdict-provenance
+slots (`verdict_extraction: VerdictExtraction{model_id,
 prompt_version}` — the execution-trace hook — plus `verdict_type`, `consensus_method`,
-`verdict_absent_reason`). Two deliberate honesty choices:
+`verdict_absent_reason`), and the run-level pricing fields (v1.4, DSE-1514): `cost_ceiling_usd`,
+`price_snapshot_digest`, `priced_as_of`, `unpriced_models`, `unpriced_receipts`,
+`pricing_warnings` — see "Cost ceilings, never estimates" below. Two deliberate honesty choices:
 
 For buffered Elite, every attempted call becomes a receipt: `initial`, `critique`, `revision`, `synthesis`, `verdict_extraction`, and `verdict_repair` when repair is attempted. Receipts carry phase, attempt/outcome, provider/model identity, latency, available usage/cost, bounded error category, and prompt/schema/protocol versions; totals are recomputed from this complete ledger. Incomplete runs retain only calls actually attempted.
 
 - **No invented pricing.** Unknown per-call or aggregate `estimated_cost` stays `None`; a total is
   computed only when every actual call has trustworthy priced data. Usage is recorded when reported.
+  `estimated_cost` is a *guess* and stays `None` forever; `cost_ceiling_usd` (v1.4, below) is a
+  *falsifiable claim* computed from exact rates, and the two are never conflated in one field.
 - **Proven secret-safety.** `secret_safety` defaults to `unverified`, promoted to
   `verified_no_secrets` **only** after `scan_for_secret_material()` proves the serialized manifest
   free of forbidden substrings (`sk-`, `bearer`, `authorization`, `api_key`, `x-api-key`). Key
@@ -308,6 +313,60 @@ nor replay an outage after it ends. For verdict extraction specifically, the fai
 by whether the candidate EVER answered across its initial call and same-model repair retry,
 not by whichever attempt happened to run last: a candidate that answered on either attempt is
 terminal for the role even if its other attempt hit an unrelated infrastructure error.
+
+### Cost ceilings, never estimates (v1.4)
+
+`manifest.py` has always said `estimated_cost` stays `None` because "a wrong number
+inside an audit receipt is worse than no number." That stands. What changed is that a
+*different* claim is now available: not an estimate but a **ceiling** —
+`cost_ceiling_usd`, computed with exact `Decimal` rates and `ROUND_CEILING` against a
+dated, content-digested, vendor-cited snapshot committed to the repo
+(`src/conclave/data/prices-<date>.json`), and always accompanied by
+`price_snapshot_digest` and `priced_as_of` so it is checkable rather than trusted. The
+two live in separate fields on purpose; conflating them would let a guess inherit a
+ceiling's credibility.
+
+Three rules keep the ceiling honest. **All-or-nothing:** any model in the run absent
+from the snapshot, or any receipt that cannot be bounded, leaves the run-level ceiling
+`None` with `unpriced_models` / `unpriced_receipts` naming why — a partial sum is
+indistinguishable from a complete one and is the exact failure mode this design
+prevents. Scope note: `unpriced_models` covers the models that actually ran (`model_ids`
+plus every receipt's model), not members skipped for a missing key, which made no call
+and cannot be billed. **Never a substitute rate:** an absent model is unpriced; a
+similar model's rate is never borrowed, and a stale snapshot (older than
+`PRICE_SNAPSHOT_MAX_AGE_DAYS = 90`) warns (`pricing_warnings`, bounded identifiers
+only — see `conclave.council.PRICING_WARNING_VOCABULARY`) but still prices at the rates
+it actually records. Two of the nine `registry.DEFAULT_MODELS` are currently omitted
+from the shipped snapshot for exactly this reason (`groq/llama-3.3-70b-versatile`,
+moved to an Enterprise-only tier; `deepseek/deepseek-chat`, retired with no successor
+sharing that model id) — re-pricing them is tracked in DSE-1537. **Priced last:**
+`Council._price_manifest` runs after `_ensure_manifest` and after the final receipt
+append, so it can never miss the synthesis or verdict-repair calls; the snapshot's rate
+digest joins cache identity (`CACHE_FORMAT_VERSION` `4` → `5`) so a hit can never serve
+a ceiling that was never true of those rates.
+
+The pre-flight `--max-spend-usd` gate is the same arithmetic run forward, and requires
+`--max-output-tokens` (or config `max_output_tokens`) as a precondition: output is the
+only unbounded term in a call's cost, so an uncapped run cannot be bounded in dollars.
+`Council.plan_calls` enumerates the worst-case plan — `raw` `N`, `synthesize`
+`N + C + 2CV`, `vote` `N`, `debate` `N*R + C`, `adversarial` `N + C`, `elite`
+`3N + C + 2CV`, with `C` the number of **keyed** synthesizer-chain candidates and the
+verdict's repair retry always counted — bounds each call's input by UTF-8 bytes (plus
+the sum of upstream output caps times `max_output_bytes_per_token` for calls that embed
+a prior model's output), and refuses before the first call with one of three exact
+messages: `cannot bound spend: no output cap (set --max-output-tokens or config
+max_output_tokens)`; `cannot bound spend: no priced rate for <model_id> in snapshot
+<digest> (<date>)`; or `refusing to run: reserved <X> USD for <N> calls exceeds the cap
+of <Y> USD`. All three exit CLI code `4`. Refusing is the designed outcome for an
+unbounded plan: inventing a number to get past the gate would defeat the gate.
+
+**Adversarial's byte-worst-case shape (DSE-1514 review, Fix A):** `run_adversarial`
+tries members as proposer in council order until one succeeds, then fans the rest out
+as critics — a real run always makes exactly `N` member calls, whatever the split. The
+byte-worst case is **1 proposer succeeding immediately + N-1 critics**, since every
+critic call embeds the proposal's full answer text (upstream=1 each) and maximizing
+the critic count maximizes that embedded-output byte total; the judge call embeds the
+proposal *and* every critique, so its upstream bound is `N` regardless of the split.
 
 ---
 
@@ -449,6 +508,11 @@ paid execution requires `--execute`, exact `--approve-spend-usd 10.00`, and an o
 `--checkpoint-seal-key-file` with at least 32 random bytes. Versioned HMAC-SHA256 checkpoints
 never serialize that key; frozen `max_output_bytes_per_token` attestations bound inserted UTF-8
 bytes. One call is in flight, reservations persist first, and resume never repeats interrupted cells. The smoke proves correctness only—not efficiency or decision quality—and remains not decision eligible.
+
+H1's budget-matched ablations and H4's quality-per-dollar question now have a real
+denominator rather than a guess: every run carries a `cost_ceiling_usd` with its
+snapshot digest and capture date (§4a), so *"is Elite worth `3N + 2` calls?"* is
+answerable **at** the decision instead of after the invoice.
 
 The canonical roadmap is
 [`docs/plans/2026-07-17-decision-quality-roadmap.md`](plans/2026-07-17-decision-quality-roadmap.md):

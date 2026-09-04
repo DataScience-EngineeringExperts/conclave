@@ -537,6 +537,66 @@ not touch the network. Entries live under `$XDG_CACHE_HOME/conclave` (else
 `~/.cache/conclave`); a corrupt or unreadable entry is treated as a miss and
 never crashes a run.
 
+## Cost ceilings and spend gate
+
+A council run has always reported *tokens*. It now also reports *dollars* — as a
+**ceiling**, never an estimate.
+
+* An **estimate** is a guess. A wrong number inside an audit receipt is worse than
+  no number, which is why `estimated_cost` is `None` and always will be.
+* A **ceiling** is a falsifiable claim: *"this run cost no more than $0.0412,
+  priced against snapshot `sha256:...` dated 2026-09-03."* You can check it
+  against your invoice.
+
+```bash
+conclave ask "should we migrate?" --mode elite --max-output-tokens 4000 --max-spend-usd 0.40
+```
+
+Before the first provider call, conclave enumerates the mode's worst-case call
+plan (`Council.plan_calls`), prices every call at ceiling rates from a dated
+snapshot committed to this repo, and **refuses** — exit code `4`, nothing ran,
+nothing was spent — if the total exceeds your cap. `--max-output-tokens` (or
+config `max_output_tokens`) is a **prerequisite**, not an option: output is the
+only unbounded term in a call's cost, so a cap on it is what makes a dollar
+ceiling possible at all. The three refusal messages, verbatim:
+
+| Condition | Message |
+|---|---|
+| `--max-spend-usd` with no output cap | `cannot bound spend: no output cap (set --max-output-tokens or config max_output_tokens)` |
+| A planned call's model has no snapshot entry | `cannot bound spend: no priced rate for <model_id> in snapshot <digest> (<date>)` |
+| The priced plan exceeds the cap | `refusing to run: reserved <X> USD for <N> calls exceeds the cap of <Y> USD` |
+
+It never falls back to a similar model's rate to dodge the second message —
+inventing a number to get past the gate would defeat the gate.
+
+**All-or-nothing.** The prices are a hand-verified, dated file (`src/conclave/data/prices-*.json`),
+not a live feed. A model whose published price could not be verified is simply
+absent — which makes it unpriced, and makes the whole run's ceiling `None` with
+`manifest.unpriced_models` naming it. A partial sum would read exactly like a
+complete one, so there is no partial sum: one unpriced model or one unpriceable
+receipt nulls the entire run-level `cost_ceiling_usd`. Two of the nine default
+models are currently omitted from the snapshot for exactly this reason —
+`groq/llama-3.3-70b-versatile` (moved to an Enterprise-only "Contact Sales"
+tier) and `deepseek/deepseek-chat` (retired, its replacement is a different
+model id conclave does not resolve) — re-pricing them is tracked in DSE-1537.
+
+**The adversarial worst case.** `run_adversarial` tries members as proposer in
+council order until one produces a usable answer, then fans the rest out as
+critics; a real run makes exactly `N` member calls no matter how many proposer
+attempts fail. The byte-worst-case plan is therefore **1 proposer succeeding
+immediately + N-1 critics**, since every critic call embeds the proposal's full
+answer text (the more critics, the more upstream bytes) — and the judge call
+embeds the proposal *and every critique*, so its input bound covers all `N`
+prior outputs.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | clean run |
+| `1` | no usable answers |
+| `2` | usage/config error |
+| `3` | degraded — it ran, the judge/synthesizer step failed |
+| `4` | **refused — nothing ran, nothing was spent** |
+
 ## Test
 
 ```bash

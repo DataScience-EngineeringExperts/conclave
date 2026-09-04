@@ -56,7 +56,7 @@ Let **N** = `len(Council._available_members()[0])` (keyed members). Let **C** = 
 | `synthesize` | `N + C + 2*C*V` | fan-out `N`; `_synthesize` walks up to `C` keyed candidates; `_apply_verdict` calls `extract_verdict` once per candidate and each one makes **1 initial + 1 repair** = `2C`. |
 | `vote` | `N` | `run_vote` fans out once; no adjudication, no verdict. |
 | `debate` | `N*R + C` | round 1 = `N`; rounds 2..R have at most `N` survivors each (drop-out only shrinks it) giving `N*R`; `_debate_synthesize` adds `C`. `converge_threshold` can only stop **early**. No verdict extraction. |
-| `adversarial` | `N + C` | proposer attempts `k` (1..N) plus critics `N - k` equals `N` regardless of `k`; `_adversarial_judge` adds `C`. The all-proposers-fail path degrades to `_synthesize` over an empty `successful_answers`, which returns **before** any call, so still `N`. No verdict extraction. |
+| `adversarial` | `N + C` | proposer attempts `k` (1..N) plus critics `N - k` equals `N` regardless of `k`; `_adversarial_judge` adds `C`. The all-proposers-fail path degrades to `_synthesize` over an empty `successful_answers`, which returns **before** any call, so still `N`. No verdict extraction. **Byte shape, corrected 2026-09-04 (Round 4 review, Fix A):** the count `N + C` was always right, but the ORIGINAL worked example in Task 10 gave every member call `upstream=0`, undercounting the input bound of every critic call. The byte-worst-case plan is 1 proposer call (`upstream=0`) + `N-1` critic calls (`upstream=1` each -- `_critic_messages_for` embeds the proposal's answer text in every critic call), plus one judge call per keyed chain candidate (`upstream=N` -- `judge_user` embeds the proposal and every critique). |
 | `elite` | `3N + C + 2*C*V` | `run_elite` fans out three times (initial / critique / revision), each at most `N`, giving `3N`; then `_synthesize` adds `C` and `_apply_verdict` adds `2C`. With a chain of one and verdict on: `3N + 3` — the ticket's `3N + 2` shape **plus the repair retry**, which is exactly the call the ticket says must not be forgotten. |
 
 Sanity check against the ticket: `synthesize` with `C=1, V=1` gives `N + 3`; `elite` with `C=1, V=1` gives `3N + 3`. Both match.
@@ -2555,8 +2555,27 @@ def plan_calls(
                 upstream=n_members,
             )
     elif mode == "adversarial":
-        # k proposer attempts + (N - k) critics == N, for every k.
-        member_calls("proposal", template="", upstream=0)
+        # CORRECTED 2026-09-04 (Round 4 review, Fix A): the worked example
+        # originally shown here treated every member uniformly as
+        # `member_calls("proposal", template="", upstream=0)`, which gave
+        # the right TOTAL count (N + C) but the wrong per-call shape -- it
+        # never gave a critic call an upstream dependency on the proposal,
+        # so the byte bound for every critic call was silently too small.
+        # `run_adversarial` embeds the proposal's answer text in EVERY
+        # critic call (`_critic_messages_for`) and embeds the proposal AND
+        # every critique in the judge call (`judge_user`). A real run's k
+        # proposer attempts + (N-k) critics always equals N, for every k;
+        # the BYTE-worst-case is k=1 (one proposer succeeds immediately),
+        # which maximizes the number of upstream-embedding critic calls.
+        # The corrected shape:
+        if members:
+            member_calls("proposal", targets=members[:1], template="", upstream=0)
+            member_calls(
+                "critique",
+                targets=members[1:],
+                template=prompts.CRITIC_SYSTEM + prompts.critic_user("", ""),
+                upstream=1,
+            )
     elif mode == "elite":
         member_calls("initial", template="", upstream=0)
         member_calls(
