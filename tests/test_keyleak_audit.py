@@ -512,7 +512,7 @@ async def test_fan_out_catch_all_error_is_redacted(monkeypatch):
     import conclave.council as council_mod
 
     async def raising_call_model(
-        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
     ):
         # Simulate an unexpected escape carrying the key in its text.
         raise RuntimeError(f"unexpected boom leaking {PLANTED}")
@@ -541,7 +541,7 @@ async def test_stream_drive_member_catch_all_error_is_redacted(monkeypatch):
     import conclave.streaming as streaming_mod
 
     async def raising_stream(
-        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
     ):
         # An unexpected raise (not a yielded error ModelAnswer) carrying the key.
         raise RuntimeError(f"stream boom leaking {PLANTED}")

@@ -109,3 +109,112 @@ async def test_call_model_stream_threads_max_output_tokens(monkeypatch):
     assert isinstance(items[-1], ModelAnswer)
     assert items[-1].ok
     assert captured["body"]["max_tokens"] == 888
+
+
+"""DSE-1514: the cap is a COUNCIL setting, not just an adapter parameter."""
+
+
+def test_config_reads_and_sanitizes_max_output_tokens(tmp_path, monkeypatch):
+    from conclave.config import clear_config_cache, load_config
+
+    path = tmp_path / "config.yml"
+    monkeypatch.setenv("CONCLAVE_CONFIG", str(path))
+
+    path.write_text("max_output_tokens: 1024\n", encoding="utf-8")
+    clear_config_cache()
+    assert load_config().max_output_tokens == 1024
+
+    path.write_text("max_output_tokens: not-a-number\n", encoding="utf-8")
+    clear_config_cache()
+    assert load_config().max_output_tokens is None
+
+    path.write_text("max_output_tokens: 0\n", encoding="utf-8")
+    clear_config_cache()
+    assert load_config().max_output_tokens is None
+    clear_config_cache()
+
+
+async def test_the_cap_reaches_every_member_and_adjudication_call(monkeypatch, keys):
+    import conclave.council as council_mod
+    import conclave.verdict_synthesis as verdict_mod
+    from conclave.council import Council
+    from conclave.models import ModelAnswer
+
+    seen: list[int | None] = []
+
+    async def spy(name, model_id, messages, *, max_output_tokens=None, **kwargs):
+        seen.append(max_output_tokens)
+        return ModelAnswer(name=name, model_id=model_id, answer="ok")
+
+    monkeypatch.setattr(council_mod, "call_model", spy)
+    monkeypatch.setattr(verdict_mod, "call_model", spy)
+    # Two members: verdict extraction's N<2-responder gate (CAC-05, DD-1) skips
+    # the extraction call entirely for a single responder, which would hide the
+    # cap from the verdict-extraction/repair sites this test means to cover.
+    council = Council(models=["grok", "gemini"], synthesizer="claude", max_output_tokens=777)
+    await council.ask("q")
+
+    # member fan-out (x2) + synthesis + verdict extraction + verdict repair
+    assert len(seen) >= 4
+    assert set(seen) == {777}
+
+
+async def test_no_cap_configured_sends_nothing_new(monkeypatch, keys):
+    import conclave.council as council_mod
+    from conclave.council import Council
+    from conclave.models import ModelAnswer
+
+    seen: list[int | None] = []
+
+    async def spy(name, model_id, messages, *, max_output_tokens=None, **kwargs):
+        seen.append(max_output_tokens)
+        return ModelAnswer(name=name, model_id=model_id, answer="ok")
+
+    monkeypatch.setattr(council_mod, "call_model", spy)
+    council = Council(models=["grok"], synthesizer="grok", extract_verdict=False)
+    await council.ask("q", synthesize=False)
+    assert seen == [None]
+
+
+async def test_the_cap_is_recorded_in_generation_settings_only_when_set(monkeypatch, keys):
+    import conclave.council as council_mod
+    from conclave.council import Council
+    from conclave.models import ModelAnswer
+
+    async def ok(name, model_id, messages, **kwargs):
+        return ModelAnswer(name=name, model_id=model_id, answer="ok")
+
+    monkeypatch.setattr(council_mod, "call_model", ok)
+
+    capped = await Council(
+        models=["grok"], synthesizer="grok", max_output_tokens=256, extract_verdict=False
+    ).ask("q", synthesize=False)
+    assert capped.manifest.generation_settings["max_output_tokens"] == 256
+    assert capped.manifest.receipts[0].generation_settings["max_output_tokens"] == 256
+
+    plain = await Council(models=["grok"], synthesizer="grok", extract_verdict=False).ask(
+        "q", synthesize=False
+    )
+    assert "max_output_tokens" not in plain.manifest.generation_settings
+    assert "max_output_tokens" not in plain.manifest.receipts[0].generation_settings
+
+
+async def test_streaming_members_and_synthesis_receive_the_cap(monkeypatch, keys):
+    import conclave.streaming as streaming_mod
+    from conclave.council import Council
+    from conclave.models import ModelAnswer
+
+    seen: list[int | None] = []
+
+    async def spy_stream(name, model_id, messages, *, max_output_tokens=None, **kwargs):
+        seen.append(max_output_tokens)
+        yield "tok"
+        yield ModelAnswer(name=name, model_id=model_id, answer="tok")
+
+    monkeypatch.setattr(streaming_mod, "call_model_stream", spy_stream)
+    council = Council(
+        models=["grok"], synthesizer="claude", max_output_tokens=333, extract_verdict=False
+    )
+    async for _event in council.ask_stream("q"):
+        pass
+    assert seen and set(seen) == {333}

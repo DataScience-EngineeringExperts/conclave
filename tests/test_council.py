@@ -131,7 +131,7 @@ async def test_concurrency_is_real(monkeypatch):
 
     # Replace call_model with a coroutine that sleeps, to prove gather concurrency.
     async def sleepy_call_model(
-        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
     ):
         await asyncio.sleep(0.2)
         return ModelAnswer(name=name, model_id=model_id, answer=f"ok {model_id}")

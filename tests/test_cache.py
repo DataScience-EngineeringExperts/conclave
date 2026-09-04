@@ -82,7 +82,7 @@ def counting_call_model(monkeypatch):
     counter = {"n": 0}
 
     async def fake_call_model(
-        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
     ):
         counter["n"] += 1
         await asyncio.sleep(0)
@@ -1014,7 +1014,9 @@ def _install_stream_script(monkeypatch, script: dict[str, list]) -> list[str]:
 
     calls: list[str] = []
 
-    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
         calls.append(name)
         for item in script[name]:
             yield item

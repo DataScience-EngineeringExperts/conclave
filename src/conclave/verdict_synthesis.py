@@ -234,8 +234,15 @@ def _verdict_attempt_receipt(
     temperature: float,
     timeout: float,
     protocol_version: str | None,
+    max_output_tokens: int | None = None,
 ) -> ProviderExecutionReceipt:
-    """Build one secret-free receipt for an extraction or repair attempt."""
+    """Build one secret-free receipt for an extraction or repair attempt.
+
+    Args:
+        max_output_tokens: The hard output ceiling this attempt was issued
+            with, if any (DSE-1514). ``None`` leaves the provider default in
+            place, exactly as before this parameter existed.
+    """
     if answer.error is not None:
         outcome = "failed"
         error_category = None
@@ -257,6 +264,7 @@ def _verdict_attempt_receipt(
         protocol_version=protocol_version,
         prompt_version=VERDICT_EXTRACTION_PROMPT_VERSION,
         schema_version=VERDICT_SCHEMA_VERSION,
+        max_output_tokens=max_output_tokens,
     )
 
 
@@ -554,6 +562,7 @@ async def extract_verdict(
     timeout: float = 120.0,
     protocol_version: str | None = None,
     call_model_func=None,  # noqa: ANN001 -- injectable async seam for guarded callers
+    max_output_tokens: int | None = None,
 ) -> VerdictSynthesisResult:
     """Extract a structured, auditable verdict from a council's member answers.
 
@@ -595,6 +604,9 @@ async def extract_verdict(
             ``None`` preserves the normal module-level provider path. Guarded
             eval runners inject their reservation-aware gateway here so both the
             initial extraction and optional repair remain paid-call protected.
+        max_output_tokens: The hard output ceiling for BOTH the initial
+            extraction call and its repair retry (DSE-1514); ``None`` leaves the
+            provider default in place.
 
     Returns:
         A :class:`VerdictSynthesisResult`. On success ``verdict`` is populated and
@@ -651,6 +663,7 @@ async def extract_verdict(
         timeout=timeout,
         config=config,
         output_contract=output_contract,
+        max_output_tokens=max_output_tokens,
     )
 
     # Step 3 — validate, then repair ONCE on failure, then fall back.
@@ -664,6 +677,7 @@ async def extract_verdict(
             temperature=temperature,
             timeout=timeout,
             protocol_version=protocol_version,
+            max_output_tokens=max_output_tokens,
         )
     ]
     retry: ModelAnswer | None = None
@@ -688,6 +702,7 @@ async def extract_verdict(
             timeout=timeout,
             config=config,
             output_contract=output_contract,
+            max_output_tokens=max_output_tokens,
         )
         extraction, errors = _parse_and_validate(retry)
         attempt_receipts.append(
@@ -699,6 +714,7 @@ async def extract_verdict(
                 temperature=temperature,
                 timeout=timeout,
                 protocol_version=protocol_version,
+                max_output_tokens=max_output_tokens,
             )
         )
 

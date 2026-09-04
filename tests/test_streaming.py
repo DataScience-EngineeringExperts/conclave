@@ -371,7 +371,9 @@ def _patch_stream(monkeypatch, deltas_by_model):
     """Patch streaming.call_model_stream to emit canned deltas + a final answer."""
     import conclave.streaming as streaming_mod
 
-    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
         text_parts = deltas_by_model.get(model_id, ["x"])
         for part in text_parts:
             yield part
@@ -457,7 +459,9 @@ def test_cli_stream_smoke_exits_zero(monkeypatch, patch_cli_config):
     for var in ("XAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.setenv(var, "dummy-key")
 
-    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
         yield f"tok-{name} "
         yield ModelAnswer(name=name, model_id=model_id, answer=f"tok-{name} ")
 
@@ -478,7 +482,9 @@ def test_cli_stream_zero_usable_exits_one(monkeypatch, patch_cli_config):
     for var in ("XAI_API_KEY", "GEMINI_API_KEY"):
         monkeypatch.setenv(var, "dummy-key")
 
-    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
         yield ModelAnswer(name=name, model_id=model_id, error="provider down")
 
     monkeypatch.setattr(streaming_mod, "call_model_stream", fake_stream)
@@ -514,7 +520,9 @@ def test_cli_stream_cache_second_run_is_one_shot_hit(monkeypatch, patch_cli_conf
 
     calls = {"n": 0}
 
-    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
         calls["n"] += 1
         yield "live "
         yield ModelAnswer(name=name, model_id=model_id, answer="live answer")
@@ -544,7 +552,9 @@ async def test_ask_stream_cache_hit_replays_one_shot(monkeypatch, tmp_path):
 
     live_calls = {"n": 0}
 
-    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
         live_calls["n"] += 1
         yield "x"
         yield ModelAnswer(name=name, model_id=model_id, answer="x")
@@ -601,7 +611,9 @@ def _install_stream_script(monkeypatch, script: dict[str, list]) -> list[str]:
 
     calls: list[str] = []
 
-    async def fake_stream(name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None):
+    async def fake_stream(
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
+    ):
         calls.append(name)
         for item in script[name]:
             yield item

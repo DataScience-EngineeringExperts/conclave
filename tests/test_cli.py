@@ -795,7 +795,7 @@ def test_cache_flag_serves_second_run_from_cache(monkeypatch, patch_cli_config, 
     counter = {"n": 0}
 
     async def fake_call_model(
-        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None
+        name, model_id, messages, *, temperature=0.7, timeout=120.0, config=None, **kwargs
     ):
         counter["n"] += 1
         return ModelAnswer(name=name, model_id=model_id, answer=f"ans-{model_id}")

@@ -83,6 +83,13 @@ class ConclaveConfig(BaseModel):
             reaches the threshold. ``None`` keeps the historic fixed-rounds
             behavior exactly. A ``--converge-threshold`` / ``--converge/--no-converge``
             CLI flag overrides this per invocation. See :func:`conclave.modes.run_debate`.
+           max_output_tokens: opt-in hard ceiling on output tokens for EVERY call a
+            council makes -- members, synthesis, judge, verdict extraction and
+            its repair retry, and the streaming paths. ``None`` (the default)
+            leaves each provider's own default in place, exactly as today. It is
+            also the precondition for ``--max-spend-usd``: a run whose output is
+            unbounded cannot have its spend bounded, so the gate refuses rather
+            than inventing a number.
     """
 
     models: dict[str, str] = Field(default_factory=dict)
@@ -92,6 +99,7 @@ class ConclaveConfig(BaseModel):
     endpoints: dict[str, CustomEndpoint] = Field(default_factory=dict)
     cache: bool = False
     converge_threshold: float | None = None
+    max_output_tokens: int | None = None
 
     def resolve_model_id(self, name: str) -> str:
         """Map a friendly name to a provider-prefixed model id.
@@ -254,6 +262,10 @@ def _load_config_uncached(path: Path) -> ConclaveConfig:
     # keeping config loading resilient like the rest of this module.
     converge_threshold = _coerce_threshold(raw.get("converge_threshold"))
 
+    # Off by default (None). A bad value degrades to "cap off" rather than
+    # raising -- see _coerce_max_output_tokens.
+    max_output_tokens = _coerce_max_output_tokens(raw.get("max_output_tokens"))
+
     return ConclaveConfig(
         models=merged_models,
         councils=councils,
@@ -262,6 +274,7 @@ def _load_config_uncached(path: Path) -> ConclaveConfig:
         endpoints=endpoints,
         cache=cache,
         converge_threshold=converge_threshold,
+        max_output_tokens=max_output_tokens,
     )
 
 
@@ -286,3 +299,21 @@ def _coerce_threshold(value: Any) -> float | None:
         )
         return None
     return threshold
+
+
+def _coerce_max_output_tokens(value: Any) -> int | None:
+    """Coerce a config ``max_output_tokens`` value to a positive int, or ``None``.
+
+    A non-integer, boolean, or non-positive value degrades to ``None`` (cap off)
+    with a warning, matching this module's resilient-loading convention: a bad
+    config field never crashes a run, it just disables the optional feature.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        logger.warning("max_output_tokens %r is not an integer; disabling the output cap", value)
+        return None
+    if value < 1:
+        logger.warning("max_output_tokens %s is not positive; disabling the output cap", value)
+        return None
+    return value

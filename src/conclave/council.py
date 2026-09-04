@@ -223,6 +223,13 @@ class Council:
             When supplied, it participates in cache identity so grounded and
             ungrounded Elite runs cannot collide. The value is re-hashed before
             entering the canonical identity document.
+        max_output_tokens: Opt-in hard ceiling on output tokens for EVERY call
+            this council makes -- members, synthesis, judge, verdict extraction
+            and its repair retry, and the streaming paths (DSE-1514). ``None``
+            (the default) defers to ``config.max_output_tokens`` (itself
+            ``None`` unless set), leaving each provider's own default in place
+            exactly as before this flag existed. A cap is the precondition for
+            ``--max-spend-usd``: see :meth:`plan_calls`.
 
     Example:
         >>> council = Council(models=["grok", "perplexity"], synthesizer="claude")
@@ -241,6 +248,7 @@ class Council:
         extract_verdict: bool = True,
         allow_transport_debug_logging: bool = False,
         source_bundle_digest: str | None = None,
+        max_output_tokens: int | None = None,
     ) -> None:
         self.config = config or load_config()
         self.requested_models = list(models)
@@ -270,10 +278,12 @@ class Council:
         # that DEBUG band and accept the responsibility.
         if not allow_transport_debug_logging:
             transport.guard_transport_logging()
-        # Replaced by the real config/argument resolution in the output-cap task
-        # (DSE-1514 Task 9). Needed already by `_price_manifest` (Task 7), which
-        # reads it to decide whether a failed call's reservation can be priced.
-        self.max_output_tokens: int | None = None
+        # Explicit override wins; otherwise defer to config (off by default).
+        # A cap is what makes a run's output -- and therefore its spend --
+        # boundable at all; see Council.plan_calls and the --max-spend-usd gate.
+        self.max_output_tokens = (
+            self.config.max_output_tokens if max_output_tokens is None else max_output_tokens
+        )
 
     @staticmethod
     def _resolve_chain(spec: str | Sequence[str] | None, config: ConclaveConfig) -> list[str]:
@@ -318,6 +328,20 @@ class Council:
                 logger.warning("skipping %s (%s): no API key in environment", name, model_id)
                 skipped.append(name)
         return members, skipped
+
+    def _generation_settings(self) -> dict[str, float | int]:
+        """The generation settings actually used, for the manifest and receipts.
+
+        ``max_output_tokens`` appears ONLY when a cap is configured, so an
+        uncapped run's manifest is byte-identical to v1.3.0's.
+        """
+        settings: dict[str, float | int] = {
+            "temperature": self.temperature,
+            "timeout": self.timeout,
+        }
+        if self.max_output_tokens is not None:
+            settings["max_output_tokens"] = self.max_output_tokens
+        return settings
 
     def _cache_key(
         self,
@@ -538,6 +562,7 @@ class Council:
                 config=self.config,
                 temperature=self.temperature,
                 timeout=self.timeout,
+                max_output_tokens=self.max_output_tokens,
             )
             for name, model_id in members
         ]
@@ -622,7 +647,12 @@ class Council:
         from . import __version__
 
         receipts = [
-            receipt_from_answer(a, temperature=self.temperature, timeout=self.timeout)
+            receipt_from_answer(
+                a,
+                temperature=self.temperature,
+                timeout=self.timeout,
+                max_output_tokens=self.max_output_tokens,
+            )
             for a in answers
         ]
         manifest = ModelHarnessManifest(
@@ -635,7 +665,7 @@ class Council:
                 ProviderSkip(name=name, reason="no API key in environment") for name in skipped
             ],
             model_ids=[model_id for _name, model_id in members],
-            generation_settings={"temperature": self.temperature, "timeout": self.timeout},
+            generation_settings=self._generation_settings(),
             receipts=receipts,
         )
         self._recompute_manifest_accounting(manifest)
@@ -752,6 +782,7 @@ class Council:
                 phase=phase,
                 protocol_version=ELITE_PROTOCOL_VERSION,
                 prompt_version=None if phase == "initial" else ELITE_PROMPT_VERSION,
+                max_output_tokens=self.max_output_tokens,
             )
             for phase, answers in phase_artifacts
             for answer in answers
@@ -766,7 +797,7 @@ class Council:
                 ProviderSkip(name=name, reason="no API key in environment") for name in skipped
             ],
             model_ids=list(dict.fromkeys(model_id for _name, model_id in members)),
-            generation_settings={"temperature": self.temperature, "timeout": self.timeout},
+            generation_settings=self._generation_settings(),
             receipts=receipts,
         )
         self._recompute_manifest_accounting(manifest)
@@ -1315,6 +1346,7 @@ class Council:
                 temperature=self.temperature,
                 timeout=self.timeout,
                 protocol_version=protocol_version,
+                max_output_tokens=self.max_output_tokens,
             )
             renumbered_receipts = [
                 receipt.model_copy(update={"attempt": verdict_receipts_so_far + offset})
@@ -1499,6 +1531,7 @@ class Council:
                 config=self.config,
                 temperature=self.temperature,
                 timeout=self.timeout,
+                max_output_tokens=self.max_output_tokens,
             )
             called.append(answer)
             is_last = index == len(chain)
@@ -1629,6 +1662,7 @@ class Council:
                     attempt=index,
                     protocol_version=protocol_version,
                     prompt_version=prompt_version,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 for index, answer in enumerate(called, start=1)
             )

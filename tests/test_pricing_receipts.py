@@ -254,7 +254,9 @@ async def test_a_successful_call_with_no_reported_usage_is_unpriced_not_a_reserv
     reservation that ignores which phase the call belongs to would silently
     mis-price synthesis/judge/verdict calls (which embed upstream output) by
     3-9x. This round has no phase-aware plan to reserve from, so the honest
-    rule is: no reported usage -> unpriced, exactly like a failed call.
+    rule is: no reported usage -> unpriced, exactly like a failed call. A
+    real, phase-aware reservation basis is re-instated in Round 4 -- see
+    ``test_a_failed_call_with_no_usage_is_priced_as_a_reservation_when_capped``.
     """
     import conclave.council as council_mod
     from conclave.models import ModelAnswer
@@ -311,4 +313,59 @@ async def test_a_zero_usage_success_is_unpriced_not_free(monkeypatch, keys):
     assert manifest.unpriced_receipts == 1
     assert manifest.cost_ceiling_usd is None
     assert manifest.cost_ceiling_usd != Decimal("0")
+    assert "unpriced_receipts_present" in manifest.pricing_warnings
+
+
+async def test_a_failed_call_with_no_usage_is_unpriced_even_when_capped_this_round(
+    monkeypatch, keys
+):
+    """DSE-1514 Round 3 review, interim: a cap does not resurrect flat-constant reservation.
+
+    Round 3 removed the flat-allowance reservation branch entirely (QA C1):
+    it silently mis-priced synthesis/judge/verdict calls, which embed
+    upstream output, by 3-9x. So even with a real ``max_output_tokens`` cap
+    threaded through the constructor (this commit), a usage-less receipt
+    stays unpriced -- exactly like the uncapped case above -- until Round 4's
+    phase-aware reservation basis lands (see the test with "when_capped" in
+    its name for that end state).
+    """
+    import conclave.council as council_mod
+    from conclave.models import ModelAnswer, TokenUsage
+
+    _install_snapshot(monkeypatch, _snapshot("xai/grok-4.3", "gemini/gemini-2.5-pro"))
+
+    async def flaky(name, model_id, messages, **kwargs):
+        if model_id == "gemini/gemini-2.5-pro":
+            # call_model never raises; a provider 503 comes back as an error
+            # answer carrying no usage at all.
+            return ModelAnswer(name=name, model_id=model_id, error="503: service unavailable")
+        return ModelAnswer(
+            name=name,
+            model_id=model_id,
+            answer="ok",
+            usage=TokenUsage(prompt_tokens=5, completion_tokens=7, total_tokens=12),
+        )
+
+    monkeypatch.setattr(council_mod, "call_model", flaky)
+    council = Council(
+        models=["grok", "gemini"],
+        synthesizer="grok",
+        max_output_tokens=256,
+        extract_verdict=False,
+    )
+    manifest = (await council.ask("q", synthesize=False)).manifest
+
+    receipts_by_model = {r.model_id: r for r in manifest.receipts}
+    failed = receipts_by_model["gemini/gemini-2.5-pro"]
+    succeeded = receipts_by_model["xai/grok-4.3"]
+
+    assert failed.usage is None
+    assert failed.cost_basis is None
+    assert failed.cost_ceiling_usd is None
+    assert succeeded.cost_basis == "reported_usage"
+
+    # A capped, usage-less receipt is unpriced this round, so the run-level
+    # ceiling stays None even though the OTHER receipt priced cleanly.
+    assert manifest.unpriced_receipts == 1
+    assert manifest.cost_ceiling_usd is None
     assert "unpriced_receipts_present" in manifest.pricing_warnings
