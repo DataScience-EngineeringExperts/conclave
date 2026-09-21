@@ -25,7 +25,17 @@ from typing import TYPE_CHECKING
 
 from ..registry import PROVIDER_ENV_VARS, provider_prefix
 from .anthropic import AnthropicAdapter
-from .base import OutputContract, ProviderAdapter, ProviderError, redact
+from .base import (
+    AgenticResponse,
+    OutputContract,
+    ProviderAdapter,
+    ProviderError,
+    ToolCall,
+    ToolSpec,
+    assistant_tool_call_message,
+    redact,
+    tool_result_message,
+)
 from .gemini import GeminiAdapter
 from .openai_compat import OPENAI_COMPAT_URLS, OpenAICompatAdapter
 
@@ -36,6 +46,11 @@ __all__ = [
     "ProviderAdapter",
     "ProviderError",
     "OutputContract",
+    "ToolSpec",
+    "ToolCall",
+    "AgenticResponse",
+    "assistant_tool_call_message",
+    "tool_result_message",
     "redact",
     "resolve_adapter",
     "OpenAICompatAdapter",

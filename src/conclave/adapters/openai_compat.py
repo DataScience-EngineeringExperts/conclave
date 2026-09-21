@@ -28,7 +28,14 @@ import json
 from ..logging import get_logger
 from ..models import TokenUsage, categorize_http_status
 from ..provider_catalog import capabilities_for
-from .base import OutputContract, ProviderError, SSEDelta, status_error
+from .base import (
+    AgenticResponse,
+    OutputContract,
+    ProviderError,
+    SSEDelta,
+    ToolSpec,
+    status_error,
+)
 
 logger = get_logger(__name__)
 
@@ -69,6 +76,7 @@ class OpenAICompatAdapter:
     # Every OpenAI-compatible vendor conclave ships speaks the standard
     # streaming protocol (``stream: true`` -> SSE deltas -> ``[DONE]``).
     supports_streaming = True
+    supports_tool_calls = False
 
     def __init__(
         self,
@@ -173,12 +181,14 @@ class OpenAICompatAdapter:
     def build_request(
         self,
         model_id: str,
-        messages: list[dict[str, str]],
+        messages: list[dict],
         temperature: float | None,
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
         max_output_tokens: int | None = None,
+        tools: list[ToolSpec] | None = None,
+        tool_choice: str | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the OpenAI-style POST.
 
@@ -187,6 +197,13 @@ class OpenAICompatAdapter:
         reject an explicit ``temperature`` with a 400). See
         :meth:`ProviderAdapter.build_request`.
         """
+        if tools:
+            raise ProviderError(
+                f"{self.prefix}: agentic tool calling is not implemented for this "
+                "provider yet (CAC-02 covers Anthropic first); check "
+                "adapter.supports_tool_calls before offering tools",
+                category="malformed_response",
+            )
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -239,12 +256,14 @@ class OpenAICompatAdapter:
     def stream_request(
         self,
         model_id: str,
-        messages: list[dict[str, str]],
+        messages: list[dict],
         temperature: float | None,
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
         max_output_tokens: int | None = None,
+        tools: list[ToolSpec] | None = None,
+        tool_choice: str | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the streaming POST: ``build_request`` + ``stream`` flags.
 
@@ -254,6 +273,13 @@ class OpenAICompatAdapter:
         (verified against the OpenAI chat-completions streaming reference). See
         :meth:`ProviderAdapter.stream_request`.
         """
+        if tools:
+            raise ProviderError(
+                f"{self.prefix}: agentic tool calling is not implemented for this "
+                "provider yet (CAC-02 covers Anthropic first); check "
+                "adapter.supports_tool_calls before offering tools",
+                category="malformed_response",
+            )
         # output_contract is passed through to build_request, which applies the
         # capability-gated ``response_format`` shaping (compatible with
         # stream:true). Stream flags are layered on top of the shaped body.
@@ -269,6 +295,20 @@ class OpenAICompatAdapter:
         body["stream"] = True
         body["stream_options"] = {"include_usage": True}
         return url, headers, body
+
+    def parse_agentic_response(self, status: int, payload: object) -> AgenticResponse:
+        """Not implemented for this provider; see :attr:`supports_tool_calls`.
+
+        Raises:
+            ProviderError: Always. Agentic tool calling lands provider by
+                provider (CAC-02-OAI / CAC-02-GEM); callers must gate on
+                ``supports_tool_calls`` rather than calling this speculatively.
+        """
+        raise ProviderError(
+            f"{self.prefix}: parse_agentic_response is not implemented for this "
+            "provider yet; gate on adapter.supports_tool_calls",
+            category="malformed_response",
+        )
 
     def parse_sse_event(self, event: str, data: str) -> SSEDelta:
         """Parse one OpenAI-style SSE frame.
