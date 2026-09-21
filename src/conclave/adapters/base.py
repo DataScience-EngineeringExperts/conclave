@@ -211,6 +211,129 @@ with warnings.catch_warnings():
         repair_attempts: int = 1
 
 
+@dataclass(frozen=True)
+class ToolSpec:
+    """One tool offered to the model for agentic (multi-turn) tool calling.
+
+    This is conclave's provider-neutral tool declaration. Each adapter translates
+    it into its own wire shape (Anthropic ``tools[*]`` with ``input_schema``,
+    OpenAI ``tools[*].function.parameters``, Gemini ``functionDeclarations``).
+
+    Distinct from :class:`OutputContract`, which uses a *forced* single tool as a
+    structured-output mechanism and expects exactly one result. A ``ToolSpec``
+    list is the agentic surface: the model chooses whether and which to call, may
+    call several, and the caller is expected to execute them and send results
+    back for another turn.
+
+    Attributes:
+        name: Tool identifier the model emits in its call. Provider-safe
+            characters only (letters, digits, underscore, hyphen).
+        description: What the tool does. This is prompt surface -- the model
+            selects on it, so it carries real weight.
+        input_schema: JSON Schema (object type) describing the arguments.
+    """
+
+    name: str
+    description: str
+    input_schema: dict
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """One tool invocation requested by the model.
+
+    Attributes:
+        id: The provider's opaque call identifier. Carried end-to-end and echoed
+            back on the matching result so parallel calls stay correlated; never
+            parsed or reconstructed by conclave.
+        name: The :class:`ToolSpec` name being invoked.
+        arguments: Decoded argument object. Providers that stream arguments as a
+            JSON *string* (OpenAI shape) are decoded by their adapter, so callers
+            always receive a dict.
+    """
+
+    id: str
+    name: str
+    arguments: dict
+
+
+@dataclass
+class AgenticResponse:
+    """A parsed assistant turn that may contain tool calls as well as text.
+
+    The agentic counterpart to :meth:`ProviderAdapter.parse_response`'s
+    ``(text, usage)`` tuple, which cannot represent a tool call. Returned by
+    :meth:`ProviderAdapter.parse_agentic_response`.
+
+    Attributes:
+        text: Any assistant prose in this turn. May be empty when the model went
+            straight to a tool call.
+        tool_calls: Every tool call in this turn, in emission order. Empty when
+            the model answered directly.
+        usage: Token usage when the provider reported it.
+        stop_reason: Normalized stop reason -- one of ``"end_turn"``,
+            ``"tool_use"``, ``"max_tokens"``, ``"refusal"``, or ``"error"``.
+            Normalized by the adapter so the caller never branches on a
+            provider-specific string.
+    """
+
+    text: str = ""
+    tool_calls: tuple[ToolCall, ...] = ()
+    usage: TokenUsage | None = None
+    stop_reason: str = "end_turn"
+
+
+def assistant_tool_call_message(
+    text: str, tool_calls: tuple[ToolCall, ...] | list[ToolCall]
+) -> dict:
+    """Build the assistant message that records a turn's tool calls.
+
+    Appended to the message list before the matching tool results so the next
+    request carries the full call/result pairing the provider requires. Emits
+    conclave's neutral block form; the adapter translates it.
+
+    Args:
+        text: Assistant prose from that turn, or ``""``.
+        tool_calls: The calls the model made, in emission order.
+
+    Returns:
+        A message dict with ``role: "assistant"`` and a neutral content block list.
+    """
+    blocks: list[dict] = []
+    if text:
+        blocks.append({"type": "text", "text": text})
+    for call in tool_calls:
+        blocks.append(
+            {"type": "tool_call", "id": call.id, "name": call.name, "arguments": call.arguments}
+        )
+    return {"role": "assistant", "content": blocks}
+
+
+def tool_result_message(results: list[tuple[str, str, bool]]) -> dict:
+    """Build the user-role message carrying tool results back to the model.
+
+    Args:
+        results: ``(tool_call_id, content, is_error)`` triples, one per call being
+            answered. ``tool_call_id`` MUST equal the :class:`ToolCall` ``id`` the
+            model emitted; providers reject or mis-correlate otherwise.
+
+    Returns:
+        A message dict with ``role: "user"`` and a neutral content block list.
+    """
+    return {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_call_id": call_id,
+                "content": content,
+                "is_error": is_error,
+            }
+            for call_id, content, is_error in results
+        ],
+    }
+
+
 @dataclass
 class SSEDelta:
     """The result of interpreting one Server-Sent Event from a stream (issue #7).
@@ -278,16 +401,24 @@ class ProviderAdapter(Protocol):
     env_vars: tuple[str, ...]
     completions_url: str
     supports_streaming: bool
+    # Whether this adapter implements the agentic tool-calling surface: the
+    # ``tools`` / ``tool_choice`` parameters below and
+    # :meth:`parse_agentic_response`. Adapters default to False and the agent
+    # loop must check this before offering tools -- never infer capability from
+    # a model name.
+    supports_tool_calls: bool
 
     def build_request(
         self,
         model_id: str,
-        messages: list[dict[str, str]],
+        messages: list[dict],
         temperature: float | None,
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
         max_output_tokens: int | None = None,
+        tools: list[ToolSpec] | None = None,
+        tool_choice: str | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build ``(url, headers, json_body)`` for this provider.
 
@@ -308,9 +439,24 @@ class ProviderAdapter(Protocol):
                 ignores it.
             max_output_tokens: Optional per-call output ceiling. ``None`` keeps
                 the adapter's existing provider default unchanged.
+            tools: Optional agentic tool declarations. ``None`` (default) keeps
+                the existing non-agentic behavior. Mutually exclusive with
+                ``output_contract`` -- a forced-tool structured-output call and
+                a model-chooses tool-calling call are different modes and
+                combining them is a caller error, not something to silently
+                resolve. Adapters reporting ``supports_tool_calls = False``
+                raise :class:`ProviderError` when this is non-empty.
+            tool_choice: ``None`` or ``"auto"`` lets the model decide;
+                ``"required"`` forces some tool call; ``"none"`` forbids one.
+                A bare tool name forces that specific tool.
 
         Returns:
             A ``(url, headers, json_body)`` tuple ready for ``post_json``.
+
+        Raises:
+            ValueError: When both ``tools`` and ``output_contract`` are given.
+            ProviderError: When ``tools`` is non-empty and this adapter reports
+                ``supports_tool_calls = False``.
         """
         ...
 
@@ -333,12 +479,14 @@ class ProviderAdapter(Protocol):
     def stream_request(
         self,
         model_id: str,
-        messages: list[dict[str, str]],
+        messages: list[dict],
         temperature: float | None,
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
         max_output_tokens: int | None = None,
+        tools: list[ToolSpec] | None = None,
+        tool_choice: str | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build ``(url, headers, json_body)`` for a STREAMING request (issue #7).
 
@@ -353,6 +501,28 @@ class ProviderAdapter(Protocol):
         ``output_contract`` (an :class:`OutputContract` for structured output;
         ``None`` default = no structured output, current behavior). Provider-native
         translation is likewise deferred to CAC-02-OAI/ANT/GEM.
+        """
+        ...
+
+    def parse_agentic_response(self, status: int, payload: object) -> AgenticResponse:
+        """Parse a provider response into an :class:`AgenticResponse`.
+
+        The agentic counterpart to :meth:`parse_response`, whose
+        ``(text, usage)`` return cannot represent a tool call. Adapters
+        reporting ``supports_tool_calls = False`` raise.
+
+        Args:
+            status: HTTP status code returned by the transport.
+            payload: Decoded JSON object (or raw text on non-JSON responses).
+
+        Returns:
+            An :class:`AgenticResponse` carrying text, any tool calls in
+            emission order, usage, and a normalized ``stop_reason``.
+
+        Raises:
+            ProviderError: On non-2xx status, a malformed payload, or when this
+                adapter does not support agentic tool calling. The message is
+                already scrubbed of secrets.
         """
         ...
 

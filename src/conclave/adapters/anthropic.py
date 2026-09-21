@@ -33,7 +33,15 @@ from ..logging import get_logger
 from ..models import TokenUsage, categorize_http_status
 from ..provider_catalog import capabilities_for
 from ..registry import PROVIDER_ENV_VARS
-from .base import OutputContract, ProviderError, SSEDelta, status_error
+from .base import (
+    AgenticResponse,
+    OutputContract,
+    ProviderError,
+    SSEDelta,
+    ToolCall,
+    ToolSpec,
+    status_error,
+)
 
 logger = get_logger("adapters.anthropic")
 
@@ -55,6 +63,7 @@ class AnthropicAdapter:
     prefix = "anthropic"
     completions_url = ANTHROPIC_URL
     supports_streaming = True
+    supports_tool_calls = True
 
     def __init__(self, max_tokens: int = DEFAULT_MAX_TOKENS) -> None:
         self.max_tokens = max_tokens
@@ -112,15 +121,118 @@ class AnthropicAdapter:
             "input_schema": output_contract.schema,
         }
 
+    @staticmethod
+    def _content_to_anthropic(content: object) -> object:
+        """Translate conclave's neutral content into Anthropic's block shape.
+
+        A plain string passes through unchanged so every existing free-prose and
+        structured-output call builds a byte-identical body. A block list is
+        translated per block:
+
+        * ``text``        -> ``{"type": "text", "text": ...}``
+        * ``tool_call``   -> ``{"type": "tool_use", "id", "name", "input"}``
+        * ``tool_result`` -> ``{"type": "tool_result", "tool_use_id", "content",
+          "is_error"}``
+
+        Anthropic correlates a result to its call by ``tool_use_id``; the id is
+        carried opaquely from the :class:`ToolCall` the model emitted and is
+        never reconstructed here.
+        """
+        if not isinstance(content, list):
+            return content
+        blocks: list[dict] = []
+        for block in content:
+            if not isinstance(block, dict):
+                blocks.append({"type": "text", "text": str(block)})
+                continue
+            kind = block.get("type")
+            if kind == "tool_call":
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": block.get("id", ""),
+                        "name": block.get("name", ""),
+                        "input": block.get("arguments") or {},
+                    }
+                )
+            elif kind == "tool_result":
+                result: dict = {
+                    "type": "tool_result",
+                    "tool_use_id": block.get("tool_call_id", ""),
+                    "content": block.get("content", ""),
+                }
+                # Anthropic treats a missing is_error as False; send it only when
+                # True so a success result body stays minimal.
+                if block.get("is_error"):
+                    result["is_error"] = True
+                blocks.append(result)
+            else:
+                blocks.append({"type": "text", "text": block.get("text", "")})
+        return blocks
+
+    @staticmethod
+    def _tools_to_anthropic(tools: list[ToolSpec]) -> list[dict]:
+        """Translate :class:`ToolSpec` declarations into Anthropic ``tools``."""
+        return [
+            {"name": t.name, "description": t.description, "input_schema": t.input_schema}
+            for t in tools
+        ]
+
+    @staticmethod
+    def _tool_choice_to_anthropic(tool_choice: str | None) -> dict | None:
+        """Translate the neutral ``tool_choice`` into Anthropic's object form.
+
+        ``None``/``"auto"`` -> omit (Anthropic's default is auto). ``"required"``
+        -> ``{"type": "any"}``. ``"none"`` -> ``{"type": "none"}``. Anything else
+        is read as a specific tool name.
+        """
+        if tool_choice in (None, "auto"):
+            return None
+        if tool_choice == "required":
+            return {"type": "any"}
+        if tool_choice == "none":
+            return {"type": "none"}
+        return {"type": "tool", "name": tool_choice}
+
+    def _apply_agentic_tools(
+        self,
+        body: dict,
+        tools: list[ToolSpec] | None,
+        tool_choice: str | None,
+        output_contract: OutputContract | None,
+    ) -> None:
+        """Attach agentic tools to ``body`` in place, or leave it untouched.
+
+        Raises:
+            ValueError: When ``tools`` and ``output_contract`` are both present.
+                Forced-tool structured output and model-chooses tool calling are
+                different modes; silently preferring one would make the caller's
+                intent unrecoverable.
+        """
+        if not tools:
+            return
+        if output_contract is not None:
+            raise ValueError(
+                "tools and output_contract are mutually exclusive: "
+                "structured output uses a forced tool and cannot share the "
+                "tool slot with agentic tool calling"
+            )
+        body["tools"] = self._tools_to_anthropic(tools)
+        choice = self._tool_choice_to_anthropic(tool_choice)
+        if choice is not None:
+            body["tool_choice"] = choice
+
     def build_request(
         self,
         model_id: str,
-        messages: list[dict[str, str]],
+        messages: list[dict],
         temperature: float | None,
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
         max_output_tokens: int | None = None,
+        tools: list[ToolSpec] | None = None,
+        tool_choice: str | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the Messages POST, hoisting system out of the message array.
 
@@ -147,10 +259,15 @@ class AnthropicAdapter:
         turns: list[dict[str, str]] = []
         for msg in messages:
             role = msg.get("role")
-            content = msg.get("content", "")
+            content = self._content_to_anthropic(msg.get("content", ""))
             if role == "system":
-                if content:
+                # Only prose can be hoisted into the top-level system field; a
+                # block list in a system message is not representable there, so
+                # it stays in the array rather than being silently dropped.
+                if content and isinstance(content, str):
                     system_parts.append(content)
+                elif content:
+                    turns.append({"role": "user", "content": content})
             elif role in ("user", "assistant"):
                 turns.append({"role": role, "content": content})
             else:  # unknown role -> treat as user content so nothing is dropped
@@ -178,6 +295,11 @@ class AnthropicAdapter:
             # Clear any stale flag from a prior build on this instance so a later
             # free-prose call never mistakenly parses a tool_use block.
             self._forced_tool_name = None
+
+        # Agentic tools are the other tool-slot consumer. Mutually exclusive with
+        # the forced-contract tool above; _apply_agentic_tools raises rather than
+        # resolving the conflict silently.
+        self._apply_agentic_tools(body, tools, tool_choice, output_contract)
         return self.completions_url, headers, body
 
     def parse_response(self, status: int, payload: object) -> tuple[str, TokenUsage | None]:
@@ -256,15 +378,85 @@ class AnthropicAdapter:
             raise ProviderError("anthropic: malformed tool_use block (input is not an object)")
         return json.dumps(tool_input, sort_keys=True)
 
+    # Anthropic stop_reason -> conclave's normalized vocabulary. Anything absent
+    # from this map is reported as "end_turn": an unrecognized reason means the
+    # turn ended for a reason we do not model, not that an error occurred.
+    _STOP_REASONS = {
+        "end_turn": "end_turn",
+        "tool_use": "tool_use",
+        "max_tokens": "max_tokens",
+        "stop_sequence": "end_turn",
+        "refusal": "refusal",
+        "pause_turn": "end_turn",
+    }
+
+    def parse_agentic_response(self, status: int, payload: object) -> AgenticResponse:
+        """Parse a Messages response into an :class:`AgenticResponse`.
+
+        Walks ``content[*]`` once, collecting ``text`` blocks into the prose and
+        ``tool_use`` blocks into :class:`ToolCall` records in emission order, so
+        parallel tool calls keep both their ordering and their ids.
+
+        Unlike :meth:`parse_response`, this never consults
+        ``self._forced_tool_name``: a ``tool_use`` block here is a real agentic
+        call, not a structured-output smuggling channel.
+
+        See :meth:`ProviderAdapter.parse_agentic_response`.
+        """
+        if status >= 400 or not isinstance(payload, dict):
+            raise ProviderError(
+                status_error("anthropic", status, payload),
+                category=categorize_http_status(status),
+                http_status=status,
+            )
+
+        content = payload.get("content")
+        if not isinstance(content, list):
+            raise ProviderError(
+                "anthropic: response has no content blocks",
+                category="malformed_response",
+                http_status=status,
+            )
+
+        text_parts: list[str] = []
+        calls: list[ToolCall] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            kind = block.get("type")
+            if kind == "text":
+                text_parts.append(block.get("text", ""))
+            elif kind == "tool_use":
+                arguments = block.get("input")
+                calls.append(
+                    ToolCall(
+                        id=str(block.get("id", "")),
+                        name=str(block.get("name", "")),
+                        arguments=arguments if isinstance(arguments, dict) else {},
+                    )
+                )
+
+        raw_stop = payload.get("stop_reason")
+        stop_reason = self._STOP_REASONS.get(str(raw_stop), "end_turn")
+
+        return AgenticResponse(
+            text="".join(text_parts),
+            tool_calls=tuple(calls),
+            usage=_parse_usage(payload.get("usage")),
+            stop_reason=stop_reason,
+        )
+
     def stream_request(
         self,
         model_id: str,
-        messages: list[dict[str, str]],
+        messages: list[dict],
         temperature: float | None,
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
         max_output_tokens: int | None = None,
+        tools: list[ToolSpec] | None = None,
+        tool_choice: str | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the streaming POST: ``build_request`` + ``stream: true``.
 
@@ -282,6 +474,8 @@ class AnthropicAdapter:
             api_key,
             output_contract=output_contract,
             max_output_tokens=max_output_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
         )
         body["stream"] = True
         return url, headers, body

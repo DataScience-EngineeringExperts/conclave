@@ -41,7 +41,14 @@ import warnings
 from ..models import TokenUsage, categorize_http_status
 from ..provider_catalog import capabilities_for
 from ..registry import PROVIDER_ENV_VARS
-from .base import OutputContract, ProviderError, SSEDelta, status_error
+from .base import (
+    AgenticResponse,
+    OutputContract,
+    ProviderError,
+    SSEDelta,
+    ToolSpec,
+    status_error,
+)
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
@@ -212,6 +219,7 @@ class GeminiAdapter:
     # exposed for parity with the protocol's ``completions_url`` attribute.
     completions_url = GEMINI_BASE
     supports_streaming = True
+    supports_tool_calls = False
 
     def __init__(self, max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS) -> None:
         self.max_output_tokens = max_output_tokens
@@ -285,12 +293,14 @@ class GeminiAdapter:
     def build_request(
         self,
         model_id: str,
-        messages: list[dict[str, str]],
+        messages: list[dict],
         temperature: float | None,
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
         max_output_tokens: int | None = None,
+        tools: list[ToolSpec] | None = None,
+        tool_choice: str | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the generateContent POST.
 
@@ -302,6 +312,13 @@ class GeminiAdapter:
         ``output_contract is None`` the body is byte-for-byte the legacy shape.
         See :meth:`ProviderAdapter.build_request`.
         """
+        if tools:
+            raise ProviderError(
+                f"{self.prefix}: agentic tool calling is not implemented for this "
+                "provider yet (CAC-02 covers Anthropic first); check "
+                "adapter.supports_tool_calls before offering tools",
+                category="malformed_response",
+            )
         model = self._bare_model(model_id)
         url = f"{GEMINI_BASE}/{model}:generateContent"
         headers = {
@@ -371,12 +388,14 @@ class GeminiAdapter:
     def stream_request(
         self,
         model_id: str,
-        messages: list[dict[str, str]],
+        messages: list[dict],
         temperature: float | None,
         timeout: float,
         api_key: str,
         output_contract: OutputContract | None = None,
         max_output_tokens: int | None = None,
+        tools: list[ToolSpec] | None = None,
+        tool_choice: str | None = None,
     ) -> tuple[str, dict[str, str], dict]:
         """Build the streaming POST against ``streamGenerateContent?alt=sse``.
 
@@ -387,6 +406,13 @@ class GeminiAdapter:
         against the Gemini API streaming reference). See
         :meth:`ProviderAdapter.stream_request`.
         """
+        if tools:
+            raise ProviderError(
+                f"{self.prefix}: agentic tool calling is not implemented for this "
+                "provider yet (CAC-02 covers Anthropic first); check "
+                "adapter.supports_tool_calls before offering tools",
+                category="malformed_response",
+            )
         # output_contract flows into build_request, which performs the
         # capability-gated responseMimeType/responseSchema injection.
         _url, headers, body = self.build_request(
@@ -401,6 +427,20 @@ class GeminiAdapter:
         model = self._bare_model(model_id)
         url = f"{GEMINI_BASE}/{model}:streamGenerateContent?alt=sse"
         return url, headers, body
+
+    def parse_agentic_response(self, status: int, payload: object) -> AgenticResponse:
+        """Not implemented for this provider; see :attr:`supports_tool_calls`.
+
+        Raises:
+            ProviderError: Always. Agentic tool calling lands provider by
+                provider (CAC-02-OAI / CAC-02-GEM); callers must gate on
+                ``supports_tool_calls`` rather than calling this speculatively.
+        """
+        raise ProviderError(
+            f"{self.prefix}: parse_agentic_response is not implemented for this "
+            "provider yet; gate on adapter.supports_tool_calls",
+            category="malformed_response",
+        )
 
     def parse_sse_event(self, event: str, data: str) -> SSEDelta:
         """Parse one Gemini SSE frame (a partial ``GenerateContentResponse``).
