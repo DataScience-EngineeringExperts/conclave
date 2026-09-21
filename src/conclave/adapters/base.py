@@ -283,7 +283,9 @@ class AgenticResponse:
     stop_reason: str = "end_turn"
 
 
-def assistant_tool_call_message(text: str, tool_calls: tuple[ToolCall, ...] | list[ToolCall]) -> dict:
+def assistant_tool_call_message(
+    text: str, tool_calls: tuple[ToolCall, ...] | list[ToolCall]
+) -> dict:
     """Build the assistant message that records a turn's tool calls.
 
     Appended to the message list before the matching tool results so the next
