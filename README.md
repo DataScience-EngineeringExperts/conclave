@@ -1,5 +1,7 @@
 # conclave
 
+Last updated: 2026-11-06
+
 A bring-your-own-keys **multi-model council** — a CLI and Python library that
 fans a prompt out to several foundation models concurrently (each via *your own*
 API keys) and merges their answers into one consolidated response.
@@ -17,6 +19,11 @@ logged. Published v1.2 ships six modes: **synthesize** (merge answers into one),
 **adversarial** (propose → refute → verdict), **vote** (fixed-choice tally), and **elite**
 (quality-first independent answers → claim audits → revisions → verdict).
 conclave is intentionally lightweight — a small council primitive, not an agent framework.
+
+`conclave-cli` is owned by the [TheDataExperts PyPI organization](https://pypi.org/org/TheDataExperts/).
+The existing company-repository Trusted Publisher was preserved on 2026-11-06;
+no upload occurred and PyPI remains at 1.3.0. The next normal release must still
+prove OIDC upload and provenance; see [publishing status](RELEASING.md#ownership-and-publishing-status--2026-11-06).
 
 **The v1.1 wedge — the execution-traceable council.** Decision/review synthesis runs can yield
 **a multi-model council verdict you can inspect — structured, scored for agreement, and

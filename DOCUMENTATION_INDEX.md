@@ -5,9 +5,9 @@ Rule**: every project maintains exactly three core docs — an overview (README)
 context diagram, and this index linking everything together. The Product Design Document is
 the canonical authority spec on top of those.
 
-- **Repo:** `/Users/ernestprovo/dev/conclave/`
-- **Version:** 1.2.0 · **License:** MIT
-- **Last updated:** 2026-07-19
+- **Repo:** `~/dev/conclave/`
+- **Version:** 1.3.0 · **License:** MIT
+- **Last updated:** 2026-11-06
 
 ---
 
@@ -98,7 +98,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 | File | Path | Purpose |
 |------|------|---------|
 | Packaging | [`pyproject.toml`](pyproject.toml) | hatchling build, deps (httpx, pydantic, rich, typer, pyyaml — no LLM SDK), dev extras, console script, pytest config. License: MIT. **PyPI distribution name `conclave-cli`** (the name `conclave` is an unrelated project); command + import stay `conclave`. |
-| Release runbook | [`RELEASING.md`](RELEASING.md) | Operator runbook: one-time PyPI OIDC Trusted-Publisher setup for `conclave-cli`, cut-a-release checklist (bump→tag→publish Release), post-release verification (Sigstore bundle, PEP 740 attestations), rollback/yank. |
+| Release runbook | [`RELEASING.md`](RELEASING.md) | Operator runbook: TheDataExperts ownership and preserved company publisher, next-release upload/provenance proof, PyPI OIDC Trusted-Publisher setup for `conclave-cli`, cut-a-release checklist (bump→tag→publish Release), post-release verification (Sigstore bundle, PEP 740 attestations), rollback/yank. |
 | Changelog | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog history through v1.2.0. |
 | Dev lockfile | [`requirements-dev.lock`](requirements-dev.lock) | Hash-pinned dev + runtime tree for reproducible installs/CI. Regenerate via `uv pip compile --universal --generate-hashes --python-version 3.11 --extra dev pyproject.toml -o requirements-dev.lock`. |
 | License | [`LICENSE`](LICENSE) | MIT License. Copyright (c) 2026 Ernest Provo. Matches the `pyproject.toml` license field. |
@@ -118,6 +118,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 
 | Date | Change |
 |------|--------|
+| 2026-11-06 | Recorded TheDataExperts PyPI ownership and Active billing; preserved the existing company-repository publisher with blank environment. No upload today; published 1.3.0 unchanged and next normal release upload/provenance proof outstanding. |
 | 2026-07-19 | Reconciled the decision-quality roadmap to released v1.2.0 and active H1 pilot preparation. Recorded the 12-cell paid correctness smoke, isolated three-provider connectivity check, synthetic-pack evidence boundary, and two-human-grader calibration plan. Decision quality and efficiency remain unvalidated. |
 | 2026-07-18 | Released v1.2.0: Elite, constrained-choice vote, every-mode manifest hardening, the capped paid-exploratory evaluation runner, strict OpenAI-compatible verdict extraction, and org-repository release identities. The live lane remains correctness-only; no quality or efficiency claim. |
 | 2026-07-18 | Implemented the sequential paid exploratory runner: default dry-run, exact USD 10.00 execute approval, reservation-before-call, one in-flight call, and no-repeat resume. The 24-task fixture remains offline/open-book and is not the paid smoke corpus; the smoke is correctness-only and not decision eligible. |
@@ -141,8 +142,7 @@ Run: `pytest` (config in `pyproject.toml`, `asyncio_mode = "auto"`).
 
 - Exactly **3 core docs** (README, System Context Diagram, this index); the PDD is the
   authority spec layered on top.
-- Each doc stays **under 500 lines**; overflow is archived to dated/topic files and linked
-  from here.
+- Keep docs current and navigable; archive stale material, never solely to meet a line count.
 - Prefer **editing existing docs** over creating new ones. Check this index before adding
   any new document.
 - The **PDD is canonical**; on any conflict, defer to `docs/PRODUCT_DESIGN_DOCUMENT.md`.
