@@ -41,6 +41,28 @@ a token upload.
 
 ---
 
+### Ownership and publishing status — 2026-11-06
+
+Both `conclave-cli` and `mcp-warden-cli` now belong to the
+[TheDataExperts PyPI organization](https://pypi.org/org/TheDataExperts/),
+transferred from `z3usalmighte` direct ownership. Organization billing is Active;
+Ernest (`z3usalmighte`) remains its sole human owner. Both projects have a normal
+Trusted Publisher for their respective `DataScience-EngineeringExperts` repository,
+`release.yml`, with a blank environment matching the workflows. No pending
+publishers remain in the inspected account.
+
+The existing Conclave company-repository publisher was preserved during the
+ownership transfer. No upload or release was performed on 2026-11-06; the published
+version remains **1.3.0**. Current publisher configuration and ownership are not
+proof of a new upload: the next normal release must pass OIDC publication and the
+post-release provenance checks in section 2.
+
+The account-wide upload token was revoked. The retained project-scoped manual
+fallback is for `mcp-warden-cli` only; it does not authorize Conclave uploads.
+Conclave's release workflow continues to use OIDC without a token fallback.
+
+---
+
 ## 1. Cut a release
 
 Do this on a clean checkout of `main` with all intended release changes merged.

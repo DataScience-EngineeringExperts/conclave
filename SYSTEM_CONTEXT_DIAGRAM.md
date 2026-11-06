@@ -1,5 +1,7 @@
 # conclave — System Context Diagram
 
+Last updated: 2026-11-06
+
 This is one of conclave's three core docs (per the 3-Core Documentation Rule). It shows
 the system context: how a user (or a downstream consumer) drives conclave, how config and
 environment-variable keys feed in, how requests reach the nine first-class providers through
@@ -14,6 +16,15 @@ The DSE-708 edge includes offline replay plus an opt-in, capped paid exploratory
 > [`docs/PRODUCT_DESIGN_DOCUMENT.md`](docs/PRODUCT_DESIGN_DOCUMENT.md).
 
 ---
+
+## Distribution boundary
+
+`release.yml` publishes `conclave-cli` from `DataScience-EngineeringExperts/conclave`
+via its normal PyPI Trusted Publisher (blank environment). The package now belongs
+to the [TheDataExperts PyPI organization](https://pypi.org/org/TheDataExperts/);
+the existing publisher was preserved on 2026-11-06. No upload occurred and PyPI
+remains at 1.3.0. The next normal release must establish fresh upload/provenance
+proof; see [`RELEASING.md`](RELEASING.md).
 
 ## System context
 
